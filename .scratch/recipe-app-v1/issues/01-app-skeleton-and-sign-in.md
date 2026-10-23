@@ -4,13 +4,17 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
-- [ ] Expo + TypeScript app builds as a development build via EAS and runs on the iOS simulator
+- [x] Expo + TypeScript app builds as a development build via EAS and runs on the iOS simulator
 - [ ] Sign in with Apple and Sign in with Google work through Supabase Auth; signing out returns to the sign-in screen
-- [ ] A Profile is created for each new user on first sign-in
-- [ ] After sign-in the user sees an empty library screen
-- [ ] Local Supabase starts from the repo with migrations applied in one command
-- [ ] The test harness signs in at least two test users and calls data-layer actions as each
-- [ ] One passing data-layer test: a signed-in user can read their own Profile and not another user's
-- [ ] A short README section explains how to run the app, local Supabase and the tests
+- [x] A Profile is created for each new user on first sign-in
+- [x] After sign-in the user sees an empty library screen
+- [x] Local Supabase starts from the repo with migrations applied in one command
+- [x] The test harness signs in at least two test users and calls data-layer actions as each
+- [x] One passing data-layer test: a signed-in user can read their own Profile and not another user's
+- [x] A short README section explains how to run the app, local Supabase and the tests
+
+## Comments
+
+2026-10-22: Built on branch `feat/01-app-skeleton`. All criteria pass except one part of criterion 2. Sign-out returning to the sign-in screen is verified with the dev test-user sign-in (Maestro flow `.maestro/dev-sign-in-and-out.yaml`). Real Apple and Google sign-in are fully wired but untested, because they need the Apple Developer capability and Google OAuth client IDs (see the README section "Making Apple and Google sign-in real"). `npm run ios` also needs a signing identity in Xcode, because of the Apple sign-in entitlement. The EAS development build works without one.
