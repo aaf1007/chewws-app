@@ -27,6 +27,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     icon: './assets/expo.icon',
     bundleIdentifier: 'com.ant1007.recipeapp',
     usesAppleSignIn: true,
+    infoPlist: { ITSAppUsesNonExemptEncryption: false },
   },
   android: {
     package: 'com.ant1007.recipeapp',
@@ -51,6 +52,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     'expo-apple-authentication',
     ...googleSignInPlugin(),
   ],
+  owner: 'ant1007',
+  extra: {
+    eas: { projectId: '5fd5ebaa-7659-4c82-acd5-a522df605dec' },
+  },
   experiments: {
     typedRoutes: true,
     reactCompiler: true,
