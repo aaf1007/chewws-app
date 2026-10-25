@@ -26,8 +26,8 @@ Run `npm run verify` (typecheck, lint, database types freshness, tests) before e
 ## Tests (`tests/`)
 
 - Tests call data-layer actions as real users from `signInTestUser()` in `tests/harness.ts`. Use two or more users to prove access rules (one owner, one stranger or Friend).
-- [tool] Test files may not import `@supabase/*` or call `.from(` / `.rpc(`. Only `tests/harness.ts` and `tests/global-setup.ts` touch Supabase directly.
-- Behaviour tests go through data-layer actions; access-rule tests in `tests/*.access.test.ts` attack the API directly with a user's raw client (`attackerClient` from `signInTestUser()`), because RLS is the security boundary. [tool] `.from(` / `.rpc(` are allowed only in those files.
+- [tool] Test files may not import `@supabase/*` or call `.from(` / `.rpc(`. Only `tests/harness.ts`, `tests/access-harness.ts` and `tests/global-setup.ts` touch Supabase directly.
+- Behaviour tests go through data-layer actions; access-rule tests in `tests/*.access.test.ts` attack the API directly with a user's raw client (`client` from `signInAttacker()` in `tests/access-harness.ts`), because RLS is the security boundary. [tool] `.from(` / `.rpc(` and importing `tests/access-harness.ts` are allowed only in those files (and `tests/harness.ts`, which wraps it).
 - Assert literal expected values (`toEqual([{ name: 'garlic', amounts: [...] }])`), not values recomputed with the code under test.
 - Assert what each user can see afterwards, not table contents.
 - Each ticket's acceptance criteria that say "data-layer test" map to at least one named test.

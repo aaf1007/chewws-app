@@ -60,7 +60,27 @@ module.exports = defineConfig([
     },
   },
   {
-    ignores: ['src/data/**', 'tests/harness.ts', 'tests/global-setup.ts'],
+    // The raw-client harness is for access-rule tests only; behaviour tests sign in with harness.ts.
+    files: ['**/*.{ts,tsx}'],
+    ignores: ['tests/**/*.access.test.ts', 'tests/harness.ts'],
+    rules: {
+      'import/no-restricted-paths': [
+        'error',
+        {
+          zones: [
+            {
+              target: '.',
+              from: './tests/access-harness.ts',
+              message:
+                'Only access-rule tests (tests/*.access.test.ts) may use the raw client. Use signInTestUser() from tests/harness.ts.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    ignores: ['src/data/**', 'tests/harness.ts', 'tests/access-harness.ts', 'tests/global-setup.ts'],
     rules: {
       'no-restricted-imports': [
         'error',

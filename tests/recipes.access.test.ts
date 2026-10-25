@@ -2,11 +2,11 @@
 // and their own session, as an attacker would. RLS is what has to stop them.
 import { expect, test } from 'vitest';
 
-import { signInTestUser } from './harness';
+import { signInAttacker } from './access-harness';
 
 async function ownerRecipeAndStranger() {
-  const owner = await signInTestUser('owner');
-  const stranger = await signInTestUser('stranger');
+  const owner = await signInAttacker('owner');
+  const stranger = await signInAttacker('stranger');
   const recipeId = await owner.data.createRecipe({
     title: 'Garlic bread',
     lines: [
@@ -18,7 +18,7 @@ async function ownerRecipeAndStranger() {
   const original = await owner.data.getRecipe(recipeId);
 
   // Line ids aren't in the domain model; assume the attacker has learnt them anyway.
-  const { data: ownerLines, error } = await owner.attackerClient
+  const { data: ownerLines, error } = await owner.client
     .from('recipe_lines')
     .select('id, ingredient_id')
     .eq('recipe_id', recipeId)
@@ -35,7 +35,7 @@ async function ownerRecipeAndStranger() {
     ]);
   }
 
-  return { recipeId, ownerLines, stranger: stranger.attackerClient, expectOwnerStillSeesOriginalLines };
+  return { recipeId, ownerLines, stranger: stranger.client, expectOwnerStillSeesOriginalLines };
 }
 
 test("a stranger cannot add a line to someone else's Recipe", async () => {
