@@ -17,8 +17,6 @@ type ChangeError = { field: 'pantry' | 'staples'; message: string };
 
 export default function Pantry() {
   const [state, setState] = useState<PantryState>({ status: 'loading' });
-  const [newIngredient, setNewIngredient] = useState('');
-  const [newStaple, setNewStaple] = useState('');
   const [changeError, setChangeError] = useState<ChangeError | null>(null);
 
   // Changes can overlap, each followed by a reload; only the newest reload is shown, so an older
@@ -41,24 +39,25 @@ export default function Pantry() {
     }, [load]),
   );
 
-  /** Makes a change, then shows the Pantry as it is now. Returns whether the change worked. */
+  /**
+   * Makes a change, then shows the Pantry as it is now. If the change fails, shows why under its
+   * field and rejects, so an `AddField` gets its text back.
+   */
   const change = (field: ChangeError['field'], run: () => Promise<unknown>) => {
     setChangeError(null);
     return run()
-      .then(() => true)
       .catch((e: unknown) => {
         setChangeError({ field, message: messageOf(e) });
-        return false;
+        throw e;
       })
       .finally(load);
   };
-
-  const addIngredient = () =>
-    change('pantry', () => data.addToPantry(newIngredient)).then((ok) => ok && setNewIngredient(''));
+  /** For a row's button, whose failure is already shown by `change`. */
+  const changeFromRow = (field: ChangeError['field'], run: () => Promise<unknown>) => () => {
+    change(field, run).catch(() => {});
+  };
 
   const staples = state.status === 'loaded' ? state.pantry.staples : [];
-  const addStaple = () =>
-    change('staples', () => data.addStaple(newStaple)).then((ok) => ok && setNewStaple(''));
 
   const errorFor = (field: ChangeError['field']) =>
     changeError?.field === field ? <Text tone="danger">{changeError.message}</Text> : null;
@@ -66,9 +65,7 @@ export default function Pantry() {
   return (
     <Screen title="Pantry" scroll>
       <AddField
-        value={newIngredient}
-        onChangeText={setNewIngredient}
-        onSubmit={addIngredient}
+        onSubmit={(name) => change('pantry', () => data.addToPantry(name))}
         placeholder="Add an Ingredient you have"
         testID="pantry-add"
       />
@@ -92,7 +89,7 @@ export default function Pantry() {
                   name={ingredient.name}
                   action={{
                     label: 'Used up',
-                    onPress: () => change('pantry', () => data.markUsedUp(ingredient.id)),
+                    onPress: changeFromRow('pantry', () => data.markUsedUp(ingredient.id)),
                   }}
                 />
               ))
@@ -111,15 +108,13 @@ export default function Pantry() {
                   name={staple.name}
                   action={{
                     label: 'Remove',
-                    onPress: () => change('staples', () => data.removeStaple(staple.id)),
+                    onPress: changeFromRow('staples', () => data.removeStaple(staple.id)),
                   }}
                 />
               ))}
             </View>
             <AddField
-              value={newStaple}
-              onChangeText={setNewStaple}
-              onSubmit={addStaple}
+              onSubmit={(name) => change('staples', () => data.addStaple(name))}
               placeholder="Add a Staple"
               testID="staple-add"
             />

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { Icon } from './icon';
@@ -7,19 +8,22 @@ import { colors, radii, spacing, typography } from './theme';
 /**
  * A gray rounded field for adding one thing by name, with an Add button at its right. Return also
  * adds. The button is dimmed while the field is blank.
+ *
+ * The field holds its own text and clears as soon as it's submitted, so the next name can be typed
+ * while the last one is still saving.
  */
 export function AddField({
-  value,
-  onChangeText,
   onSubmit,
   placeholder,
   submitLabel = 'Add',
   accessibilityLabel,
   testID,
 }: {
-  value: string;
-  onChangeText: (text: string) => void;
-  onSubmit: () => void;
+  /**
+   * Saves the submitted name. If the promise rejects, the name comes back into the field unless
+   * something new has been typed there; showing the error is up to the screen.
+   */
+  onSubmit: (text: string) => Promise<unknown>;
   placeholder: string;
   submitLabel?: string;
   /** Defaults to the placeholder. The button is labelled `${submitLabel}: ${accessibilityLabel}`. */
@@ -27,14 +31,21 @@ export function AddField({
   testID?: string;
 }) {
   const label = accessibilityLabel ?? placeholder;
+  const [value, setValue] = useState('');
   const blank = value.trim() === '';
+  const submit = () => {
+    if (blank) return;
+    const text = value;
+    setValue('');
+    onSubmit(text).catch(() => setValue((current) => (current === '' ? text : current)));
+  };
   return (
     <View style={styles.field}>
       <Icon name="add-circle-outline" tone="textMuted" />
       <TextInput
         value={value}
-        onChangeText={onChangeText}
-        onSubmitEditing={() => !blank && onSubmit()}
+        onChangeText={setValue}
+        onSubmitEditing={submit}
         submitBehavior="submit"
         placeholder={placeholder}
         placeholderTextColor={colors.textMuted}
@@ -52,7 +63,7 @@ export function AddField({
         accessibilityState={{ disabled: blank }}
         disabled={blank}
         hitSlop={spacing.sm}
-        onPress={onSubmit}
+        onPress={submit}
         testID={testID ? `${testID}-submit` : undefined}
         style={({ pressed }) => (pressed || blank) && styles.dimmed}>
         <Text variant="headline" tone="accent">

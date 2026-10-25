@@ -63,7 +63,6 @@ export default function UiGallery() {
     ingredientName: 'garlic',
   });
   const [step, setStep] = useState('Mash the garlic into the butter.');
-  const [toAdd, setToAdd] = useState('');
 
   return (
     <Screen scroll>
@@ -201,8 +200,8 @@ export default function UiGallery() {
       </View>
 
       <SectionHeader title="Add field" />
-      <AddField value={toAdd} onChangeText={setToAdd} onSubmit={() => setToAdd('')} placeholder="Add an Ingredient" />
-      <AddField value="eggs" onChangeText={noop} onSubmit={noop} placeholder="With text" />
+      <AddField onSubmit={() => Promise.resolve()} placeholder="Add an Ingredient" />
+      <AddField onSubmit={() => Promise.reject(new Error('refused'))} placeholder="Refuses, so the text comes back" />
 
       <SectionHeader title="Ingredient rows" />
       <View>

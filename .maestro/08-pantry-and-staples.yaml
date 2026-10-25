@@ -1,6 +1,6 @@
 # Ticket 08: adds Ingredients to the Pantry and marks one used up, then edits the Staples (salt,
 # pepper and oil by default), and finds it all still there after leaving the tab. Then removes two
-# Staples in quick succession and finds both stay removed.
+# Staples in quick succession and finds both stay removed, and adds two Ingredients back to back.
 # Run with `npm run e2e -- .maestro/08-pantry-and-staples.yaml`.
 appId: com.ant1007.recipeapp
 ---
@@ -116,3 +116,20 @@ appId: com.ant1007.recipeapp
     timeout: 10000
 - assertNotVisible: "Remove: butter"
 - assertNotVisible: "Remove: oil"
+
+# Add two Ingredients back to back, typing the second while the first is still saving: the field
+# keeps the second name, and both end up in the Pantry.
+- tapOn:
+    id: "pantry-add"
+# One inputText, so Maestro doesn't wait for the screen to settle between the Return and "Flour".
+- inputText: "Milk\nFlour"
+- assertVisible:
+    id: "pantry-add"
+    text: "Flour"
+- pressKey: Enter
+- extendedWaitUntil:
+    visible: "Used up: milk"
+    timeout: 10000
+- extendedWaitUntil:
+    visible: "Used up: flour"
+    timeout: 10000
