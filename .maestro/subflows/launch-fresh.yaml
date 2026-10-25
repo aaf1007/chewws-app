@@ -28,7 +28,13 @@ appId: com.ant1007.recipeapp
 - extendedWaitUntil:
     visible: "Sign in as test user (dev)"
     timeout: 30000
-# The dev client's floating tools button starts over the header's right-hand button; drag it away.
+# The dev client's floating tools button starts over the header's right-hand button; once it
+# shows, drag it away.
+- extendedWaitUntil:
+    visible: "gearshape.fill"
+    timeout: 5000
+    optional: true
+- waitForAnimationToEnd
 - swipe:
     start: "91%,10%"
     end: "91%,60%"
