@@ -154,6 +154,13 @@ test('another signed-in user cannot read, edit or delete the Recipe', async () =
   await expect(
     stranger.data.editRecipe(id, { title: 'Mine now', lines: [], steps: [] }),
   ).rejects.toMatchObject({ name: 'DataError', code: 'recipe_not_found' });
+  await expect(
+    stranger.data.editRecipe(id, {
+      title: 'Mine now',
+      lines: [{ originalText: '1 jar of pickles', amountText: '1 jar', ingredientName: 'pickles' }],
+      steps: ['Eat them.'],
+    }),
+  ).rejects.toMatchObject({ name: 'DataError', code: 'recipe_not_found' });
   await expect(stranger.data.deleteRecipe(id)).rejects.toMatchObject({
     name: 'DataError',
     code: 'recipe_not_found',
