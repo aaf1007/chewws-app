@@ -12,11 +12,15 @@ npm run verify   # typecheck, lint, database types freshness, vitest against loc
 
 ```sh
 npm run dev:up   # idempotent: local Supabase, Metro on 8081 (.logs/metro.log), iPhone 17 simulator, dev build
-npm run e2e      # maestro test .maestro/: runs every top-level flow
+npm run e2e      # scripts/e2e.sh: resets the local database, then runs one top-level flow; repeats per flow
+npm run e2e -- .maestro/dev-ui-gallery.yaml   # just these flows (still reset first)
 ```
 
-- Write one flow per ticket in `.maestro/`, named after the ticket (`02-write-a-recipe-by-hand.yaml`). Start it with `- runFlow: subflows/sign-in-dev.yaml`, which relaunches the app with cleared state, loads the bundle from Metro and signs in as the seeded dev user, ending on the Library. `subflows/sign-out.yaml` signs out.
-- Flows share the seeded dev user (`dev@example.com`) across flows and runs. Give records unique names (Maestro evaluates `${Date.now()}` inside strings) and assert only on what the flow created, or delete it at the end. `npm run db:reset` returns the dev user to an empty Library.
+- Write one flow per ticket in `.maestro/`, named after the ticket (`02-write-a-recipe-by-hand.yaml`). Start it with `- runFlow: subflows/sign-in-dev.yaml`, which relaunches the app with cleared state, loads the bundle from Metro and signs in as the seeded dev user, ending on the Library. `subflows/sign-out.yaml` signs out from the Profile tab.
+- Every flow starts from a freshly reset local database (`supabase db reset`: migrations plus `supabase/seed.sql`), so the seeded dev user (`dev@example.com`) has an empty Library and no other data. A flow may assume exactly that state and must not rely on anything another flow created. Data a flow needs, it creates itself. `npm run e2e` wipes the local database, so don't run it while you need data in it.
+- Don't call `maestro test` on the whole folder for a ticket's proof: it skips the resets. Use `npm run e2e`.
+- `subflows/launch-fresh.yaml` opens the dev build with `__expo_disable_onboarding=1&__expo_disable_auto_launch=1&__expo_disable_fab=1`, so no dev-client onboarding, menu or floating tools button covers the app during a flow. Don't drag dev chrome out of the way or retry taps; if a tap is swallowed, find what's covering the target.
+- Tap tabs by test id: `tapOn: { id: "tab-library" }` (also `tab-pantry`, `tab-shopping-list`, `tab-profile`). Their accessibility labels read "Pantry, tab, 2 of 4".
 - Files in `.maestro/subflows/` are not run on their own.
 - Screenshot for the ticket notes: `xcrun simctl io booted screenshot /path/to/shot.png`. Inspect the screen with `maestro hierarchy`.
 - On failure, Maestro's logs and screenshots are in `~/.maestro/tests/<timestamp>/`, and Metro's in `.logs/metro.log` (only when `dev:up` started Metro).

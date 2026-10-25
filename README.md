@@ -4,7 +4,8 @@ Expo (React Native, TypeScript) app for iPhone, backed by Supabase. Product spec
 
 ## Layout
 
-- `src/app/`: expo-router screens. The root layout shows the sign-in screen or the library screen depending on the session.
+- `src/app/`: expo-router screens. The root layout shows the sign-in screen or the signed-in tabs (Library, Pantry, Shopping List, Profile) depending on the session. `src/app/dev/ui.tsx` is a dev-only gallery of the UI primitives.
+- `src/ui/`: design tokens and UI primitives every screen draws with (see `docs/design.md`).
 - `src/data/`: the data layer, and the only code allowed to import `@supabase/*` (ESLint enforces this). `createDataLayer(client)` returns typed actions; `src/data/app.ts` builds the app's client.
 - `src/auth/`: native Apple and Google sign-in, which hand their ID tokens to the data layer.
 - `supabase/`: local Supabase config, migrations and `seed.sql`.
@@ -77,11 +78,11 @@ The dev client then loads the JavaScript from Metro on your machine, and Metro r
 
 ### UI check
 
-`.maestro/dev-sign-in-and-out.yaml` taps through sign-in with the dev button, the empty library and sign-out. You need Maestro (`brew install mobile-dev-inc/tap/maestro`). Each flow relaunches the app itself:
+`.maestro/dev-sign-in-and-out.yaml` taps through sign-in with the dev button, the empty library and sign-out; `.maestro/dev-ui-gallery.yaml` opens the UI gallery. You need Maestro (`brew install mobile-dev-inc/tap/maestro`). Each flow relaunches the app itself, and `npm run e2e` resets the local database before each one:
 
 ```sh
 npm run dev:up   # local Supabase, Metro, simulator and dev build, whichever aren't up yet
-npm run e2e      # every flow in .maestro/
+npm run e2e      # every flow in .maestro/, each on a freshly reset local database
 ```
 
 See `docs/agents/verify.md` for writing flows.
