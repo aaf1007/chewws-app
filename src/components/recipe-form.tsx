@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { View } from 'react-native';
 
-import { messageOf } from '@/auth/errors';
+import { hasCode, messageOf } from '@/auth/errors';
 import type { Recipe, RecipeInput } from '@/data';
 import {
   Button,
@@ -21,6 +21,21 @@ let lastKey = 0;
 const keyed = <T,>(value: T): Keyed<T> => ({ key: ++lastKey, value });
 
 const EMPTY_LINE: IngredientLineFields = { originalText: '', amountText: '', ingredientName: '' };
+
+type FormState = { title: string; lines: Keyed<IngredientLineFields>[] };
+
+/** When a save error stops applying: once the field it's about is filled in, or never. */
+function fixedBy(error: unknown): (form: FormState) => boolean {
+  if (hasCode(error, 'title_required')) return (form) => form.title.trim() !== '';
+  if (hasCode(error, 'ingredient_required')) {
+    return (form) =>
+      form.lines.every(
+        ({ value: l }) =>
+          l.ingredientName.trim() !== '' || !(l.originalText.trim() || l.amountText.trim()),
+      );
+  }
+  return () => false;
+}
 
 /**
  * The Recipe editor shared by "New Recipe" and "Edit Recipe". Holds what the user is typing and
@@ -51,14 +66,18 @@ export function RecipeForm({
     initial && initial.steps.length > 0 ? initial.steps.map((step) => keyed(step)) : [keyed('')],
   );
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ fixed: (form: FormState) => boolean; message: string } | null>(
+    null,
+  );
+  // An error about one field disappears as soon as that field is filled in.
+  const shownError = error && !error.fixed({ title, lines }) ? error.message : null;
 
   const save = () => {
     setSaving(true);
     setError(null);
     onSubmit({ title, lines: lines.map((l) => l.value), steps: steps.map((s) => s.value) }).catch(
       (e: unknown) => {
-        setError(messageOf(e));
+        setError({ fixed: fixedBy(e), message: messageOf(e) });
         setSaving(false);
       },
     );
@@ -110,7 +129,7 @@ export function RecipeForm({
         ))}
       </View>
 
-      {error ? <Text tone="danger">{error}</Text> : null}
+      {shownError ? <Text tone="danger">{shownError}</Text> : null}
       <Button label={submitLabel} icon="checkmark" disabled={saving} onPress={save} />
     </>
   );
