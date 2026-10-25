@@ -1,21 +1,9 @@
-# Signs out from the Library header. Ends on the sign-in screen.
+# Signs out from the Profile tab. Ends on the sign-in screen.
 appId: com.ant1007.recipeapp
 ---
-# A simulated tap on the header button is sometimes swallowed, so tap again if needed.
-- retry:
-    maxRetries: 3
-    commands:
-      # If the tap landed on the dev client's tools button, close its menu and move the button.
-      - runFlow:
-          when:
-            visible: "Reload"
-          commands:
-            - tapOn: "Close"
-            - swipe:
-                start: "91%,10%"
-                end: "91%,60%"
-                duration: 1500
-      - tapOn: "Sign out"
-      - extendedWaitUntil:
-          visible: "Sign in as test user (dev)"
-          timeout: 5000
+- tapOn:
+    id: "tab-profile"
+- tapOn: "Sign out"
+- extendedWaitUntil:
+    visible: "Sign in as test user (dev)"
+    timeout: 5000

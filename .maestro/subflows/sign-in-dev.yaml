@@ -1,10 +1,11 @@
-# Starts the app fresh and signs in as the seeded dev user. Ends on the empty Library.
+# Starts the app fresh and signs in as the seeded dev user. Ends on the Library tab.
 #   - runFlow: subflows/sign-in-dev.yaml
 appId: com.ant1007.recipeapp
 ---
 - runFlow: launch-fresh.yaml
 - tapOn: "Sign in as test user (dev)"
 - extendedWaitUntil:
-    visible: "Library"
+    visible:
+      id: "tab-library"
     timeout: 15000
 - waitForAnimationToEnd

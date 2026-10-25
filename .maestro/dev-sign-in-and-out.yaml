@@ -1,4 +1,4 @@
-# Signs in with the dev button, sees the empty library, signs out. Run with `npm run e2e`.
+# Signs in with the dev button, sees the empty Library and the tabs, signs out. Run with `npm run e2e`.
 appId: com.ant1007.recipeapp
 ---
 - runFlow: subflows/launch-fresh.yaml
@@ -9,4 +9,8 @@ appId: com.ant1007.recipeapp
     visible: "No recipes yet"
     timeout: 15000
 - assertVisible: "Library"
+- assertVisible:
+    id: "tab-pantry"
+- assertVisible:
+    id: "tab-shopping-list"
 - runFlow: subflows/sign-out.yaml

@@ -3,6 +3,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 
 import { SessionProvider, useSession } from '@/session';
+import { colors } from '@/ui';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -24,9 +25,15 @@ function RootNavigator() {
   if (session.status === 'loading') return null;
 
   return (
-    <Stack>
+    <Stack
+      screenOptions={{
+        contentStyle: { backgroundColor: colors.background },
+        headerTintColor: colors.accent,
+        headerBackButtonDisplayMode: 'minimal',
+        headerTitleStyle: { color: colors.text },
+      }}>
       <Stack.Protected guard={session.status === 'signedIn'}>
-        <Stack.Screen name="index" options={{ title: 'Library' }} />
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       </Stack.Protected>
       <Stack.Protected guard={session.status === 'signedOut'}>
         <Stack.Screen name="sign-in" options={{ headerShown: false }} />
