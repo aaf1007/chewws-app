@@ -146,7 +146,6 @@ test('another signed-in user cannot read, edit or delete the Recipe', async () =
   const owner = await signInTestUser('owner');
   const stranger = await signInTestUser('stranger');
   const id = await owner.data.createRecipe(garlicBread);
-  const original = await owner.data.getRecipe(id);
 
   expect(await stranger.data.getRecipe(id)).toBeNull();
   expect(await stranger.data.listMyRecipes()).toEqual([]);
@@ -166,8 +165,29 @@ test('another signed-in user cannot read, edit or delete the Recipe', async () =
     code: 'recipe_not_found',
   });
 
-  expect(await owner.data.getRecipe(id)).toEqual(original);
-  expect((await owner.data.listMyRecipes()).map((r) => r.title)).toEqual(['Garlic bread']);
+  // Ingredient names are unique, so a line pointed at another Ingredient would show another name.
+  const anIngredient = (name: string) => ({ id: expect.any(String), name });
+  const after = await owner.data.getRecipe(id);
+  expect(after).toEqual({
+    id,
+    ownerId: owner.userId,
+    title: 'Garlic bread',
+    status: 'reviewed',
+    recipeFound: true,
+    lines: [
+      { originalText: '2 cloves garlic, minced', amountText: '2 cloves', ingredient: anIngredient('garlic') },
+      { originalText: '4 tbsp butter, softened', amountText: '4 tbsp', ingredient: anIngredient('butter') },
+      { originalText: '1 Baguettes', amountText: '1', ingredient: anIngredient('baguette') },
+    ],
+    steps: ['Mash the garlic into the butter.', 'Spread on the bread and bake for 10 minutes.'],
+    createdAt: expect.any(String),
+    updatedAt: expect.any(String),
+  });
+  // Never edited: an edit sets updated_at to the time of the edit.
+  expect(after?.updatedAt).toBe(after?.createdAt);
+  expect(await owner.data.listMyRecipes()).toEqual([
+    { id, title: 'Garlic bread', lineCount: 3, stepCount: 2, createdAt: after?.createdAt },
+  ]);
 });
 
 test('a Recipe needs a title, and every ingredient line needs an Ingredient', async () => {
