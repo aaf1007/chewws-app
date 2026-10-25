@@ -1,0 +1,182 @@
+# Ticket 09: writes two Recipes that both need garlic, one also salt (a Staple), and adds both to
+# the Shopping List: garlic shows once with each Recipe's amount, salt not at all. Adds an item by
+# hand, checks garlic and it off (garlic lands in the Pantry, the hand-added item doesn't), unchecks
+# garlic, removes the hand-added item and then each Recipe's lines.
+# Run with `npm run e2e -- .maestro/09-shopping-list.yaml`.
+appId: com.ant1007.recipeapp
+---
+- runFlow: subflows/sign-in-dev.yaml
+- tapOn:
+    id: "tab-shopping-list"
+- extendedWaitUntil:
+    visible: "Your Shopping List is empty"
+    timeout: 10000
+- tapOn:
+    id: "tab-library"
+
+# Garlic bread: 2 cloves garlic, and salt, which is a Staple.
+- tapOn: "Write a Recipe"
+- extendedWaitUntil:
+    visible:
+      id: "recipe-title"
+    timeout: 10000
+- tapOn:
+    id: "recipe-title"
+- inputText: "Garlic bread"
+- tapOn:
+    id: "line-1-text"
+- inputText: "2 cloves garlic, minced"
+- tapOn:
+    id: "line-1-amount"
+- inputText: "2 cloves"
+- tapOn:
+    id: "line-1-ingredient"
+- inputText: "Garlic"
+- hideKeyboard
+- tapOn: "Add line"
+- scrollUntilVisible:
+    element:
+      id: "line-2-ingredient"
+    direction: DOWN
+- tapOn:
+    id: "line-2-text"
+- inputText: "Salt to taste"
+- tapOn:
+    id: "line-2-ingredient"
+- inputText: "Salt"
+- hideKeyboard
+- scrollUntilVisible:
+    element: "Save Recipe"
+    direction: DOWN
+- tapOn: "Save Recipe"
+- extendedWaitUntil:
+    visible: "Add to Shopping List"
+    timeout: 10000
+- scrollUntilVisible:
+    element: "Add to Shopping List"
+    direction: DOWN
+- tapOn: "Add to Shopping List"
+- extendedWaitUntil:
+    visible: "On your Shopping List: garlic."
+    timeout: 10000
+- tapOn: "Back"
+
+# Aglio e olio: 4 cloves garlic.
+- extendedWaitUntil:
+    visible: "Write a Recipe"
+    timeout: 10000
+- tapOn: "Write a Recipe"
+- extendedWaitUntil:
+    visible:
+      id: "recipe-title"
+    timeout: 10000
+- tapOn:
+    id: "recipe-title"
+- inputText: "Aglio e olio"
+- tapOn:
+    id: "line-1-text"
+- inputText: "4 cloves garlic, sliced"
+- tapOn:
+    id: "line-1-amount"
+- inputText: "4 cloves"
+- tapOn:
+    id: "line-1-ingredient"
+- inputText: "garlics"
+- hideKeyboard
+- scrollUntilVisible:
+    element: "Save Recipe"
+    direction: DOWN
+- tapOn: "Save Recipe"
+- extendedWaitUntil:
+    visible: "Add to Shopping List"
+    timeout: 10000
+- scrollUntilVisible:
+    element: "Add to Shopping List"
+    direction: DOWN
+- tapOn: "Add to Shopping List"
+- extendedWaitUntil:
+    visible: "On your Shopping List: garlic."
+    timeout: 10000
+- tapOn: "Back"
+
+# One garlic line with each Recipe's amount; no salt.
+- tapOn:
+    id: "tab-shopping-list"
+- extendedWaitUntil:
+    visible: "Check off: garlic"
+    timeout: 10000
+- assertVisible: "Garlic bread · 2 cloves"
+- assertVisible: "Aglio e olio · 4 cloves"
+- assertNotVisible: "Check off: salt"
+- assertVisible: "Remove: Garlic bread"
+- assertVisible: "Remove: Aglio e olio"
+
+# Add something by hand.
+- tapOn:
+    id: "shopping-list-add"
+- inputText: "Paper towels"
+- pressKey: Enter
+- extendedWaitUntil:
+    visible: "Check off: Paper towels"
+    timeout: 10000
+- hideKeyboard
+
+# Check off garlic and the paper towels.
+- tapOn: "Check off: garlic"
+- extendedWaitUntil:
+    visible: "Uncheck: garlic"
+    timeout: 10000
+- tapOn: "Check off: Paper towels"
+- extendedWaitUntil:
+    visible: "Uncheck: Paper towels"
+    timeout: 10000
+- assertVisible: "Checked off"
+
+# Garlic is in the Pantry; the paper towels aren't.
+- tapOn:
+    id: "tab-pantry"
+- extendedWaitUntil:
+    visible: "Used up: garlic"
+    timeout: 10000
+- assertNotVisible: "Used up: paper towel"
+- tapOn:
+    id: "tab-shopping-list"
+
+# Uncheck garlic: it's to buy again, and stays in the Pantry.
+- extendedWaitUntil:
+    visible: "Uncheck: garlic"
+    timeout: 10000
+- tapOn: "Uncheck: garlic"
+- extendedWaitUntil:
+    visible: "Check off: garlic"
+    timeout: 10000
+- tapOn:
+    id: "tab-pantry"
+- extendedWaitUntil:
+    visible: "Used up: garlic"
+    timeout: 10000
+- tapOn:
+    id: "tab-shopping-list"
+
+# Remove the paper towels.
+- extendedWaitUntil:
+    visible: "Remove: Paper towels"
+    timeout: 10000
+- tapOn: "Remove: Paper towels"
+- extendedWaitUntil:
+    notVisible: "Remove: Paper towels"
+    timeout: 10000
+
+# Remove the Garlic bread's lines: garlic stays for the Aglio e olio.
+- tapOn: "Remove: Garlic bread"
+- extendedWaitUntil:
+    notVisible: "Garlic bread · 2 cloves"
+    timeout: 10000
+- assertVisible: "Aglio e olio · 4 cloves"
+- assertVisible: "Check off: garlic"
+
+# And the Aglio e olio's: nothing's left.
+- tapOn: "Remove: Aglio e olio"
+- extendedWaitUntil:
+    visible: "Your Shopping List is empty"
+    timeout: 10000
