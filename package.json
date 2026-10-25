@@ -42,10 +42,12 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
+    "verify": "npm run typecheck && npm run lint && npm run db:types:check && npm test",
     "db:start": "supabase start",
     "db:stop": "supabase stop",
     "db:reset": "supabase db reset",
-    "db:types": "supabase gen types typescript --local > src/data/database.types.ts"
+    "db:types": "supabase gen types typescript --local > src/data/database.types.ts",
+    "db:types:check": "scripts/check-db-types.sh"
   },
   "private": true
 }
