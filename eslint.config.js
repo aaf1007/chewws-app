@@ -33,6 +33,32 @@ module.exports = defineConfig([
     },
   },
   {
+    // Screens and components draw with src/ui: colour roles and Text variants, never raw values.
+    files: ['src/app/**/*.{ts,tsx}', 'src/components/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'Literal[value=/^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i]',
+          message: 'No raw colours in screens. Use a colour role from src/ui (colors.accent).',
+        },
+        {
+          selector: 'Literal[value=/^(?:rgba?|hsla?)\\(/i]',
+          message: 'No raw colours in screens. Use a colour role from src/ui (colors.accent).',
+        },
+        {
+          selector: 'TemplateElement[value.raw=/(?:^|[^\\w&])#[0-9a-f]{3,8}\\b|(?:rgba?|hsla?)\\(/i]',
+          message: 'No raw colours in screens. Use a colour role from src/ui (colors.accent).',
+        },
+        {
+          selector:
+            "Property:matches([key.name='fontSize'], [key.value='fontSize']):matches([value.type='Literal'], [value.type='UnaryExpression'], [value.type='BinaryExpression'])",
+          message: 'No font sizes in screens. Use <Text variant="..."> from src/ui.',
+        },
+      ],
+    },
+  },
+  {
     ignores: ['src/data/**', 'tests/harness.ts', 'tests/global-setup.ts'],
     rules: {
       'no-restricted-imports': [
