@@ -25,7 +25,7 @@ export function normaliseIngredientName(raw: string): string {
 }
 
 /** Words that look plural but are one thing. */
-const UNCOUNTABLE = new Set(['molasses', 'schnapps', 'bitters', 'grits']);
+const UNCOUNTABLE = new Set(['molasses', 'schnapps', 'bitters', 'grits', 'haggis', 'pastis']);
 
 /** Plurals the suffix rules below get wrong. */
 const IRREGULAR = new Map([
@@ -42,10 +42,6 @@ const IRREGULAR = new Map([
   ['mousses', 'mousse'],
   ['glazes', 'glaze'],
   ['sloes', 'sloe'],
-  ['kiwis', 'kiwi'],
-  ['rotis', 'roti'],
-  ['chapatis', 'chapati'],
-  ['salamis', 'salami'],
 ]);
 
 /** Singulars ending in -ie or -i whose plural ends in -ies, which `-ies → -y` would mangle. */
@@ -75,8 +71,10 @@ function singular(word: string): string {
   }
   if (word.endsWith('oes')) return word.slice(0, -2); // tomatoes → tomato
   if (/(?:ch|sh|x|ss|z)es$/u.test(word)) return word.slice(0, -2); // peaches → peach
-  // hummus, haggis, swiss and short words such as "gas" or "ms" keep their s.
-  if (word.endsWith('s') && !/(?:ss|us|is)$/u.test(word) && [...word].length > 3) {
+  // Plurals of -i words lose their s like any other (chilis → chili, zucchinis → zucchini); the
+  // -is words that are one thing (haggis, pastis) are uncountable above.
+  // hummus, swiss and short words such as "gas" or "ms" keep their s.
+  if (word.endsWith('s') && !/(?:ss|us)$/u.test(word) && [...word].length > 3) {
     return word.slice(0, -1);
   }
   return word;
