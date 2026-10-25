@@ -1,16 +1,11 @@
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { View } from 'react-native';
 
 import { messageOf } from '@/auth/errors';
-import type { ShoppingList as ShoppingListContents, ShoppingListItem } from '@/data';
+import type { ListSync, ShoppingListItem, ShoppingListView } from '@/data';
 import { data } from '@/data/app';
-import { AddField, EmptyState, Screen, SectionHeader, ShoppingListRow, Text } from '@/ui';
-
-type ListState =
-  | { status: 'loading' }
-  | { status: 'loaded'; list: ShoppingListContents }
-  | { status: 'error'; message: string };
+import { AddField, EmptyState, Screen, SectionHeader, ShoppingListRow, SyncNotice, Text } from '@/ui';
 
 /** Each Recipe's amounts under an Ingredient line: "Aglio e olio · 4 cloves, 1 clove". */
 const detailsOf = (item: ShoppingListItem) =>
@@ -22,39 +17,40 @@ const detailsOf = (item: ShoppingListItem) =>
 
 const nameOf = (item: ShoppingListItem) => (item.kind === 'ingredient' ? item.ingredient.name : item.text);
 
+const changes = (count: number) => (count === 1 ? '1 change' : `${count} changes`);
+
+/** What to tell the user about changes made on this phone that the server doesn't have yet. */
+function syncNoticeOf(sync: ListSync): { status: 'offline' | 'syncing'; message: string } | null {
+  if (sync.status === 'offline') {
+    return {
+      status: 'offline',
+      message:
+        sync.waiting > 0
+          ? `You're offline. ${changes(sync.waiting)} will sync when you're back online.`
+          : "You're offline. This is your list as it was last loaded.",
+    };
+  }
+  if (sync.status === 'syncing' && sync.waiting > 0) {
+    return { status: 'syncing', message: `Syncing ${changes(sync.waiting)}…` };
+  }
+  return null;
+}
+
 export default function ShoppingList() {
-  const [state, setState] = useState<ListState>({ status: 'loading' });
+  const [state, setState] = useState<ShoppingListView>({ status: 'loading', sync: { status: 'idle', waiting: 0 } });
   const [changeError, setChangeError] = useState<string | null>(null);
 
-  // Changes can overlap, each followed by a reload; only the newest reload is shown, so an older
-  // one finishing late can't bring back what a later change removed.
-  const latestLoad = useRef(0);
-  const load = useCallback(() => {
-    const thisLoad = ++latestLoad.current;
-    const show = (next: ListState) => {
-      if (thisLoad === latestLoad.current) setState(next);
-    };
-    return data
-      .getShoppingList()
-      .then((list) => show({ status: 'loaded', list }))
-      .catch((e: unknown) => show({ status: 'error', message: messageOf(e) }));
-  }, []);
+  // The list as the phone has it, updated on every change (sent or still waiting for a signal)
+  // and whenever it's read from the server, while this tab is open.
+  useFocusEffect(useCallback(() => data.watchShoppingList(setState), []));
 
-  useFocusEffect(
-    useCallback(() => {
-      load();
-    }, [load]),
-  );
-
-  /** Makes a change, then shows the list as it is now. If it fails, shows why and rejects. */
+  /** Makes a change; the list shows it as it happens. If it fails, shows why and rejects. */
   const change = (run: () => Promise<unknown>) => {
     setChangeError(null);
-    return run()
-      .catch((e: unknown) => {
-        setChangeError(messageOf(e));
-        throw e;
-      })
-      .finally(load);
+    return run().catch((e: unknown) => {
+      setChangeError(messageOf(e));
+      throw e;
+    });
   };
   /** For a row's button, whose failure is already shown by `change`. */
   const changeFromRow = (run: () => Promise<unknown>) => () => {
@@ -77,6 +73,7 @@ export default function ShoppingList() {
     );
   };
 
+  const notice = state.status === 'failed' ? null : syncNoticeOf(state.sync);
   const items = state.status === 'loaded' ? state.list.items : [];
   const toBuy = items.filter((item) => item.check.status === 'unchecked');
   const checkedOff = items.filter((item) => item.check.status === 'checked');
@@ -89,8 +86,9 @@ export default function ShoppingList() {
         placeholder="Add something to buy"
         testID="shopping-list-add"
       />
+      {notice ? <SyncNotice status={notice.status} message={notice.message} testID="shopping-list-sync" /> : null}
       {changeError ? <Text tone="danger">{changeError}</Text> : null}
-      {state.status === 'error' ? <Text tone="danger">{state.message}</Text> : null}
+      {state.status === 'failed' ? <Text tone="danger">{state.error.message}</Text> : null}
 
       {state.status === 'loaded' && items.length === 0 ? (
         <EmptyState
