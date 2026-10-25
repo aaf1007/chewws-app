@@ -1,4 +1,9 @@
-import type { AuthError, PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js';
+import {
+  isAuthRetryableFetchError,
+  type AuthError,
+  type PostgrestError,
+  type SupabaseClient,
+} from '@supabase/supabase-js';
 
 import {
   createChangeQueue,
@@ -152,9 +157,18 @@ function toProfile(row: ProfileRow): Profile {
   return { id: parseUserId(row.id), username: row.username, createdAt: row.created_at };
 }
 
-function toSessionState(session: Session | null): SessionState {
-  return session ? { status: 'signedIn', userId: parseUserId(session.user.id) } : { status: 'signedOut' };
+/** The signed-in user id the data layer saved on the phone, or null if none (or unreadable). */
+function parseSavedUserId(raw: string | null): UserId | null {
+  try {
+    const saved: unknown = raw === null ? null : JSON.parse(raw);
+    return typeof saved === 'string' ? parseUserId(saved) : null;
+  } catch {
+    return null;
+  }
 }
+
+const sameSession = (a: SessionState, b: SessionState) =>
+  a.status === b.status && (a.status !== 'signedIn' || (b.status === 'signedIn' && a.userId === b.userId));
 
 /** A request that never reached the server (no signal) fails with code `offline`. */
 function toDataError(error: AuthError | PostgrestError): DataError {
@@ -194,11 +208,97 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   const now = options.now ?? Date.now;
   const newId = options.newId ?? (() => crypto.randomUUID());
 
+  const notSignedIn = () => new DataError('not_signed_in', 'No user is signed in.');
+
   async function currentUserId(): Promise<UserId> {
     const { data, error } = await client.auth.getSession();
     if (error) fail(error);
-    if (!data.session) throw new DataError('not_signed_in', 'No user is signed in.');
+    if (!data.session) throw notSignedIn();
     return parseUserId(data.session.user.id);
+  }
+
+  // Who is signed in on this phone. The auth client says, but its session runs out after an hour
+  // and only a signal can refresh it: until then it has no session to give, and the user is still
+  // signed in. So the phone remembers who signed in, and forgets them only on a real sign-out,
+  // which includes a refresh the server refuses (the auth client then reports SIGNED_OUT).
+  const signedInKey = 'recipeapp.signedInUser';
+  let session: SessionState = { status: 'loading' };
+  let remembered: Promise<UserId | null> = storage
+    .getItem(signedInKey)
+    .then(parseSavedUserId)
+    .catch(() => null);
+  let savingSignedIn: Promise<void> = Promise.resolve();
+  let authEvents = 0;
+  const sessionWatchers = new Set<(state: SessionState) => void>();
+
+  function setSession(next: SessionState) {
+    if (sameSession(session, next)) return;
+    session = next;
+    if (next.status !== 'loading') {
+      const id = next.status === 'signedIn' ? next.userId : null;
+      remembered = Promise.resolve(id);
+      const saved = JSON.stringify(id);
+      savingSignedIn = savingSignedIn.then(() => storage.setItem(signedInKey, saved)).catch(() => {});
+    }
+    for (const watcher of sessionWatchers) watcher(next);
+  }
+
+  // Until the auth client answers (with no signal, after it gives up refreshing), the user
+  // remembered on the phone is signed in.
+  void remembered.then((id) => {
+    if (id && session.status === 'loading') setSession({ status: 'signedIn', userId: id });
+  });
+
+  /**
+   * The auth client started without a session: there is none, or it couldn't refresh it for lack
+   * of a signal (a network failure, not an answer from the server). Only the first signs out.
+   */
+  async function settleWithoutSession(seenEvents: number) {
+    const { data, error } = await client.auth.getSession();
+    const id = await remembered;
+    if (authEvents !== seenEvents) return; // A sign-in or sign-out since has the say.
+    if (data.session) setSession({ status: 'signedIn', userId: parseUserId(data.session.user.id) });
+    else if (id && error && isAuthRetryableFetchError(error)) setSession({ status: 'signedIn', userId: id });
+    else setSession({ status: 'signedOut' });
+  }
+
+  client.auth.onAuthStateChange((event, authSession) => {
+    authEvents += 1;
+    if (authSession) {
+      setSession({ status: 'signedIn', userId: parseUserId(authSession.user.id) });
+    } else if (event === 'INITIAL_SESSION') {
+      // Asking the auth client from inside its own callback would wait on itself.
+      const seen = authEvents;
+      setTimeout(() => void settleWithoutSession(seen), 0);
+    } else if (event === 'SIGNED_OUT') {
+      setSession({ status: 'signedOut' });
+    }
+  });
+
+  /**
+   * Who the Shopping List on this phone belongs to: the user signed in here, without refreshing
+   * their session (with no signal that fails, and the list still works). Null when signed out.
+   */
+  async function listOwner(): Promise<UserId | null> {
+    const id = await remembered;
+    if (id) return id;
+    const { data } = await client.auth.getSession();
+    return data.session ? parseUserId(data.session.user.id) : null;
+  }
+
+  async function requireListOwner(): Promise<UserId> {
+    const id = await listOwner();
+    if (!id) throw notSignedIn();
+    return id;
+  }
+
+  /**
+   * Whether requests now go out as `me`, refreshing their session first if it ran out. With no
+   * signal to refresh it, they'd go out as nobody.
+   */
+  async function hasSessionOf(me: UserId): Promise<boolean> {
+    const { data } = await client.auth.getSession();
+    return data.session?.user.id === me;
   }
 
   async function signInWithIdToken(input: {
@@ -208,23 +308,33 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   }): Promise<UserId> {
     const { data, error } = await client.auth.signInWithIdToken(input);
     if (error) fail(error);
-    return parseUserId(data.user.id);
+    const id = parseUserId(data.user.id);
+    setSession({ status: 'signedIn', userId: id });
+    return id;
   }
 
   async function signInWithPassword(input: { email: string; password: string }): Promise<UserId> {
     const { data, error } = await client.auth.signInWithPassword(input);
     if (error) fail(error);
-    return parseUserId(data.user.id);
+    const id = parseUserId(data.user.id);
+    setSession({ status: 'signedIn', userId: id });
+    return id;
   }
 
   async function signOut(): Promise<void> {
     const { error } = await client.auth.signOut();
     if (error) fail(error);
+    setSession({ status: 'signedOut' });
   }
 
+  /**
+   * Tells `cb` who is signed in now (once known) and on every change. Signed in stays signed in
+   * with no signal, even once the session needs refreshing. Returns a function that stops it.
+   */
   function onSessionChange(cb: (state: SessionState) => void): () => void {
-    const { data } = client.auth.onAuthStateChange((_event, session) => cb(toSessionState(session)));
-    return () => data.subscription.unsubscribe();
+    sessionWatchers.add(cb);
+    if (session.status !== 'loading') cb(session);
+    return () => sessionWatchers.delete(cb);
   }
 
   async function getProfile(id: UserId): Promise<Profile | null> {
@@ -364,6 +474,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
 
   /** The user's Shopping List as the server has it, or `unreachable` with no signal. */
   async function fetchShoppingList(me: UserId): Promise<{ status: 'reached'; list: ShoppingList } | { status: 'unreachable' }> {
+    if (!(await hasSessionOf(me))) return { status: 'unreachable' };
     const { data, error, status } = await client
       .from('shopping_lists')
       .select(SHOPPING_LIST_WITH_ITEMS)
@@ -395,8 +506,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   async function sendListChange(me: UserId, { madeAt, change }: QueuedChange<ListChange>): Promise<Delivery> {
     // Only the user who made a change sends it. Signed out, or a session that can't refresh with
     // no signal, it waits.
-    const { data } = await client.auth.getSession();
-    if (data.session?.user.id !== me) return { status: 'unreachable' };
+    if (!(await hasSessionOf(me))) return { status: 'unreachable' };
     if (change.kind === 'addManualItem') {
       const { data: id, error, status } = await client.rpc('add_manual_item', {
         item_text: change.text,
@@ -533,7 +643,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
    * seen, it fails with code `offline`.
    */
   async function getShoppingList(): Promise<ShoppingList> {
-    const me = await currentUserId();
+    const me = await requireListOwner();
     const lists = shoppingListOf(me);
     await lists.ready;
     const fetched = await fetchShoppingList(me);
@@ -557,7 +667,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   function watchShoppingList(watcher: (view: ShoppingListView) => void): () => void {
     let lists: ReturnType<typeof openShoppingList> | null = null;
     let stopped = false;
-    currentUserId().then(
+    requireListOwner().then(
       async (me) => {
         if (stopped) return;
         lists = shoppingListOf(me);
@@ -580,7 +690,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
 
   /** Whether the signed-in user's list changes are waiting to sync. */
   async function getListSync(): Promise<ListSync> {
-    const me = await currentUserId();
+    const me = await requireListOwner();
     const lists = shoppingListOf(me);
     await lists.ready;
     return lists.sync();
@@ -592,9 +702,9 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
    * what's still waiting.
    */
   async function syncListChanges(): Promise<ListSync> {
-    const { data } = await client.auth.getSession();
-    if (!data.session) return { status: 'idle', waiting: 0 };
-    const lists = shoppingListOf(parseUserId(data.session.user.id));
+    const me = await listOwner();
+    if (!me) return { status: 'idle', waiting: 0 };
+    const lists = shoppingListOf(me);
     await lists.ready;
     const { status, queue } = lists.queue.state();
     if (status !== 'idle' || queue.length > 0) await lists.queue.sync();
@@ -635,7 +745,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
    * sent on reconnect. Fails if the server says its item is gone, or refuses it.
    */
   async function changeShoppingList(change: ListChange): Promise<void> {
-    const me = await currentUserId();
+    const me = await requireListOwner();
     const outcome = await shoppingListOf(me).queue.enqueue(change);
     if (outcome.status === 'dropped') throw itemGone();
     if (outcome.status === 'refused') throw outcome.error;
@@ -678,7 +788,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
    * waiting on the phone are sent first, so an item added with no signal is there to remove.
    */
   async function removeFromShoppingList(itemId: ShoppingListItemId): Promise<void> {
-    const me = await currentUserId();
+    const me = await requireListOwner();
     const lists = shoppingListOf(me);
     await lists.ready;
     const before = lists.queue.state();

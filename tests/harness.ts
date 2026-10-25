@@ -77,13 +77,43 @@ export type TestPhone = TestUser & {
   saved(): SavedOnPhone;
   /** Writes into the app's storage, as an older app version or a cut-short write might have. */
   overwriteSaved(key: string, value: string): void;
-  /** The app started again on this phone, still signed in, from what it saved (or from `saved`). */
+  /**
+   * The access token the phone holds runs out, as after an hour in a pocket: the next request
+   * first has to refresh it, which takes a signal. The refresh token still works.
+   */
+  expireAccessToken(): void;
+  /** The server revokes the user's sessions (signed out everywhere): refreshing is refused. */
+  revokeSessions(): Promise<void>;
+  /**
+   * The app started again on this phone (a cold start: a new auth client too), from what it saved
+   * (or from `saved`) and the session the auth client saved.
+   */
   relaunch(saved?: SavedOnPhone): TestPhone;
 };
 
+/** Storage for the auth client's session on a phone, kept apart from what the app saves. */
+function authStorageOn(items: Map<string, string>) {
+  return {
+    getItem: async (key: string) => items.get(key) ?? null,
+    setItem: async (key: string, value: string) => void items.set(key, value),
+    removeItem: async (key: string) => void items.delete(key),
+  };
+}
+
+/** Rewrites the saved session so its access token expired a minute ago. */
+function expireSavedSession(items: Map<string, string>) {
+  for (const [key, value] of items) {
+    const saved: unknown = JSON.parse(value);
+    if (typeof saved === 'object' && saved !== null && 'expires_at' in saved) {
+      items.set(key, JSON.stringify({ ...saved, expires_at: Math.floor(Date.now() / 1000) - 60 }));
+    }
+  }
+}
+
 /**
  * The same new user signed in on `count` phones. Each phone has its own app (data layer), storage,
- * clock and signal. Behaviour tests reach the app only through `data`, as with `signInTestUser`.
+ * clock and signal, and its own auth client, which keeps its session in the phone's storage.
+ * Behaviour tests reach the app only through `data`, as with `signInTestUser`.
  */
 export async function signInOnPhones(label: string, count: number): Promise<TestPhone[]> {
   const account = await createTestAccount(label);
@@ -92,33 +122,41 @@ export async function signInOnPhones(label: string, count: number): Promise<Test
       let offline = false;
       const fetchThroughSignal: typeof fetch = (input, init) =>
         offline ? Promise.reject(new TypeError('Network request failed')) : fetch(input, init);
-      const client = createTestClient(fetchThroughSignal);
       const network = { goOffline: () => void (offline = true), goOnline: () => void (offline = false) };
-      const first = createPhone(client, network, new Map());
+      const first = createPhone(new Map(), new Map());
       await first.data.signInWithPassword(account);
       const userId = (await first.data.getMyProfile()).id;
 
-      function createPhone(
-        phoneClient: typeof client,
-        signal: typeof network,
-        items: Map<string, string>,
-      ): Omit<TestPhone, 'userId'> {
+      async function revokeSessions() {
+        const db = new pg.Client({ connectionString: inject('supabase').dbUrl });
+        await db.connect();
+        try {
+          await db.query('delete from auth.sessions where user_id = $1', [userId]);
+        } finally {
+          await db.end();
+        }
+      }
+
+      function createPhone(items: Map<string, string>, authItems: Map<string, string>): Omit<TestPhone, 'userId'> {
         let clock: number | null = null;
         const storage: KeyValueStorage = {
           getItem: async (key) => items.get(key) ?? null,
           setItem: async (key, value) => void items.set(key, value),
         };
-        const data = createDataLayer(phoneClient, {
+        const client = createTestClient(fetchThroughSignal, authStorageOn(authItems));
+        const data = createDataLayer(client, {
           storage,
           now: () => (clock === null ? Date.now() : clock),
         });
         return {
           data,
-          ...signal,
+          ...network,
           setClock: (at) => void (clock = at.getTime()),
           saved: () => new Map(items),
           overwriteSaved: (key, value) => void items.set(key, value),
-          relaunch: (saved) => ({ userId, ...createPhone(phoneClient, signal, new Map(saved ?? items)) }),
+          expireAccessToken: () => expireSavedSession(authItems),
+          revokeSessions,
+          relaunch: (saved) => ({ userId, ...createPhone(new Map(saved ?? items), new Map(authItems)) }),
         };
       }
       return { userId, ...first };

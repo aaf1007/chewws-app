@@ -172,6 +172,12 @@ export function createChangeQueue<C>(options: {
       dispatch({ type: 'restored', queue: restored });
     });
 
+  /** The server wasn't reached: whoever is waiting on a change hears it's queued. */
+  function wentOffline() {
+    dispatch({ type: 'unreachable' });
+    for (const id of [...waiting.keys()]) settle(id, { status: 'queued' });
+  }
+
   async function flush() {
     const wasOffline = state.status === 'offline';
     dispatch({ type: 'syncStarted' });
@@ -186,8 +192,7 @@ export function createChangeQueue<C>(options: {
         };
       }
       if (delivery.status === 'unreachable') {
-        dispatch({ type: 'unreachable' });
-        for (const id of [...waiting.keys()]) settle(id, { status: 'queued' });
+        wentOffline();
         return;
       }
       onDelivered(head, delivery);
@@ -195,8 +200,9 @@ export function createChangeQueue<C>(options: {
       await save();
       settle(head.id, delivery);
     }
+    // A change queued meanwhile isn't tried in this run, so it waits too.
     if ((await afterSync(wasOffline)) === 'unreachable') {
-      dispatch({ type: 'unreachable' });
+      wentOffline();
       return;
     }
     // A change queued while the list was being read is sent by the run `sync` starts next.

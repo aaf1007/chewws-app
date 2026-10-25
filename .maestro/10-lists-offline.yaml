@@ -2,8 +2,10 @@
 # takes the app offline (pauses the local API gateway through scripts/net-control.mjs, which
 # scripts/e2e.sh runs). Offline it checks one off, unchecks another and adds one: the list shows
 # each at once and says the changes are waiting to sync; removing says it needs a connection. The
-# app is closed and opened again, still offline, and shows the same list. Back online the changes
-# sync, and a fresh install signed in again reads them back from the server.
+# app is closed, its saved access token is made to run out (as after an hour in a pocket; through
+# scripts/expire-session.mjs), and it's opened again, still offline: it stays signed in and shows
+# the same list, though it can't refresh the token. Back online the token is refreshed and the
+# changes sync, and a fresh install signed in again reads them back from the server.
 # Run with `npm run e2e -- .maestro/10-lists-offline.yaml` (not with `maestro test` alone: nothing
 # would answer go-offline.js).
 appId: com.ant1007.recipeapp
@@ -72,7 +74,10 @@ appId: com.ant1007.recipeapp
     timeout: 30000
 - assertVisible: "Check off: Bin bags"
 
-# Closed and opened again with no signal: the same list, still waiting to sync.
+# Closed, left until the access token runs out, and opened again with no signal: still signed in,
+# the same list, still waiting to sync.
+- stopApp
+- runScript: scripts/expire-session.js
 - launchApp:
     stopApp: true
     clearState: false
@@ -89,16 +94,21 @@ appId: com.ant1007.recipeapp
 - assertVisible: "Check off: Foil"
 - assertVisible: "Check off: Snacks"
 - assertVisible: "Check off: Bin bags"
+- assertNotVisible: "Sign in as test user (dev)"
+# Once the auth client gives up refreshing the token (each try waits for an answer that never comes).
 - extendedWaitUntil:
     visible: ".*offline. 3 changes will sync when you're back online."
-    timeout: 30000
+    timeout: 90000
+- assertVisible:
+    id: "tab-shopping-list"
 
-# Back online: the changes sync (on the next retry) and the notice goes.
+# Back online: the token is refreshed and the changes sync (on a later retry: the auth client
+# waits a minute before trying a refresh that failed again), and the notice goes.
 - runScript: scripts/go-online.js
 - extendedWaitUntil:
     notVisible:
       id: "shopping-list-sync"
-    timeout: 30000
+    timeout: 150000
 - assertVisible: "Uncheck: Paper towels"
 - assertVisible: "Check off: Foil"
 - assertVisible: "Check off: Snacks"
