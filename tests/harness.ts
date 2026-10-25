@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { inject } from 'vitest';
 
 import { createDataLayer, type DataLayer, type UserId } from '../src/data';
@@ -12,13 +12,24 @@ const nodeAuth = { persistSession: false, autoRefreshToken: false, detectSession
 
 const admin = createClient<Database>(url, serviceRoleKey, { auth: nodeAuth });
 
-export async function signInTestUser(label = 'user'): Promise<{ userId: UserId; data: DataLayer }> {
+export type TestUser = {
+  userId: UserId;
+  data: DataLayer;
+  /**
+   * The user's own signed-in Supabase client (anon key + their session), as an attacker would
+   * hold it. Only for access-rule tests in `tests/*.access.test.ts`; behaviour tests use `data`.
+   */
+  attackerClient: SupabaseClient<Database>;
+};
+
+export async function signInTestUser(label = 'user'): Promise<TestUser> {
   const email = `${label}-${randomUUID()}@test.local`;
   const password = randomUUID();
   const { error } = await admin.auth.admin.createUser({ email, password, email_confirm: true });
   if (error) throw error;
 
-  const data = createDataLayer(createClient<Database>(url, anonKey, { auth: nodeAuth }));
+  const client = createClient<Database>(url, anonKey, { auth: nodeAuth });
+  const data = createDataLayer(client);
   const userId = await data.signInWithPassword({ email, password });
-  return { userId, data };
+  return { userId, data, attackerClient: client };
 }

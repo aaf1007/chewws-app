@@ -14,9 +14,10 @@ module.exports = defineConfig([
     },
   },
   {
-    // Tests drive the app through data-layer actions only (spec: Testing Decisions).
+    // Tests drive the app through data-layer actions only (spec: Testing Decisions). Access-rule
+    // tests in tests/*.access.test.ts attack the API directly with a user's raw client.
     files: ['tests/**/*.{ts,tsx}'],
-    ignores: ['tests/harness.ts', 'tests/global-setup.ts'],
+    ignores: ['tests/harness.ts', 'tests/global-setup.ts', 'tests/**/*.access.test.ts'],
     rules: {
       'no-restricted-syntax': [
         'error',
