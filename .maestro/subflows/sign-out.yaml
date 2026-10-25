@@ -1,0 +1,11 @@
+# Signs out from the Library header. Ends on the sign-in screen.
+appId: com.ant1007.recipeapp
+---
+# On iOS 26 the glass header button sometimes swallows a simulated tap, so tap again if needed.
+- retry:
+    maxRetries: 3
+    commands:
+      - tapOn: "Sign out"
+      - extendedWaitUntil:
+          visible: "Sign in as test user (dev)"
+          timeout: 5000

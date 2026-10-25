@@ -1,12 +1,7 @@
-# Start with the dev build open on the sign-in screen, Metro running and the local stack up:
-#   maestro test .maestro/dev-sign-in-and-out.yaml
+# Signs in with the dev button, sees the empty library, signs out. Run with `npm run e2e`.
 appId: com.ant1007.recipeapp
 ---
-- runFlow:
-    when:
-      visible: "Reload"
-    commands:
-      - tapOn: "Close"
+- runFlow: subflows/launch-fresh.yaml
 - assertVisible: "Sign in with Apple"
 - assertVisible: "Sign in with Google"
 - tapOn: "Sign in as test user (dev)"
@@ -14,12 +9,4 @@ appId: com.ant1007.recipeapp
     visible: "No recipes yet"
     timeout: 15000
 - assertVisible: "Library"
-# The dev client's floating tools button starts over the header's Sign out button; drag it away.
-- swipe:
-    start: "91%,10%"
-    end: "91%,60%"
-    duration: 1500
-- tapOn: "Sign out"
-- extendedWaitUntil:
-    visible: "Sign in as test user (dev)"
-    timeout: 15000
+- runFlow: subflows/sign-out.yaml

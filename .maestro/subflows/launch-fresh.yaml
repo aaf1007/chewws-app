@@ -1,0 +1,35 @@
+# Starts the dev build from scratch (no saved session) and loads the JS from Metro on 8081.
+# Ends on the sign-in screen. Needs `npm run dev:up` first.
+appId: com.ant1007.recipeapp
+---
+- launchApp:
+    clearState: true
+- openLink: "recipeapp://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8081"
+# A cleared dev client shows its menu intro once the bundle loads.
+- extendedWaitUntil:
+    visible: "Continue"
+    timeout: 60000
+    optional: true
+- runFlow:
+    when:
+      visible: "Continue"
+    commands:
+      - tapOn: "Continue"
+      # The intro gives way to the dev menu itself.
+      - extendedWaitUntil:
+          visible: "Reload"
+          timeout: 10000
+          optional: true
+- runFlow:
+    when:
+      visible: "Reload"
+    commands:
+      - tapOn: "Close"
+- extendedWaitUntil:
+    visible: "Sign in as test user (dev)"
+    timeout: 30000
+# The dev client's floating tools button starts over the header's right-hand button; drag it away.
+- swipe:
+    start: "91%,10%"
+    end: "91%,60%"
+    duration: 1500
