@@ -13,6 +13,7 @@ export { ScoreBadge, formatScore, type ScoreTone } from './score-badge';
 export { Screen } from './screen';
 export { SearchField } from './search-field';
 export { SectionHeader } from './section-header';
+export { ShoppingListRow } from './shopping-list-row';
 export { StepEditor } from './step-editor';
 export { StepNumber, StepRow } from './step-row';
 export { tabIcon, tabScreenOptions } from './tab-bar';

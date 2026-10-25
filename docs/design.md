@@ -49,5 +49,6 @@ Also: `spacing` (`xxs` 2 to `xxl` 32), `radii` (`sm`, `md` 10, `lg`, `sheet` 24,
 | `FloatingSegment` | White pill of segments floating at the bottom centre (`List \| Map`)                               |
 | `AddField`       | Gray rounded field with an Add button at its right, for adding one thing by name (Pantry, Staples) |
 | `IngredientRow`  | An Ingredient's name with an optional action at its right ("Used up", "Remove"), over a hairline   |
+| `ShoppingListRow` | A Shopping List line: optional check circle, name with muted detail lines (each Recipe's amounts), optional action; checked lines are muted and struck through |
 | `EmptyState`     | Centred icon, title and message for a screen with nothing in it yet                                |
 | `tabScreenOptions`, `tabIcon` | The signed-in tab bar's style and icons                                               |

@@ -17,6 +17,7 @@ import {
   Screen,
   SearchField,
   SectionHeader,
+  ShoppingListRow,
   StepEditor,
   StepRow,
   Text,
@@ -208,6 +209,22 @@ export default function UiGallery() {
         <IngredientRow name="garlic" action={{ label: 'Used up', onPress: noop }} />
         <IngredientRow name="crème fraîche" action={{ label: 'Remove', onPress: noop }} />
         <IngredientRow name="salt" />
+      </View>
+
+      <SectionHeader title="Shopping List rows" />
+      <View>
+        <ShoppingListRow
+          name="garlic"
+          details={['Garlic bread · 2 cloves', 'Aglio e olio · 4 cloves, 1 clove']}
+          check={{ checked: false, onPress: noop }}
+          action={{ label: 'Remove', onPress: noop }}
+        />
+        <ShoppingListRow
+          name="Paper towels"
+          check={{ checked: true, onPress: noop }}
+          action={{ label: 'Remove', onPress: noop }}
+        />
+        <ShoppingListRow name="Garlic bread" action={{ label: 'Remove', onPress: noop }} />
       </View>
 
       <SectionHeader title="Steps" />
