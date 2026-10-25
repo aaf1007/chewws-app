@@ -305,7 +305,12 @@ export type Database = {
     }
     Functions: {
       add_manual_item: {
-        Args: { ingredient_name: string; item_id?: string; item_text: string }
+        Args: {
+          changed_at?: string
+          ingredient_name: string
+          item_id?: string
+          item_text: string
+        }
         Returns: string
       }
       add_recipe_to_shopping_list: {
@@ -314,7 +319,10 @@ export type Database = {
       }
       add_staple: { Args: { ingredient_name: string }; Returns: string }
       add_to_pantry: { Args: { ingredient_name: string }; Returns: string }
-      check_off: { Args: { item_id: string }; Returns: boolean }
+      check_off: {
+        Args: { changed_at?: string; item_id: string }
+        Returns: boolean
+      }
       create_recipe: {
         Args: { lines: Json; steps: string[]; title: string }
         Returns: string
@@ -329,7 +337,10 @@ export type Database = {
         Args: { recipe_id: string }
         Returns: undefined
       }
-      uncheck: { Args: { item_id: string }; Returns: boolean }
+      uncheck: {
+        Args: { changed_at?: string; item_id: string }
+        Returns: boolean
+      }
     }
     Enums: {
       recipe_status: "draft" | "reviewed"
