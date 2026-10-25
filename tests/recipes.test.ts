@@ -178,3 +178,21 @@ test('a Recipe needs a title, and every ingredient line needs an Ingredient', as
   ).rejects.toMatchObject({ code: 'ingredient_required' });
   expect(await a.data.listMyRecipes()).toEqual([]);
 });
+
+test('an apostrophe in an Ingredient name vanishes, so "Hellmann\'s" and "hellmanns" are one Ingredient', async () => {
+  const a = await signInTestUser('a');
+  const line = (ingredientName: string) => ({ originalText: ingredientName, ingredientName });
+
+  const id = await a.data.createRecipe({
+    title: 'Sandwich',
+    lines: ["Hellmann's", 'hellmanns', 'Hellmann’s', "M&M's"].map(line),
+    steps: [],
+  });
+
+  const lines = (await a.data.getRecipe(id))?.lines ?? [];
+  expect(lines.map((l) => l.ingredient.name)).toEqual(['hellmann', 'hellmann', 'hellmann', 'm m']);
+  expect(new Set(lines.slice(0, 3).map((l) => l.ingredient.id)).size).toBe(1);
+
+  await a.data.editRecipe(id, { title: 'Sandwich', lines: [line("Hellmann's")], steps: [] });
+  expect((await a.data.getRecipe(id))?.lines.map((l) => l.ingredient.id)).toEqual([lines[0].ingredient.id]);
+});
