@@ -169,7 +169,7 @@ export default function UiGallery() {
       </View>
 
       <SectionHeader title="Text field" />
-      <TextField label="Title" value={title} onChangeText={setTitle} placeholder="Grandma's lasagne" />
+      <TextField label="Title" value={title} onChangeText={setTitle} placeholder="e.g. Grandma's lasagne" />
       <TextField label="Notes" value="" onChangeText={noop} placeholder="Multiline" multiline />
 
       <SectionHeader title="Ingredient line editor" />
