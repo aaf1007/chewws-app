@@ -24,6 +24,7 @@ Defaults chosen where the tickets leave things open. Override any by editing thi
 - `checkOff` is a security-definer RPC that writes the **list owner's** Pantry, so ticket 13 (shared lists) needs no rewrite.
 - Unchecking leaves the Pantry alone.
 - Adding the same Recipe twice changes nothing. Deleting a Recipe removes its amount rows; an unchecked line with no amounts left is removed.
+- **For ticket 13:** Friends on a shared list must see the Recipe titles on its lines, but Recipes are owner-only, so `recipe:recipes(id, title)` comes back null for a Friend and `toShoppingListItem` (`src/data/data-layer.ts`) throws; ticket 13 either stores the title on the amount row or adds a list-scoped policy on Recipes. `add_manual_item`, `add_recipe_to_shopping_list` and `getShoppingList` act on the caller's own list today and will need a list id.
 
 ## 10 Lists work with no signal
 
