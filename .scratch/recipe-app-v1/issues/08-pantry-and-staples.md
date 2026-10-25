@@ -4,9 +4,9 @@
 
 **Blocked by:** 02 (Write a Recipe by hand).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The user can add Ingredients to their Pantry and mark them used up
-- [ ] New users start with a default Staples list they can edit
-- [ ] Staples always count as in the Pantry for any check that asks "does this user have X?"
-- [ ] Data-layer tests: Pantry and Staples are visible only to their owner; a Staple counts as present even if not in the Pantry
+- [x] The user can add Ingredients to their Pantry and mark them used up
+- [x] New users start with a default Staples list they can edit
+- [x] Staples always count as in the Pantry for any check that asks "does this user have X?"
+- [x] Data-layer tests: Pantry and Staples are visible only to their owner; a Staple counts as present even if not in the Pantry
