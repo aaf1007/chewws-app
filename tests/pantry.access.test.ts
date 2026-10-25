@@ -1,6 +1,6 @@
 // Access-rule tests for the Pantry and Staples: a stranger skips the data layer and calls PostgREST
 // directly with the anon key and their own session, as an attacker would. RLS is what has to stop them.
-import { expect, test } from 'vitest';
+import { expect, inject, test } from 'vitest';
 
 import { signInAttacker } from './access-harness';
 
@@ -107,5 +107,42 @@ test("a stranger's Pantry and Staples functions touch only their own, and say no
   expect(await stranger.rpc('has_ingredient', { ingredient_id: salt.id })).toMatchObject({ data: false });
   await stranger.from('pantry_entries').delete().eq('ingredient_id', garlic.id);
   expect(await stranger.rpc('has_ingredient', { ingredient_id: garlic.id })).toMatchObject({ data: false });
+  await expectOwnerStillHasEverything();
+});
+
+test("a stranger cannot read anyone else's set of Ingredients they have", async () => {
+  const { owner, garlic, salt, stranger, expectOwnerStillHasEverything } = await ownerAndStranger();
+  const strangerButter = await stranger.rpc('add_to_pantry', { ingredient_name: 'butter' });
+  if (strangerButter.error) throw strangerButter.error;
+  const { url, anonKey } = inject('supabase');
+  const { data: session } = await stranger.auth.getSession();
+  if (!session.session) throw new Error('the stranger is not signed in');
+  const token = session.session.access_token;
+
+  /** Calls a function through PostgREST as the stranger, bypassing the typed client. */
+  const callRpc = (name: string, args: object, schema = 'public') =>
+    fetch(`${url}/rest/v1/rpc/${name}`, {
+      method: 'POST',
+      headers: {
+        apikey: anonKey,
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Content-Profile': schema,
+      },
+      body: JSON.stringify(args),
+    }).then(async (res) => ({ status: res.status, body: await res.json() }));
+
+  // Their own set holds only what they have, nothing of the owner's garlic.
+  const mine = await stranger.rpc('ingredients_i_have');
+  expect(mine.error).toBeNull();
+  expect(mine.data).toContain(strangerButter.data);
+  expect(mine.data).toContain(salt.id); // their own default Staple
+  expect(mine.data).not.toContain(garlic.id);
+
+  // Naming the owner gets nothing: the public function takes no user, the shared rule isn't exposed.
+  const named = await callRpc('ingredients_i_have', { who: owner.userId });
+  const rule = await callRpc('ingredients_had', { who: owner.userId }, 'private');
+  expect(named).toMatchObject({ status: 404, body: { code: 'PGRST202' } });
+  expect(rule).toMatchObject({ status: 406, body: { code: 'PGRST106' } });
   await expectOwnerStillHasEverything();
 });

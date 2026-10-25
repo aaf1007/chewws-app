@@ -90,7 +90,24 @@ begin
 end;
 $$;
 
--- The one answer to "does the caller have this Ingredient?": in their Pantry, or a Staple.
+-- The one rule for "does a user have an Ingredient?": it's in their Pantry or one of their Staples.
+-- Every check goes through this: has_ingredient and ingredients_i_have below for the caller, and
+-- later Shopping List and Cook Plan reads. It runs as the caller, so the policies above still limit
+-- it to the caller's own rows, and the private schema isn't exposed through the Data API. A Cook Plan
+-- wrapper (ticket 15) can run it as definer for the plan's members.
+create function private.ingredients_had(who uuid)
+returns table (user_id uuid, ingredient_id uuid)
+language sql
+stable
+security invoker
+set search_path = ''
+as $$
+  select p.user_id, p.ingredient_id from public.pantry_entries p where p.user_id = who
+  union
+  select s.user_id, s.ingredient_id from public.staples s where s.user_id = who;
+$$;
+
+-- Whether the caller has this Ingredient.
 create function public.has_ingredient(ingredient_id uuid)
 returns boolean
 language sql
@@ -99,20 +116,32 @@ security invoker
 set search_path = ''
 as $$
   select exists (
-    select 1 from public.pantry_entries p
-    where p.user_id = (select auth.uid()) and p.ingredient_id = has_ingredient.ingredient_id
-  ) or exists (
-    select 1 from public.staples s
-    where s.user_id = (select auth.uid()) and s.ingredient_id = has_ingredient.ingredient_id
+    select 1 from private.ingredients_had((select auth.uid())) h
+    where h.ingredient_id = has_ingredient.ingredient_id
   );
+$$;
+
+-- Every Ingredient the caller has, each once, in id order.
+create function public.ingredients_i_have()
+returns setof uuid
+language sql
+stable
+security invoker
+set search_path = ''
+as $$
+  select h.ingredient_id from private.ingredients_had((select auth.uid())) h order by h.ingredient_id;
 $$;
 
 revoke execute on function public.add_to_pantry(text) from public, anon;
 revoke execute on function public.add_staple(text) from public, anon;
+revoke execute on function private.ingredients_had(uuid) from public, anon;
 revoke execute on function public.has_ingredient(uuid) from public, anon;
+revoke execute on function public.ingredients_i_have() from public, anon;
 grant execute on function public.add_to_pantry(text) to authenticated;
 grant execute on function public.add_staple(text) to authenticated;
+grant execute on function private.ingredients_had(uuid) to authenticated;
 grant execute on function public.has_ingredient(uuid) to authenticated;
+grant execute on function public.ingredients_i_have() to authenticated;
 
 -- Every new Profile starts with salt, pepper and oil as Staples. Runs inside the Profile insert,
 -- where there's no auth.uid(), so it names the user itself.

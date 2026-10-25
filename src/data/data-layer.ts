@@ -261,6 +261,16 @@ export function createDataLayer(client: SupabaseClient<Database>) {
     return data;
   }
 
+  /**
+   * Every Ingredient the user has (in their Pantry or a Staple), each once. Whatever skips what the
+   * user already has, such as the Shopping List, reads this.
+   */
+  async function listIngredientsIHave(): Promise<IngredientId[]> {
+    const { data, error } = await client.rpc('ingredients_i_have');
+    if (error) fail(error);
+    return data.map(parseIngredientId);
+  }
+
   return {
     getPantry,
     addToPantry,
@@ -268,6 +278,7 @@ export function createDataLayer(client: SupabaseClient<Database>) {
     addStaple,
     removeStaple,
     hasIngredient,
+    listIngredientsIHave,
     createRecipe,
     editRecipe,
     deleteRecipe,

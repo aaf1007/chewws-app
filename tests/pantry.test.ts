@@ -165,3 +165,22 @@ test('Pantry and Staples are visible only to their owner', async () => {
   expect(names(await owner.data.getPantry())).toEqual({ ingredients: ['garlic'], staples: ['butter', 'salt', 'sumac'] });
   expect(await owner.data.hasIngredient(garlic.id)).toBe(true);
 });
+
+test("listIngredientsIHave gives each Ingredient in the user's Pantry or Staples once, and only theirs", async () => {
+  const a = await signInTestUser('a');
+  const other = await signInTestUser('other');
+  const [oil, pepper, salt] = (await a.data.getPantry()).staples;
+  const garlic = await a.data.addToPantry('garlic');
+  await a.data.addToPantry('salt'); // in the Pantry and a Staple: listed once
+  const sumac = await other.data.addToPantry('sumac');
+  const butter = await other.data.addStaple('butter');
+
+  expect([oil.name, pepper.name, salt.name]).toEqual(['oil', 'pepper', 'salt']);
+  expect(await a.data.listIngredientsIHave()).toEqual([garlic.id, oil.id, pepper.id, salt.id].sort());
+  expect(await other.data.listIngredientsIHave()).toEqual([butter.id, oil.id, pepper.id, salt.id, sumac.id].sort());
+
+  // Used up and no longer a Staple: gone from the list.
+  await a.data.markUsedUp(garlic.id);
+  await a.data.removeStaple(pepper.id);
+  expect(await a.data.listIngredientsIHave()).toEqual([oil.id, salt.id].sort());
+});

@@ -213,6 +213,7 @@ export type Database = {
         Returns: string
       }
       has_ingredient: { Args: { ingredient_id: string }; Returns: boolean }
+      ingredients_i_have: { Args: never; Returns: string[] }
     }
     Enums: {
       recipe_status: "draft" | "reviewed"

@@ -15,6 +15,7 @@ Defaults chosen where the tickets leave things open. Override any by editing thi
 - Default Staples (salt, pepper, oil) are seeded by a trigger on Profile insert; the migration backfills existing Profiles.
 - Pantry, Staples: owner-only RLS now. Ticket 15 will expose "who has it" to Cook Plan members; don't build that now.
 - "Used up" deletes the Pantry entry. Staples change one at a time through `addStaple` / `removeStaple` (one-row insert `on conflict do nothing` / delete), so concurrent changes never clash or undo each other; the spec's `setStaples` (a full replace) is dropped. A Staple always counts as in the Pantry.
+- **Counts as present** has one definition: `private.ingredients_had(user)` in the 08 migration (Pantry entry or Staple, one row per Ingredient). `has_ingredient` and `ingredients_i_have` (`listIngredientsIHave`, for ticket 09's list engine) wrap it for `auth.uid()`; ticket 15's member-scoped wrapper calls it too. Nothing else restates the rule.
 
 ## 09 Shopping List
 
