@@ -8,6 +8,8 @@ appId: com.ant1007.recipeapp
 - extendedWaitUntil:
     visible: "New Recipe"
     timeout: 10000
+- assertNotVisible:
+    id: "screen-compact-title"
 
 # Saving without a title asks for one; the error goes once a title is typed.
 - tapOn: "Save Recipe"
@@ -63,6 +65,10 @@ appId: com.ant1007.recipeapp
 - scrollUntilVisible:
     element: "Save Recipe"
     direction: DOWN
+# Scrolled, the large title has gone under a header bar that shows a compact title.
+- assertVisible:
+    id: "screen-compact-title"
+    text: "New Recipe"
 - tapOn: "Save Recipe"
 
 # It reads back with each line linked to a plain Ingredient.
