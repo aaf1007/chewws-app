@@ -4,12 +4,14 @@ import { StyleSheet, View } from 'react-native';
 
 import {
   ActionButtons,
+  AddField,
   Button,
   EmptyState,
   FilterTiles,
   FloatingSegment,
   IngredientLineEditor,
   IngredientLineRow,
+  IngredientRow,
   ListRow,
   ScoreBadge,
   Screen,
@@ -61,6 +63,7 @@ export default function UiGallery() {
     ingredientName: 'garlic',
   });
   const [step, setStep] = useState('Mash the garlic into the butter.');
+  const [toAdd, setToAdd] = useState('');
 
   return (
     <Screen scroll>
@@ -195,6 +198,17 @@ export default function UiGallery() {
       <View>
         <IngredientLineRow text="2 cloves garlic, minced" ingredient="garlic" amount="2 cloves" />
         <IngredientLineRow text="Salt to taste" ingredient="salt" />
+      </View>
+
+      <SectionHeader title="Add field" />
+      <AddField value={toAdd} onChangeText={setToAdd} onSubmit={() => setToAdd('')} placeholder="Add an Ingredient" />
+      <AddField value="eggs" onChangeText={noop} onSubmit={noop} placeholder="With text" />
+
+      <SectionHeader title="Ingredient rows" />
+      <View>
+        <IngredientRow name="garlic" action={{ label: 'Used up', onPress: noop }} />
+        <IngredientRow name="crème fraîche" action={{ label: 'Remove', onPress: noop }} />
+        <IngredientRow name="salt" />
       </View>
 
       <SectionHeader title="Steps" />

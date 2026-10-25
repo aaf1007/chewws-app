@@ -47,5 +47,7 @@ Also: `spacing` (`xxs` 2 to `xxl` 32), `radii` (`sm`, `md` 10, `lg`, `sheet` 24,
 | `SectionHeader`  | Small uppercase muted heading, with an optional action                                             |
 | `ActionButtons`  | A row of outlined buttons, icon above label                                                        |
 | `FloatingSegment` | White pill of segments floating at the bottom centre (`List \| Map`)                               |
+| `AddField`       | Gray rounded field with an Add button at its right, for adding one thing by name (Pantry, Staples) |
+| `IngredientRow`  | An Ingredient's name with an optional action at its right ("Used up", "Remove"), over a hairline   |
 | `EmptyState`     | Centred icon, title and message for a screen with nothing in it yet                                |
 | `tabScreenOptions`, `tabIcon` | The signed-in tab bar's style and icons                                               |

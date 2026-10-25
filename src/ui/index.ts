@@ -1,4 +1,5 @@
 export { ActionButtons, type Action } from './action-buttons';
+export { AddField } from './add-field';
 export { Button, type ButtonVariant } from './button';
 export { EmptyState } from './empty-state';
 export { FilterTiles, type FilterTileOption } from './filter-tiles';
@@ -6,6 +7,7 @@ export { FloatingSegment, type SegmentOption } from './floating-segment';
 export { Icon, type IconName } from './icon';
 export { IngredientLineEditor, type IngredientLineFields } from './ingredient-line-editor';
 export { IngredientLineRow } from './ingredient-line-row';
+export { IngredientRow } from './ingredient-row';
 export { ListRow } from './list-row';
 export { ScoreBadge, formatScore, type ScoreTone } from './score-badge';
 export { Screen } from './screen';
