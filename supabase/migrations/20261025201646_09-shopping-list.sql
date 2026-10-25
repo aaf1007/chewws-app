@@ -125,6 +125,7 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
+#variable_conflict use_column
 declare
   list uuid := private.my_shopping_list();
 begin
