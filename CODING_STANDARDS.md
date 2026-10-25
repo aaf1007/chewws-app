@@ -37,6 +37,13 @@ Run `npm run verify` (typecheck, lint, database types freshness, tests) before e
 - Use `GLOSSARY.md` terms in code, tests, migrations and UI copy: Recipe, Ingredient, Pantry, Staple, Shopping List, Draft. Not their _Avoid_ synonyms (item, inventory, grocery list, import).
 - Tables are plural snake_case of the glossary term (`recipes`, `pantry_entries`, `shopping_list_items`).
 
+## UI (`src/ui`)
+
+- Screens and components draw with the primitives and tokens exported from `src/ui` (`Screen`, `Text`, `Button`, `ListRow`, `colors`, `spacing`, `radii`…). See `docs/design.md`.
+- [tool] No raw colours (hex, `rgb(`, `hsl(`) and no numeric `fontSize` in `src/app` or `src/components`. Name a colour role (`colors.textMuted`) and a `Text` variant (`<Text variant="caption">`).
+- A new visual pattern goes into `src/ui` first, as a small primitive in the domain's words, and is added to the dev gallery (`src/app/dev/ui.tsx`) with sample data. Then screens use it.
+- Interactive primitives set an `accessibilityLabel` from their visible text, so icon glyphs don't leak into labels (and Maestro can tap them by text).
+
 ## Screens (`src/app`)
 
 - Screens hold UI state only. Data comes from data-layer actions; no business rules in components.
