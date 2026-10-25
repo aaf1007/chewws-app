@@ -1,0 +1,112 @@
+# Ticket 02: writes a Recipe by hand, changes a line's Ingredient, edits it and deletes it.
+# Run with `npm run e2e -- .maestro/02-write-a-recipe.yaml`.
+appId: com.ant1007.recipeapp
+---
+- runFlow: subflows/sign-in-dev.yaml
+- assertVisible: "No recipes yet"
+- tapOn: "Write a Recipe"
+- extendedWaitUntil:
+    visible: "New Recipe"
+    timeout: 10000
+
+# Write it.
+- tapOn:
+    id: "recipe-title"
+- inputText: "Garlic bread"
+- tapOn:
+    id: "line-1-text"
+- inputText: "2 cloves garlic, minced"
+- tapOn:
+    id: "line-1-amount"
+- inputText: "2 cloves"
+- tapOn:
+    id: "line-1-ingredient"
+- inputText: "Garlic"
+- hideKeyboard
+- tapOn: "Add line"
+- scrollUntilVisible:
+    element:
+      id: "line-2-ingredient"
+    direction: DOWN
+- tapOn:
+    id: "line-2-text"
+- inputText: "4 tbsp butter, softened"
+- tapOn:
+    id: "line-2-amount"
+- inputText: "4 tbsp"
+- tapOn:
+    id: "line-2-ingredient"
+- inputText: "Butter"
+- hideKeyboard
+- scrollUntilVisible:
+    element:
+      id: "step-1"
+    direction: DOWN
+- tapOn:
+    id: "step-1"
+- inputText: "Mash the garlic into the butter."
+- hideKeyboard
+- tapOn: "Add step"
+- scrollUntilVisible:
+    element:
+      id: "step-2"
+    direction: DOWN
+- tapOn:
+    id: "step-2"
+- inputText: "Spread on the bread and bake for 10 minutes."
+- hideKeyboard
+- scrollUntilVisible:
+    element: "Save Recipe"
+    direction: DOWN
+- tapOn: "Save Recipe"
+
+# It reads back with each line linked to a plain Ingredient.
+- extendedWaitUntil:
+    visible: "Edit Recipe"
+    timeout: 10000
+- assertVisible: "Garlic bread"
+- assertVisible: "2 cloves garlic, minced. Ingredient: garlic"
+- assertVisible: "4 tbsp butter, softened. Ingredient: butter"
+- assertVisible: "Step 1. Mash the garlic into the butter."
+- assertVisible: "Step 2. Spread on the bread and bake for 10 minutes."
+
+# Edit the title and link line 1 to a different Ingredient.
+- tapOn: "Edit Recipe"
+- extendedWaitUntil:
+    visible:
+      id: "recipe-title"
+    timeout: 10000
+- tapOn:
+    id: "recipe-title"
+- eraseText: 30
+- inputText: "Shallot bread"
+- tapOn:
+    id: "line-1-ingredient"
+- eraseText: 20
+- inputText: "Shallots"
+- hideKeyboard
+- scrollUntilVisible:
+    element: "Save changes"
+    direction: DOWN
+- tapOn: "Save changes"
+- extendedWaitUntil:
+    visible: "2 cloves garlic, minced. Ingredient: shallot"
+    timeout: 10000
+- assertVisible: "Shallot bread"
+
+# The library lists it.
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "Shallot bread, 2 ingredients · 2 steps"
+    timeout: 10000
+
+# Delete it.
+- tapOn: "Shallot bread, 2 ingredients · 2 steps"
+- scrollUntilVisible:
+    element: "Delete Recipe"
+    direction: DOWN
+- tapOn: "Delete Recipe"
+- tapOn: "Delete"
+- extendedWaitUntil:
+    visible: "No recipes yet"
+    timeout: 10000
