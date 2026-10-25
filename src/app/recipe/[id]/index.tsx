@@ -4,7 +4,6 @@ import { Alert, View } from 'react-native';
 
 import { messageOf } from '@/auth/errors';
 import { useRecipe } from '@/components/use-recipe';
-import { parseRecipeId } from '@/data';
 import { data } from '@/data/app';
 import {
   Button,
@@ -18,8 +17,7 @@ import {
 } from '@/ui';
 
 export default function RecipeDetail() {
-  const id = parseRecipeId(useLocalSearchParams<{ id: string }>().id);
-  const state = useRecipe(id);
+  const state = useRecipe(useLocalSearchParams<{ id: string }>().id);
   const [error, setError] = useState<string | null>(null);
 
   if (state.status !== 'loaded') {
@@ -33,6 +31,7 @@ export default function RecipeDetail() {
   }
 
   const { recipe } = state;
+  const { id } = recipe;
   const confirmDelete = () =>
     Alert.alert(`Delete “${recipe.title}”?`, 'This removes it from your library.', [
       { text: 'Cancel', style: 'cancel' },

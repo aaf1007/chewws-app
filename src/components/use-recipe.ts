@@ -1,8 +1,8 @@
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 
-import { messageOf } from '@/auth/errors';
-import type { Recipe, RecipeId } from '@/data';
+import { hasCode, messageOf } from '@/auth/errors';
+import { parseRecipeId, type Recipe } from '@/data';
 import { data } from '@/data/app';
 
 export type RecipeState =
@@ -10,14 +10,17 @@ export type RecipeState =
   | { status: 'loaded'; recipe: Recipe }
   | { status: 'missing'; message: string };
 
-/** Loads a Recipe each time the screen comes into focus, so it's fresh after an edit. */
-export function useRecipe(id: RecipeId): RecipeState {
+/**
+ * Loads a Recipe each time the screen comes into focus, so it's fresh after an edit. Takes the raw
+ * route param: an id that isn't a Recipe id reads as a missing Recipe rather than throwing.
+ */
+export function useRecipe(rawId: string): RecipeState {
   const [state, setState] = useState<RecipeState>({ status: 'loading' });
   useFocusEffect(
     useCallback(() => {
       let live = true;
-      data
-        .getRecipe(id)
+      Promise.resolve()
+        .then(() => data.getRecipe(parseRecipeId(rawId)))
         .then((recipe) => {
           if (!live) return;
           setState(
@@ -26,11 +29,17 @@ export function useRecipe(id: RecipeId): RecipeState {
               : { status: 'missing', message: 'It may have been deleted.' },
           );
         })
-        .catch((e: unknown) => live && setState({ status: 'missing', message: messageOf(e) }));
+        .catch((e: unknown) => {
+          if (!live) return;
+          setState({
+            status: 'missing',
+            message: hasCode(e, 'invalid_recipe_id') ? 'That link doesn’t lead to a Recipe.' : messageOf(e),
+          });
+        });
       return () => {
         live = false;
       };
-    }, [id]),
+    }, [rawId]),
   );
   return state;
 }

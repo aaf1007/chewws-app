@@ -110,3 +110,14 @@ appId: com.ant1007.recipeapp
 - extendedWaitUntil:
     visible: "No recipes yet"
     timeout: 10000
+
+# A link with an id that isn't a Recipe id shows "Recipe not found" rather than crashing.
+- openLink: "recipeapp://recipe/not-a-recipe"
+- extendedWaitUntil:
+    visible: "Recipe not found"
+    timeout: 10000
+- assertVisible: "That link doesn’t lead to a Recipe."
+- openLink: "recipeapp://recipe/not-a-recipe/edit"
+- extendedWaitUntil:
+    visible: "Recipe not found"
+    timeout: 10000
