@@ -11,8 +11,15 @@ else
   flows=(.maestro/*.yaml)
 fi
 
+# Flows that take the app offline (.maestro/scripts/go-offline.js) ask this to pause the local API
+# gateway. Whatever happens, the gateway is running again when this script ends.
+node scripts/net-control.mjs &
+net_control=$!
+trap 'kill "$net_control" 2>/dev/null || true; scripts/net.sh online >/dev/null' EXIT
+
 failed=()
 for flow in "${flows[@]}"; do
+  scripts/net.sh online >/dev/null
   echo "== $flow: resetting the local database"
   if ! out="$(supabase db reset 2>&1)"; then
     echo "$out" >&2
