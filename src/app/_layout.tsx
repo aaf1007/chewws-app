@@ -38,6 +38,9 @@ function RootNavigator() {
       <Stack.Protected guard={session.status === 'signedOut'}>
         <Stack.Screen name="sign-in" options={{ headerShown: false }} />
       </Stack.Protected>
+      <Stack.Protected guard={__DEV__ && session.status === 'signedIn'}>
+        <Stack.Screen name="dev/ui" options={{ title: 'UI gallery' }} />
+      </Stack.Protected>
     </Stack>
   );
 }

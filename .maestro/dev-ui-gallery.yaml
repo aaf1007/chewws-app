@@ -1,0 +1,29 @@
+# Opens the dev-only UI gallery from the Profile tab and scrolls through every primitive.
+appId: com.ant1007.recipeapp
+---
+- runFlow: subflows/sign-in-dev.yaml
+- tapOn:
+    id: "tab-profile"
+- tapOn: "UI gallery (dev)"
+- extendedWaitUntil:
+    visible: "UI gallery"
+    timeout: 10000
+- assertVisible: "largeTitle"
+- scrollUntilVisible:
+    element: "Want to Cook"
+    direction: DOWN
+- assertVisible: "Saved"
+- scrollUntilVisible:
+    element: "Score 7.8"
+    direction: DOWN
+- assertVisible: "Friends’ Score 9.3"
+- scrollUntilVisible:
+    element: "Crispy chilli tofu.*"
+    direction: DOWN
+- scrollUntilVisible:
+    element: "Green salad.*"
+    direction: DOWN
+- scrollUntilVisible:
+    element: "Nothing here yet"
+    direction: DOWN
+- assertVisible: "Map"

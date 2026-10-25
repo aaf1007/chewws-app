@@ -1,3 +1,4 @@
+import { router } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
 
@@ -25,6 +26,18 @@ export default function Profile() {
         />
         {error ? <Text tone="danger">{error}</Text> : null}
       </View>
+
+      {__DEV__ ? (
+        <View style={{ gap: spacing.sm }}>
+          <SectionHeader title="Developer" />
+          <Button
+            label="UI gallery (dev)"
+            variant="plain"
+            icon="color-palette-outline"
+            onPress={() => router.push('/dev/ui')}
+          />
+        </View>
+      ) : null}
     </Screen>
   );
 }
