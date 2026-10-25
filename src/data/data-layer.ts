@@ -1,6 +1,7 @@
 import type { AuthError, PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js';
 
 import type { Database } from './database.types';
+import { normaliseIngredientName } from './ingredient-matcher';
 import { validateRecipeInput } from './recipe-input';
 import {
   DataError,
@@ -8,6 +9,9 @@ import {
   parseRecipeId,
   parseUserId,
   type IdTokenProvider,
+  type Ingredient,
+  type IngredientId,
+  type Pantry,
   type Profile,
   type Recipe,
   type RecipeId,
@@ -71,6 +75,19 @@ function toRecipeArgs(input: RecipeInput) {
       ingredient_name: line.ingredientName,
     })),
   };
+}
+
+function toIngredient(row: Pick<IngredientRow, 'id' | 'name'>): Ingredient {
+  return { id: parseIngredientId(row.id), name: row.name };
+}
+
+const byName = (a: Ingredient, b: Ingredient) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+
+/** The name a typed Ingredient is stored under. Fails when the matcher leaves nothing of it. */
+function toIngredientName(typed: string): string {
+  const name = normaliseIngredientName(typed);
+  if (!name) throw new DataError('ingredient_required', 'Type the name of an Ingredient.');
+  return name;
 }
 
 function toProfile(row: ProfileRow): Profile {
@@ -181,7 +198,63 @@ export function createDataLayer(client: SupabaseClient<Database>) {
     }));
   }
 
+  /** The Ingredients in the signed-in user's Pantry, and their Staples. */
+  async function getPantry(): Promise<Pantry> {
+    const me = await currentUserId();
+    const [entries, staples] = await Promise.all([
+      client.from('pantry_entries').select('ingredient:ingredients(id, name)').eq('user_id', me),
+      client.from('staples').select('ingredient:ingredients(id, name)').eq('user_id', me),
+    ]);
+    if (entries.error) fail(entries.error);
+    if (staples.error) fail(staples.error);
+    return {
+      ingredients: entries.data.map((row) => toIngredient(row.ingredient)).sort(byName),
+      staples: staples.data.map((row) => toIngredient(row.ingredient)).sort(byName),
+    };
+  }
+
+  /** Marks an Ingredient as in the Pantry, by the name the user typed. Already there is fine. */
+  async function addToPantry(ingredientName: string): Promise<Ingredient> {
+    const name = toIngredientName(ingredientName);
+    const { data, error } = await client.rpc('add_to_pantry', { ingredient_name: name });
+    if (error) fail(error);
+    return { id: parseIngredientId(data), name };
+  }
+
+  /** Takes an Ingredient out of the Pantry. Not there is fine; a Staple stays a Staple. */
+  async function markUsedUp(ingredientId: IngredientId): Promise<void> {
+    const me = await currentUserId();
+    const { error } = await client
+      .from('pantry_entries')
+      .delete()
+      .eq('user_id', me)
+      .eq('ingredient_id', ingredientId);
+    if (error) fail(error);
+  }
+
+  /** Replaces the user's Staples with these, by the names typed. Blank names are dropped. */
+  async function setStaples(ingredientNames: readonly string[]): Promise<Ingredient[]> {
+    const names = [
+      ...new Set(ingredientNames.filter((typed) => typed.trim()).map(toIngredientName)),
+    ];
+    const { error } = await client.rpc('set_staples', { ingredient_names: names });
+    if (error) fail(error);
+    return (await getPantry()).staples;
+  }
+
+  /** Whether the user has this Ingredient: in their Pantry, or as a Staple. */
+  async function hasIngredient(ingredientId: IngredientId): Promise<boolean> {
+    const { data, error } = await client.rpc('has_ingredient', { ingredient_id: ingredientId });
+    if (error) fail(error);
+    return data;
+  }
+
   return {
+    getPantry,
+    addToPantry,
+    markUsedUp,
+    setStaples,
+    hasIngredient,
     createRecipe,
     editRecipe,
     deleteRecipe,

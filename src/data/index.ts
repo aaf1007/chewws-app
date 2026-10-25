@@ -6,6 +6,8 @@ export {
   parseRecipeId,
   type IdTokenProvider,
   type Ingredient,
+  type IngredientId,
+  type Pantry,
   type Profile,
   type Recipe,
   type RecipeId,

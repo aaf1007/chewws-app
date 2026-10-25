@@ -34,6 +34,12 @@ export type Recipe = {
   updatedAt: string;
 };
 
+/**
+ * What a user has: the Ingredients in their Pantry and their Staples, each sorted by name. A Staple
+ * always counts as had, whether or not it's also in the Pantry.
+ */
+export type Pantry = { ingredients: Ingredient[]; staples: Ingredient[] };
+
 /** A Recipe as the library lists it. */
 export type RecipeSummary = {
   id: RecipeId;
