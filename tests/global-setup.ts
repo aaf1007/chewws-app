@@ -4,7 +4,7 @@ import type { TestProject } from 'vitest/node';
 
 declare module 'vitest' {
   export interface ProvidedContext {
-    supabase: { url: string; anonKey: string; serviceRoleKey: string };
+    supabase: { url: string; anonKey: string; serviceRoleKey: string; dbUrl: string };
   }
 }
 
@@ -43,5 +43,6 @@ export default function setup(project: TestProject) {
     url: need('API_URL'),
     anonKey: need('ANON_KEY'),
     serviceRoleKey: need('SERVICE_ROLE_KEY'),
+    dbUrl: need('DB_URL'),
   });
 }

@@ -117,8 +117,10 @@ create policy "Users can remove Recipe amounts from Shopping Lists they use"
 -- array of {ingredient_id, amount_texts}, already without the Ingredients the caller has. Each
 -- Ingredient joins its existing line, or makes a new one; a line the Recipe is already on is left
 -- alone, so adding a Recipe twice changes nothing. A checked-off line that a new Recipe needs is
--- needed again, so it's unchecked. Rows are written in id order, so concurrent adds can't deadlock.
--- Returns false when the caller has no such Recipe.
+-- needed again, so it's unchecked. Every line it needs is locked before any amount is attached, so
+-- a concurrent removal of a line either waits for the add or finishes first and the line is made
+-- again: no amount is lost. Existing lines are locked in id order, as removals lock them, so the
+-- two can't deadlock. Returns false when the caller has no such Recipe.
 create function public.add_recipe_to_shopping_list(recipe_id uuid, lines jsonb)
 returns boolean
 language plpgsql
@@ -128,6 +130,7 @@ as $$
 #variable_conflict use_column
 declare
   list uuid := private.my_shopping_list();
+  added_to uuid[];
 begin
   if list is null or not exists (
     select 1 from public.recipes r
@@ -136,29 +139,41 @@ begin
     return false;
   end if;
 
-  insert into public.shopping_list_items (list_id, ingredient_id)
-  select list, (line ->> 'ingredient_id')::uuid
-  from jsonb_array_elements(lines) as line
-  order by 2
-  on conflict (list_id, ingredient_id) where hand_added_text is null do nothing;
+  perform 1
+  from public.shopping_list_items i
+  where i.list_id = list
+    and i.hand_added_text is null
+    and i.ingredient_id in (select (line ->> 'ingredient_id')::uuid from jsonb_array_elements(lines) as line)
+  order by i.id
+  for update;
 
-  with added as (
+  -- Makes each missing line (including one removed since the lock above) and locks every line, so
+  -- the amounts below go onto rows nobody else can delete before this commits.
+  with needed as (
+    insert into public.shopping_list_items as i (list_id, ingredient_id)
+    select list, (line ->> 'ingredient_id')::uuid
+    from jsonb_array_elements(lines) as line
+    order by 2
+    on conflict (list_id, ingredient_id) where hand_added_text is null
+      do update set updated_at = i.updated_at
+    returning i.id, i.ingredient_id
+  ),
+  added as (
     insert into public.shopping_list_amounts (item_id, recipe_id, amount_texts)
-    select i.id,
+    select n.id,
       add_recipe_to_shopping_list.recipe_id,
       array(select jsonb_array_elements_text(line -> 'amount_texts'))
     from jsonb_array_elements(lines) as line
-    join public.shopping_list_items i
-      on i.list_id = list
-      and i.ingredient_id = (line ->> 'ingredient_id')::uuid
-      and i.hand_added_text is null
-    order by i.id
+    join needed n on n.ingredient_id = (line ->> 'ingredient_id')::uuid
+    order by n.id
     on conflict (item_id, recipe_id) do nothing
     returning item_id
   )
+  select array_agg(a.item_id) into added_to from added a;
+
   update public.shopping_list_items i
   set checked_at = null, checked_by = null, updated_at = now()
-  where i.id in (select a.item_id from added a) and i.checked_at is not null;
+  where i.id = any (added_to) and i.checked_at is not null;
 
   return true;
 end;

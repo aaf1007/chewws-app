@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 
 import type { RecipeLineInput, ShoppingList, ShoppingListItem } from '../src/data';
-import { signInTestUser, type TestUser } from './harness';
+import { holdShoppingListLine, signInTestUser, type TestUser } from './harness';
 
 /** The list as the user reads it: each line's name, its Recipes' amounts, and whether it's checked. */
 const view = (list: ShoppingList) =>
@@ -156,6 +156,58 @@ test('two Recipes sharing Ingredients, added at the same moment, both land on th
       checked: false,
     },
   ]);
+});
+
+/**
+ * Two Ingredients (shallot, parsley), ordered by id, and a user with two Recipes: Soup needs the
+ * first, Stew needs both. Soup is on the user's list.
+ */
+async function soupOnTheListThenStew() {
+  const other = await signInTestUser('other');
+  await other.data.addToPantry('shallots');
+  await other.data.addToPantry('parsley');
+  const [first, second] = (await other.data.getPantry()).ingredients.sort((x, y) => (x.id < y.id ? -1 : 1));
+  const a = await signInTestUser('a');
+  const soup = await recipe(a, 'Soup', [{ originalText: '1 shallot', amountText: '1', ingredientName: first.name }]);
+  const stew = await recipe(a, 'Stew', [
+    { originalText: '2 shallots', amountText: '2', ingredientName: 'shallot' },
+    { originalText: 'a bunch of parsley', amountText: 'a bunch', ingredientName: 'parsley' },
+  ]);
+  await a.data.addRecipeToShoppingList(soup);
+  return { a, soup, stew, second };
+}
+
+/** Each line, by Ingredient, with its Recipes' amounts. */
+const linesByName = async (user: TestUser) =>
+  Object.fromEntries(view(await user.data.getShoppingList()).map((l) => [l.ingredient, l.recipes]));
+
+test("a Recipe added while another is taken off its lines keeps all its amounts", async () => {
+  const { a, soup, stew, second } = await soupOnTheListThenStew();
+  // Pause the add between its lines: another session holds the user's uncommitted line for the
+  // Ingredient that sorts second, so the add stops there, after passing Soup's line, until released.
+  const held = await holdShoppingListLine(a, second.id);
+  const adding = a.data.addRecipeToShoppingList(stew);
+  await held.waitForWaiting(1);
+
+  // Taking Soup off now either waits for the add or finishes; then the add carries on.
+  const removing = a.data.removeRecipeFromShoppingList(soup);
+  await Promise.race([removing, held.waitForWaiting(2)]);
+  await held.release();
+  await Promise.all([adding, removing]);
+
+  expect(await linesByName(a)).toEqual({ parsley: [['Stew', 'a bunch']], shallot: [['Stew', '2']] });
+});
+
+test('20 times over, a Recipe added while another is taken off at the same moment keeps all its amounts', async () => {
+  const { a, soup, stew } = await soupOnTheListThenStew();
+
+  for (let round = 0; round < 20; round++) {
+    await Promise.all([a.data.addRecipeToShoppingList(stew), a.data.removeRecipeFromShoppingList(soup)]);
+    expect(await linesByName(a)).toEqual({ parsley: [['Stew', 'a bunch']], shallot: [['Stew', '2']] });
+
+    await a.data.removeRecipeFromShoppingList(stew);
+    await a.data.addRecipeToShoppingList(soup);
+  }
 });
 
 test('the user adds hand-written items, linked to an Ingredient only when one of that name exists', async () => {
