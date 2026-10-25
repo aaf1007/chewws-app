@@ -1,9 +1,9 @@
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { View } from 'react-native';
 
 import { messageOf } from '@/auth/errors';
-import type { Ingredient, Pantry as PantryContents } from '@/data';
+import type { Pantry as PantryContents } from '@/data';
 import { data } from '@/data/app';
 import { AddField, EmptyState, IngredientRow, Screen, SectionHeader, Text, spacing } from '@/ui';
 
@@ -21,14 +21,19 @@ export default function Pantry() {
   const [newStaple, setNewStaple] = useState('');
   const [changeError, setChangeError] = useState<ChangeError | null>(null);
 
-  const load = useCallback(
-    () =>
-      data
-        .getPantry()
-        .then((pantry) => setState({ status: 'loaded', pantry }))
-        .catch((e: unknown) => setState({ status: 'error', message: messageOf(e) })),
-    [],
-  );
+  // Changes can overlap, each followed by a reload; only the newest reload is shown, so an older
+  // one finishing late can't bring back what a later change removed.
+  const latestLoad = useRef(0);
+  const load = useCallback(() => {
+    const thisLoad = ++latestLoad.current;
+    const show = (next: PantryState) => {
+      if (thisLoad === latestLoad.current) setState(next);
+    };
+    return data
+      .getPantry()
+      .then((pantry) => show({ status: 'loaded', pantry }))
+      .catch((e: unknown) => show({ status: 'error', message: messageOf(e) }));
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -52,11 +57,8 @@ export default function Pantry() {
     change('pantry', () => data.addToPantry(newIngredient)).then((ok) => ok && setNewIngredient(''));
 
   const staples = state.status === 'loaded' ? state.pantry.staples : [];
-  const setStaples = (names: string[]) => change('staples', () => data.setStaples(names));
   const addStaple = () =>
-    setStaples([...staples.map((s) => s.name), newStaple]).then((ok) => ok && setNewStaple(''));
-  const removeStaple = (staple: Ingredient) =>
-    setStaples(staples.filter((s) => s.id !== staple.id).map((s) => s.name));
+    change('staples', () => data.addStaple(newStaple)).then((ok) => ok && setNewStaple(''));
 
   const errorFor = (field: ChangeError['field']) =>
     changeError?.field === field ? <Text tone="danger">{changeError.message}</Text> : null;
@@ -107,7 +109,10 @@ export default function Pantry() {
                 <IngredientRow
                   key={staple.id}
                   name={staple.name}
-                  action={{ label: 'Remove', onPress: () => removeStaple(staple) }}
+                  action={{
+                    label: 'Remove',
+                    onPress: () => change('staples', () => data.removeStaple(staple.id)),
+                  }}
                 />
               ))}
             </View>

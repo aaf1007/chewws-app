@@ -202,6 +202,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      add_staple: { Args: { ingredient_name: string }; Returns: string }
       add_to_pantry: { Args: { ingredient_name: string }; Returns: string }
       create_recipe: {
         Args: { lines: Json; steps: string[]; title: string }
@@ -212,7 +213,6 @@ export type Database = {
         Returns: string
       }
       has_ingredient: { Args: { ingredient_id: string }; Returns: boolean }
-      set_staples: { Args: { ingredient_names: string[] }; Returns: undefined }
     }
     Enums: {
       recipe_status: "draft" | "reviewed"

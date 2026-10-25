@@ -70,22 +70,23 @@ begin
 end;
 $$;
 
--- Replaces the caller's Staples with these Ingredients, adding any that are new.
-create function public.set_staples(ingredient_names text[])
-returns void
+-- Makes an Ingredient one of the caller's Staples, adding the Ingredient if it's new. Returns its id.
+-- Staples change one row at a time (this, or deleting the row), so two changes at once never clash
+-- and doing one twice is the same as once.
+create function public.add_staple(ingredient_name text)
+returns uuid
 language plpgsql
 security invoker
 set search_path = ''
 as $$
+declare
+  found_id uuid;
 begin
-  delete from public.staples where user_id = (select auth.uid());
+  insert into public.ingredients (name) values (ingredient_name) on conflict (name) do nothing;
+  select i.id into found_id from public.ingredients i where i.name = ingredient_name;
 
-  insert into public.ingredients (name)
-  select distinct n from unnest(ingredient_names) as n
-  on conflict (name) do nothing;
-
-  insert into public.staples (ingredient_id)
-  select i.id from public.ingredients i where i.name = any (ingredient_names);
+  insert into public.staples (ingredient_id) values (found_id) on conflict do nothing;
+  return found_id;
 end;
 $$;
 
@@ -107,10 +108,10 @@ as $$
 $$;
 
 revoke execute on function public.add_to_pantry(text) from public, anon;
-revoke execute on function public.set_staples(text[]) from public, anon;
+revoke execute on function public.add_staple(text) from public, anon;
 revoke execute on function public.has_ingredient(uuid) from public, anon;
 grant execute on function public.add_to_pantry(text) to authenticated;
-grant execute on function public.set_staples(text[]) to authenticated;
+grant execute on function public.add_staple(text) to authenticated;
 grant execute on function public.has_ingredient(uuid) to authenticated;
 
 -- Every new Profile starts with salt, pepper and oil as Staples. Runs inside the Profile insert,

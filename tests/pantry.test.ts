@@ -95,25 +95,60 @@ test('a user edits their Staples, and only their Staples then count as had', asy
   const a = await signInTestUser('a');
   const pepper = await staple(a, 'pepper');
 
-  const staples = await a.data.setStaples(['salt', 'Olive Oil', '  ', 'olive oils', "Za'atar", 'oil']);
+  await a.data.removeStaple(pepper.id);
+  const oliveOil = await a.data.addStaple('Olive Oil');
+  expect(await a.data.addStaple('olive oils')).toEqual(oliveOil);
+  expect((await a.data.addStaple("Za'atar")).name).toBe('zaatar');
+  expect((await a.data.addStaple('oil')).name).toBe('oil'); // already one: still one Staple
 
-  expect(staples.map((i) => i.name)).toEqual(['oil', 'olive oil', 'salt', 'zaatar']);
+  expect(oliveOil.name).toBe('olive oil');
   expect(names(await a.data.getPantry())).toEqual({ ingredients: [], staples: ['oil', 'olive oil', 'salt', 'zaatar'] });
   expect(await a.data.hasIngredient(pepper.id)).toBe(false);
-  expect(await a.data.hasIngredient(staples[1].id)).toBe(true);
+  expect(await a.data.hasIngredient(oliveOil.id)).toBe(true);
 
-  await expect(a.data.setStaples(['salt', '?!'])).rejects.toMatchObject({ code: 'ingredient_required' });
+  for (const typed of ['', '   ', '?!']) {
+    await expect(a.data.addStaple(typed)).rejects.toMatchObject({ code: 'ingredient_required' });
+  }
   expect(names(await a.data.getPantry()).staples).toEqual(['oil', 'olive oil', 'salt', 'zaatar']);
 
-  expect(await a.data.setStaples([])).toEqual([]);
-  expect(await a.data.hasIngredient(staples[2].id)).toBe(false);
+  const salt = await staple(a, 'salt');
+  for (const s of (await a.data.getPantry()).staples) await a.data.removeStaple(s.id);
+  expect((await a.data.getPantry()).staples).toEqual([]);
+  expect(await a.data.hasIngredient(salt.id)).toBe(false);
+
+  // Removing one that's already gone is fine.
+  await a.data.removeStaple(salt.id);
+  expect((await a.data.getPantry()).staples).toEqual([]);
+});
+
+test('Staple changes made at the same moment all land, and none undoes another', async () => {
+  const a = await signInTestUser('a');
+  const pepper = await staple(a, 'pepper');
+  const oil = await staple(a, 'oil');
+
+  // Two quick Removes: both stay removed.
+  await Promise.all([a.data.removeStaple(pepper.id), a.data.removeStaple(oil.id)]);
+  expect(names(await a.data.getPantry()).staples).toEqual(['salt']);
+
+  // The same new Staple added twice at once, another added, and a Remove repeated, all at once.
+  await Promise.all([
+    a.data.addStaple('Butter'),
+    a.data.addStaple('butter'),
+    a.data.addStaple('Sumac'),
+    a.data.removeStaple(pepper.id),
+  ]);
+  expect(names(await a.data.getPantry()).staples).toEqual(['butter', 'salt', 'sumac']);
 });
 
 test('Pantry and Staples are visible only to their owner', async () => {
   const owner = await signInTestUser('owner');
   const other = await signInTestUser('other');
   const garlic = await owner.data.addToPantry('garlic');
-  await owner.data.setStaples(['salt', 'butter', 'sumac']);
+  await owner.data.removeStaple((await staple(owner, 'pepper')).id);
+  await owner.data.removeStaple((await staple(owner, 'oil')).id);
+  await owner.data.addStaple('butter');
+  await owner.data.addStaple('sumac');
+  const ownerSalt = await staple(owner, 'salt');
   const ownerSumac = await staple(owner, 'sumac');
 
   // The other user sees only their own defaults, and doesn't have the owner's Ingredients.
@@ -122,8 +157,10 @@ test('Pantry and Staples are visible only to their owner', async () => {
 
   // What they do to their own Pantry and Staples leaves the owner's alone.
   await other.data.markUsedUp(garlic.id);
-  await other.data.setStaples([]);
+  await other.data.removeStaple(ownerSumac.id);
+  await other.data.removeStaple(ownerSalt.id);
   expect(await other.data.hasIngredient(ownerSumac.id)).toBe(false);
+  expect(await other.data.hasIngredient(ownerSalt.id)).toBe(false);
 
   expect(names(await owner.data.getPantry())).toEqual({ ingredients: ['garlic'], staples: ['butter', 'salt', 'sumac'] });
   expect(await owner.data.hasIngredient(garlic.id)).toBe(true);

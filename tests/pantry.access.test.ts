@@ -95,12 +95,14 @@ test("a stranger's Pantry and Staples functions touch only their own, and say no
   const { garlic, salt, stranger, expectOwnerStillHasEverything } = await ownerAndStranger();
 
   const added = await stranger.rpc('add_to_pantry', { ingredient_name: 'garlic' });
-  const replaced = await stranger.rpc('set_staples', { ingredient_names: [] });
+  const stapled = await stranger.rpc('add_staple', { ingredient_name: 'garlic' });
+  const unstapled = await stranger.from('staples').delete().in('ingredient_id', [salt.id, garlic.id]);
   expect(added).toMatchObject({ data: garlic.id, error: null });
-  expect(replaced.error).toBeNull();
+  expect(stapled).toMatchObject({ data: garlic.id, error: null });
+  expect(unstapled.error).toBeNull();
   await expectOwnerStillHasEverything();
 
-  // The stranger now has garlic but no Staples; the owner's salt doesn't count for them.
+  // The stranger now has garlic but not salt; the owner's salt doesn't count for them.
   expect(await stranger.rpc('has_ingredient', { ingredient_id: garlic.id })).toMatchObject({ data: true });
   expect(await stranger.rpc('has_ingredient', { ingredient_id: salt.id })).toMatchObject({ data: false });
   await stranger.from('pantry_entries').delete().eq('ingredient_id', garlic.id);

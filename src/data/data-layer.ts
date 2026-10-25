@@ -232,14 +232,26 @@ export function createDataLayer(client: SupabaseClient<Database>) {
     if (error) fail(error);
   }
 
-  /** Replaces the user's Staples with these, by the names typed. Blank names are dropped. */
-  async function setStaples(ingredientNames: readonly string[]): Promise<Ingredient[]> {
-    const names = [
-      ...new Set(ingredientNames.filter((typed) => typed.trim()).map(toIngredientName)),
-    ];
-    const { error } = await client.rpc('set_staples', { ingredient_names: names });
+  /**
+   * Makes an Ingredient one of the user's Staples, by the name the user typed. Already one is fine.
+   * Staples change one at a time, so changes made at once never undo each other.
+   */
+  async function addStaple(ingredientName: string): Promise<Ingredient> {
+    const name = toIngredientName(ingredientName);
+    const { data, error } = await client.rpc('add_staple', { ingredient_name: name });
     if (error) fail(error);
-    return (await getPantry()).staples;
+    return { id: parseIngredientId(data), name };
+  }
+
+  /** Stops an Ingredient being one of the user's Staples. Not one is fine; the Pantry is untouched. */
+  async function removeStaple(ingredientId: IngredientId): Promise<void> {
+    const me = await currentUserId();
+    const { error } = await client
+      .from('staples')
+      .delete()
+      .eq('user_id', me)
+      .eq('ingredient_id', ingredientId);
+    if (error) fail(error);
   }
 
   /** Whether the user has this Ingredient: in their Pantry, or as a Staple. */
@@ -253,7 +265,8 @@ export function createDataLayer(client: SupabaseClient<Database>) {
     getPantry,
     addToPantry,
     markUsedUp,
-    setStaples,
+    addStaple,
+    removeStaple,
     hasIngredient,
     createRecipe,
     editRecipe,

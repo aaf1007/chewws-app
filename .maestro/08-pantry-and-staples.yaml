@@ -1,5 +1,6 @@
 # Ticket 08: adds Ingredients to the Pantry and marks one used up, then edits the Staples (salt,
-# pepper and oil by default), and finds it all still there after leaving the tab.
+# pepper and oil by default), and finds it all still there after leaving the tab. Then removes two
+# Staples in quick succession and finds both stay removed.
 # Run with `npm run e2e -- .maestro/08-pantry-and-staples.yaml`.
 appId: com.ant1007.recipeapp
 ---
@@ -91,3 +92,27 @@ appId: com.ant1007.recipeapp
 - assertVisible: "Remove: oil"
 - assertVisible: "Remove: salt"
 - assertNotVisible: "Remove: pepper"
+
+# Two quick Removes in a row, the second tapped before the first has reloaded: both stay removed.
+- tapOn:
+    text: "Remove: butter"
+    waitToSettleTimeoutMs: 0
+- tapOn:
+    text: "Remove: oil"
+    waitToSettleTimeoutMs: 0
+- extendedWaitUntil:
+    notVisible: "Remove: butter"
+    timeout: 10000
+- extendedWaitUntil:
+    notVisible: "Remove: oil"
+    timeout: 10000
+- assertVisible: "Remove: salt"
+- tapOn:
+    id: "tab-library"
+- tapOn:
+    id: "tab-pantry"
+- extendedWaitUntil:
+    visible: "Remove: salt"
+    timeout: 10000
+- assertNotVisible: "Remove: butter"
+- assertNotVisible: "Remove: oil"
