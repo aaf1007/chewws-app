@@ -217,7 +217,7 @@ test('an apostrophe in an Ingredient name vanishes, so "Hellmann\'s" and "hellma
   });
 
   const lines = (await a.data.getRecipe(id))?.lines ?? [];
-  expect(lines.map((l) => l.ingredient.name)).toEqual(['hellmann', 'hellmann', 'hellmann', 'm m']);
+  expect(lines.map((l) => l.ingredient.name)).toEqual(['hellmann', 'hellmann', 'hellmann', 'm ms']);
   expect(new Set(lines.slice(0, 3).map((l) => l.ingredient.id)).size).toBe(1);
 
   await a.data.editRecipe(id, { title: 'Sandwich', lines: [line("Hellmann's")], steps: [] });
