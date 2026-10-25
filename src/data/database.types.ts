@@ -171,6 +171,108 @@ export type Database = {
         }
         Relationships: []
       }
+      shopping_list_amounts: {
+        Row: {
+          amount_texts: string[]
+          created_at: string
+          item_id: string
+          recipe_id: string
+        }
+        Insert: {
+          amount_texts?: string[]
+          created_at?: string
+          item_id: string
+          recipe_id: string
+        }
+        Update: {
+          amount_texts?: string[]
+          created_at?: string
+          item_id?: string
+          recipe_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "shopping_list_amounts_item_id_fkey"
+            columns: ["item_id"]
+            isOneToOne: false
+            referencedRelation: "shopping_list_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "shopping_list_amounts_recipe_id_fkey"
+            columns: ["recipe_id"]
+            isOneToOne: false
+            referencedRelation: "recipes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      shopping_list_items: {
+        Row: {
+          checked_at: string | null
+          checked_by: string | null
+          created_at: string
+          hand_added_text: string | null
+          id: string
+          ingredient_id: string | null
+          list_id: string
+          updated_at: string
+        }
+        Insert: {
+          checked_at?: string | null
+          checked_by?: string | null
+          created_at?: string
+          hand_added_text?: string | null
+          id?: string
+          ingredient_id?: string | null
+          list_id: string
+          updated_at?: string
+        }
+        Update: {
+          checked_at?: string | null
+          checked_by?: string | null
+          created_at?: string
+          hand_added_text?: string | null
+          id?: string
+          ingredient_id?: string | null
+          list_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "shopping_list_items_ingredient_id_fkey"
+            columns: ["ingredient_id"]
+            isOneToOne: false
+            referencedRelation: "ingredients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "shopping_list_items_list_id_fkey"
+            columns: ["list_id"]
+            isOneToOne: false
+            referencedRelation: "shopping_lists"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      shopping_lists: {
+        Row: {
+          created_at: string
+          id: string
+          owner_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          owner_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          owner_id?: string
+        }
+        Relationships: []
+      }
       staples: {
         Row: {
           created_at: string
@@ -202,8 +304,17 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      add_manual_item: {
+        Args: { ingredient_name: string; item_id?: string; item_text: string }
+        Returns: string
+      }
+      add_recipe_to_shopping_list: {
+        Args: { lines: Json; recipe_id: string }
+        Returns: boolean
+      }
       add_staple: { Args: { ingredient_name: string }; Returns: string }
       add_to_pantry: { Args: { ingredient_name: string }; Returns: string }
+      check_off: { Args: { item_id: string }; Returns: boolean }
       create_recipe: {
         Args: { lines: Json; steps: string[]; title: string }
         Returns: string
@@ -214,6 +325,11 @@ export type Database = {
       }
       has_ingredient: { Args: { ingredient_id: string }; Returns: boolean }
       ingredients_i_have: { Args: never; Returns: string[] }
+      remove_recipe_from_shopping_list: {
+        Args: { recipe_id: string }
+        Returns: undefined
+      }
+      uncheck: { Args: { item_id: string }; Returns: boolean }
     }
     Enums: {
       recipe_status: "draft" | "reviewed"
