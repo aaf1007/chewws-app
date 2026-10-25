@@ -220,3 +220,22 @@ test('an accented Ingredient name is one Ingredient whether its accents are comp
   expect(lines.map((l) => l.ingredient.name)).toEqual(['crème fraîche', 'crème fraîche']);
   expect(lines[0].ingredient.id).toBe(lines[1].ingredient.id);
 });
+
+test('a missing Ingredient is reported by the line number the user sees, blank lines included', async () => {
+  const a = await signInTestUser('a');
+
+  await expect(
+    a.data.createRecipe({
+      title: 'Mystery',
+      lines: [
+        { originalText: '2 cloves garlic', ingredientName: 'garlic' },
+        { originalText: '', amountText: '', ingredientName: '' },
+        { originalText: 'a pinch of something', ingredientName: '' },
+      ],
+      steps: [],
+    }),
+  ).rejects.toMatchObject({
+    code: 'ingredient_required',
+    message: 'Ingredient line 3 needs an Ingredient.',
+  });
+});

@@ -61,16 +61,18 @@ function toRecipeArgs(input: RecipeInput) {
   if (!title) throw new DataError('title_required', 'Give the Recipe a title.');
 
   const lines = input.lines
-    .map((line) => ({
+    .map((line, index) => ({
+      // 1-based, counting blank lines, so errors name the line the user sees.
+      number: index + 1,
       originalText: line.originalText.trim(),
       amountText: (line.amountText ?? '').trim(),
       ingredientName: line.ingredientName.trim(),
     }))
     .filter((line) => line.originalText || line.amountText || line.ingredientName)
-    .map((line, index) => {
+    .map((line) => {
       const name = normaliseIngredientName(line.ingredientName);
       if (!name) {
-        throw new DataError('ingredient_required', `Ingredient line ${index + 1} needs an Ingredient.`);
+        throw new DataError('ingredient_required', `Ingredient line ${line.number} needs an Ingredient.`);
       }
       return {
         original_text: line.originalText || `${line.amountText} ${line.ingredientName}`.trim(),
