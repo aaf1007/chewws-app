@@ -196,3 +196,20 @@ test('an apostrophe in an Ingredient name vanishes, so "Hellmann\'s" and "hellma
   await a.data.editRecipe(id, { title: 'Sandwich', lines: [line("Hellmann's")], steps: [] });
   expect((await a.data.getRecipe(id))?.lines.map((l) => l.ingredient.id)).toEqual([lines[0].ingredient.id]);
 });
+
+test('an accented Ingredient name is one Ingredient whether its accents are composed or not', async () => {
+  const a = await signInTestUser('a');
+  const composed = 'Crème fraîche';
+  const decomposed = 'Crème fraîche';
+  expect(composed.normalize('NFD')).toBe(decomposed);
+
+  const id = await a.data.createRecipe({
+    title: 'Dip',
+    lines: [composed, decomposed].map((ingredientName) => ({ originalText: ingredientName, ingredientName })),
+    steps: [],
+  });
+
+  const lines = (await a.data.getRecipe(id))?.lines ?? [];
+  expect(lines.map((l) => l.ingredient.name)).toEqual(['crème fraîche', 'crème fraîche']);
+  expect(lines[0].ingredient.id).toBe(lines[1].ingredient.id);
+});

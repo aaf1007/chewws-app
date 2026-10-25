@@ -6,12 +6,14 @@ const UNCOUNTABLE = new Set(['molasses']);
 
 /**
  * The Ingredient matcher: turns what a user typed into the name an Ingredient is stored under, so
- * "Garlic", "garlic " and "garlics" all mean the same Ingredient. Lowercases, drops apostrophes
+ * "Garlic", "garlic " and "garlics" all mean the same Ingredient. Composes accents (so a
+ * decomposed "crème" matches a composed one), lowercases, drops apostrophes
  * ("Hellmann's" → "hellmanns"), turns other punctuation into spaces, collapses whitespace and
  * singularises the last word. No fuzzy matching. Returns '' when nothing is left.
  */
 export function normaliseIngredientName(raw: string): string {
   const words = raw
+    .normalize('NFC')
     .toLowerCase()
     .replace(/['‘’ʼ]/gu, '')
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
