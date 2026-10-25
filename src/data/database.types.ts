@@ -52,6 +52,32 @@ export type Database = {
         }
         Relationships: []
       }
+      pantry_entries: {
+        Row: {
+          created_at: string
+          ingredient_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          ingredient_id: string
+          user_id?: string
+        }
+        Update: {
+          created_at?: string
+          ingredient_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pantry_entries_ingredient_id_fkey"
+            columns: ["ingredient_id"]
+            isOneToOne: false
+            referencedRelation: "ingredients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           created_at: string
@@ -145,11 +171,38 @@ export type Database = {
         }
         Relationships: []
       }
+      staples: {
+        Row: {
+          created_at: string
+          ingredient_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          ingredient_id: string
+          user_id?: string
+        }
+        Update: {
+          created_at?: string
+          ingredient_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "staples_ingredient_id_fkey"
+            columns: ["ingredient_id"]
+            isOneToOne: false
+            referencedRelation: "ingredients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
+      add_to_pantry: { Args: { ingredient_name: string }; Returns: string }
       create_recipe: {
         Args: { lines: Json; steps: string[]; title: string }
         Returns: string
@@ -158,6 +211,8 @@ export type Database = {
         Args: { lines: Json; recipe_id: string; steps: string[]; title: string }
         Returns: string
       }
+      has_ingredient: { Args: { ingredient_id: string }; Returns: boolean }
+      set_staples: { Args: { ingredient_names: string[] }; Returns: undefined }
     }
     Enums: {
       recipe_status: "draft" | "reviewed"
