@@ -4,12 +4,14 @@ import { Icon, type IconName } from './icon';
 import { Text } from './text';
 import { colors, radii, spacing, type ColorRole } from './theme';
 
-export type ButtonVariant = 'filled' | 'outlined' | 'plain';
+/** `danger` is a plain button for destructive actions, such as deleting a Recipe. */
+export type ButtonVariant = 'filled' | 'outlined' | 'plain' | 'danger';
 
 const LABEL_TONE: Record<ButtonVariant, ColorRole> = {
   filled: 'onAccent',
   outlined: 'text',
   plain: 'accent',
+  danger: 'danger',
 };
 
 export function Button({
@@ -67,5 +69,6 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   plain: { backgroundColor: 'transparent' },
+  danger: { backgroundColor: 'transparent' },
   dimmed: { opacity: 0.6 },
 });

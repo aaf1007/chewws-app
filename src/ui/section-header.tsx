@@ -17,7 +17,11 @@ export function SectionHeader({
         {title}
       </Text>
       {action ? (
-        <Pressable accessibilityRole="button" hitSlop={spacing.sm} onPress={action.onPress}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={action.label}
+          hitSlop={spacing.sm}
+          onPress={action.onPress}>
           <Text variant="label" tone="accent">
             {action.label}
           </Text>

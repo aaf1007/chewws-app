@@ -7,12 +7,17 @@ import {
   EmptyState,
   FilterTiles,
   FloatingSegment,
+  IngredientLineEditor,
+  IngredientLineRow,
   ListRow,
   ScoreBadge,
   Screen,
   SearchField,
   SectionHeader,
+  StepEditor,
+  StepRow,
   Text,
+  TextField,
   colors,
   radii,
   spacing,
@@ -48,6 +53,13 @@ export default function UiGallery() {
   const [filter, setFilter] = useState<'wantToCook' | 'saved' | 'cooked'>('saved');
   const [query, setQuery] = useState('');
   const [view, setView] = useState<'list' | 'map'>('list');
+  const [title, setTitle] = useState('Garlic bread');
+  const [line, setLine] = useState({
+    originalText: '2 cloves garlic, minced',
+    amountText: '2 cloves',
+    ingredientName: 'garlic',
+  });
+  const [step, setStep] = useState('Mash the garlic into the butter.');
 
   return (
     <Screen scroll>
@@ -76,6 +88,7 @@ export default function UiGallery() {
       <Button label="Outlined" variant="outlined" icon="add" onPress={noop} />
       <Button label="Plain" variant="plain" onPress={noop} />
       <Button label="Disabled" disabled onPress={noop} />
+      <Button label="Danger" variant="danger" icon="trash-outline" onPress={noop} />
 
       <SectionHeader title="Filter tiles" />
       <FilterTiles
@@ -154,6 +167,26 @@ export default function UiGallery() {
           action={{ label: 'Add one', onPress: noop }}
         />
       </View>
+
+      <SectionHeader title="Text field" />
+      <TextField label="Title" value={title} onChangeText={setTitle} placeholder="Grandma's lasagne" />
+      <TextField label="Notes" value="" onChangeText={noop} placeholder="Multiline" multiline />
+
+      <SectionHeader title="Ingredient line editor" />
+      <IngredientLineEditor number={1} value={line} onChange={setLine} onRemove={noop} />
+
+      <SectionHeader title="Step editor" />
+      <StepEditor number={1} value={step} onChange={setStep} onRemove={noop} />
+
+      <SectionHeader title="Ingredient lines" />
+      <View>
+        <IngredientLineRow text="2 cloves garlic, minced" ingredient="garlic" amount="2 cloves" />
+        <IngredientLineRow text="Salt to taste" ingredient="salt" />
+      </View>
+
+      <SectionHeader title="Steps" />
+      <StepRow number={1} text="Mash the garlic into the butter." />
+      <StepRow number={2} text="Spread on the bread and bake for 10 minutes, until the edges are golden." />
     </Screen>
   );
 }

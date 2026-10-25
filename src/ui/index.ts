@@ -4,13 +4,18 @@ export { EmptyState } from './empty-state';
 export { FilterTiles, type FilterTileOption } from './filter-tiles';
 export { FloatingSegment, type SegmentOption } from './floating-segment';
 export { Icon, type IconName } from './icon';
+export { IngredientLineEditor, type IngredientLineFields } from './ingredient-line-editor';
+export { IngredientLineRow } from './ingredient-line-row';
 export { ListRow } from './list-row';
 export { ScoreBadge, formatScore, type ScoreTone } from './score-badge';
 export { Screen } from './screen';
 export { SearchField } from './search-field';
 export { SectionHeader } from './section-header';
+export { StepEditor } from './step-editor';
+export { StepNumber, StepRow } from './step-row';
 export { tabIcon, tabScreenOptions } from './tab-bar';
 export { Text, type TextProps } from './text';
+export { TextField } from './text-field';
 export {
   colors,
   floatingShadow,
