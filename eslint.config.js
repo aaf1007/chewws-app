@@ -14,6 +14,25 @@ module.exports = defineConfig([
     },
   },
   {
+    // Tests drive the app through data-layer actions only (spec: Testing Decisions).
+    files: ['tests/**/*.{ts,tsx}'],
+    ignores: ['tests/harness.ts', 'tests/global-setup.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "CallExpression[callee.property.name='from']:not([callee.object.name=/^(Array|Buffer|Object|Promise|Uint8Array)$/])",
+          message: 'Tests may not query tables. Call a data-layer action instead.',
+        },
+        {
+          selector: "CallExpression[callee.property.name='rpc']",
+          message: 'Tests may not call RPCs directly. Call a data-layer action instead.',
+        },
+      ],
+    },
+  },
+  {
     ignores: ['src/data/**', 'tests/harness.ts', 'tests/global-setup.ts'],
     rules: {
       'no-restricted-imports': [
