@@ -1,4 +1,5 @@
 export { createDataLayer, type DataLayer } from './data-layer';
+export { normaliseIngredientName } from './ingredient-matcher';
 export { validateRecipeInput, type RecipeInputError } from './recipe-input';
 export {
   DataError,
