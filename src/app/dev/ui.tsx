@@ -1,3 +1,4 @@
+import { router } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
@@ -63,6 +64,18 @@ export default function UiGallery() {
 
   return (
     <Screen scroll>
+      <SectionHeader title="Screen" />
+      <Button
+        label="Scrolling screen under a header"
+        variant="outlined"
+        onPress={() => router.push('/dev/scroll')}
+      />
+      <Button
+        label="Scrolling screen without a header"
+        variant="outlined"
+        onPress={() => router.push({ pathname: '/dev/scroll', params: { header: 'none' } })}
+      />
+
       <SectionHeader title="Type" />
       {VARIANTS.map((variant) => (
         <Text key={variant} variant={variant}>

@@ -46,6 +46,17 @@ function RootNavigator() {
       </Stack.Protected>
       <Stack.Protected guard={__DEV__ && session.status === 'signedIn'}>
         <Stack.Screen name="dev/ui" options={{ title: 'UI gallery' }} />
+        <Stack.Screen
+          name="dev/scroll"
+          options={({ route }) => ({
+            title: '',
+            headerShown: !(
+              typeof route.params === 'object' &&
+              'header' in route.params &&
+              route.params.header === 'none'
+            ),
+          })}
+        />
       </Stack.Protected>
     </Stack>
   );

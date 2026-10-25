@@ -36,7 +36,7 @@ Also: `spacing` (`xxs` 2 to `xxl` 32), `radii` (`sm`, `md` 10, `lg`, `sheet` 24,
 
 | Primitive        | What it is                                                                                         |
 | ---------------- | -------------------------------------------------------------------------------------------------- |
-| `Screen`         | Safe area, background and optional large title; `scroll` for long content, with a header bar that gets a background once content scrolls under it and a compact title once the large title has gone |
+| `Screen`         | Safe area, background and optional large title; `scroll` for long content, with a header bar that gets a background once content scrolls under it and a compact title once the large title has gone; works under a navigation header or without one (both in the gallery) |
 | `Text`           | Text in a `variant` of the type scale and a colour-role `tone`                                     |
 | `Icon`           | An Ionicons glyph in a token size and tone                                                         |
 | `Button`         | `filled` (accent), `outlined` or `plain`, with an optional icon                                    |

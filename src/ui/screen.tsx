@@ -11,18 +11,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { scrollBar, scrollPhase, type ScrollPhase } from './scroll-phase';
 import { Text } from './text';
 import { colors, hairline, spacing } from './theme';
-
-/** Height of a compact bar on a screen without a navigation header (tabs), under the status bar. */
-const COMPACT_BAR_HEIGHT = 44;
-
-/**
- * How far a scrolling screen has moved under the bar at the top: still at the `top`, content
- * `scrolled` under it (the bar gets a background), or the large title gone under it (`compact`: the
- * bar shows the title too).
- */
-type ScrollPhase = 'top' | 'scrolled' | 'compact';
 
 /**
  * A full screen: safe area, background, and an optional large title.
@@ -40,7 +31,8 @@ export function Screen({
   title?: string;
   /**
    * Scroll the content (title included). The scroll view insets itself for the safe area and any
-   * navigation header above it, so it works under a header as well as without one.
+   * navigation header above it. Without a header, the content also leaves room for a compact bar
+   * of the Screen's own, so it works under a header as well as without one.
    */
   scroll?: boolean;
   children?: ReactNode;
@@ -48,8 +40,7 @@ export function Screen({
   const insets = useSafeAreaInsets();
   // Inside the tab bar, the bar already sits above the home indicator.
   const inTabs = useContext(BottomTabBarHeightContext) !== undefined;
-  const headerHeight = useContext(HeaderHeightContext) ?? 0;
-  const barHeight = headerHeight > 0 ? headerHeight : insets.top + COMPACT_BAR_HEIGHT;
+  const bar = scrollBar({ headerHeight: useContext(HeaderHeightContext) ?? 0, safeTop: insets.top });
   const [titleFrame, setTitleFrame] = useState<LayoutRectangle | null>(null);
   const [phase, setPhase] = useState<ScrollPhase>('top');
 
@@ -64,12 +55,9 @@ export function Screen({
   ) : null;
 
   if (scroll) {
-    // The scroll view insets its content by the header (or safe area), so at rest the offset is
-    // minus that inset; `under` is how far content has moved up under the bar at the top.
     const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const under = e.nativeEvent.contentOffset.y + barHeight;
-      const titleBottom = titleFrame ? titleFrame.y + titleFrame.height : 0;
-      setPhase(under <= 0 ? 'top' : titleFrame && under >= titleBottom ? 'compact' : 'scrolled');
+      const titleBottom = titleFrame ? titleFrame.y + titleFrame.height : null;
+      setPhase(scrollPhase(e.nativeEvent.contentOffset.y, bar, titleBottom));
     };
     return (
       <View style={styles.fill}>
@@ -77,7 +65,7 @@ export function Screen({
           contentInsetAdjustmentBehavior="automatic"
           automaticallyAdjustKeyboardInsets
           keyboardDismissMode="on-drag"
-          contentContainerStyle={styles.content}
+          contentContainerStyle={[styles.content, { paddingTop: spacing.sm + bar.reserved }]}
           keyboardShouldPersistTaps="handled"
           onScroll={onScroll}
           scrollEventThrottle={16}>
@@ -86,7 +74,7 @@ export function Screen({
         </ScrollView>
         {phase === 'top' ? null : (
           <CompactBar
-            height={barHeight}
+            height={bar.height}
             top={insets.top}
             title={phase === 'compact' ? title : undefined}
           />
@@ -121,7 +109,7 @@ export function Screen({
  */
 function CompactBar({ height, top, title }: { height: number; top: number; title?: string }) {
   return (
-    <View pointerEvents="none" style={[styles.bar, { height, paddingTop: top }]}>
+    <View pointerEvents="none" testID="screen-bar" style={[styles.bar, { height, paddingTop: top }]}>
       {title ? (
         <Text
           variant="headline"
