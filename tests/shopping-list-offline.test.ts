@@ -1,0 +1,357 @@
+// Ticket 10: the Shopping List with no signal. Each test signs one user in on one or two phones,
+// each with its own app, storage, clock and signal (tests/harness.ts), turns the signal off, makes
+// list changes through the data layer, turns it on again and checks what every phone, and the
+// server, ends up with.
+import { expect, test, vi } from 'vitest';
+
+import type { ShoppingList, ShoppingListView } from '../src/data';
+import { signInOnPhones, type TestPhone, type TestUser } from './harness';
+
+/** The list as the user reads it: each line's name, its Recipes' amounts, and whether it's checked. */
+const view = (list: ShoppingList) =>
+  list.items.map((item) =>
+    item.kind === 'ingredient'
+      ? {
+          ingredient: item.ingredient.name,
+          recipes: item.recipes.map((r) => [r.recipe.title, ...r.amountTexts]),
+          checked: item.check.status === 'checked',
+        }
+      : { handAdded: item.text, ingredient: item.ingredient?.name ?? null, checked: item.check.status === 'checked' },
+  );
+
+const pantryNames = async (user: TestUser) => (await user.data.getPantry()).ingredients.map((i) => i.name);
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** An item on the list, by its Ingredient's name or its hand-added text. */
+async function itemNamed(user: TestUser, name: string) {
+  const found = (await user.data.getShoppingList()).items.find((i) =>
+    i.kind === 'ingredient' ? i.ingredient.name === name : i.text === name,
+  );
+  if (!found) throw new Error(`${name} is not on the Shopping List`);
+  return found;
+}
+
+/**
+ * Garlic bread on the user's Shopping List (garlic and butter), with butter checked off (so in the
+ * Pantry), and "hellmann" made an Ingredient but not had. Every phone has seen the list.
+ */
+async function listWithGarlicAndButter(phones: TestPhone[]) {
+  const [phone] = phones;
+  const bread = await phone.data.createRecipe({
+    title: 'Garlic bread',
+    lines: [
+      { originalText: '2 cloves garlic, minced', amountText: '2 cloves', ingredientName: 'garlic' },
+      { originalText: '4 tbsp butter', amountText: '4 tbsp', ingredientName: 'butter' },
+    ],
+    steps: [],
+  });
+  await phone.data.addRecipeToShoppingList(bread);
+  const mayo = await phone.data.addToPantry("Hellmann's");
+  await phone.data.markUsedUp(mayo.id);
+  const butter = await itemNamed(phone, 'butter');
+  await phone.data.checkOff(butter.id);
+  const garlic = await itemNamed(phone, 'garlic');
+  for (const p of phones) await p.data.getShoppingList();
+  return { garlic, butter };
+}
+
+const garlicBread = (checked: boolean) => ({ ingredient: 'garlic', recipes: [['Garlic bread', '2 cloves']], checked });
+const butterLine = (checked: boolean) => ({ ingredient: 'butter', recipes: [['Garlic bread', '4 tbsp']], checked });
+
+/** Every view a phone's Shopping List screen would get, while watching. */
+function watch(phone: TestPhone) {
+  const views: ShoppingListView[] = [];
+  const stop = phone.data.watchShoppingList((v) => views.push(v));
+  return { views, last: () => views[views.length - 1], stop };
+}
+
+test('with no signal, checking off, unchecking and adding by hand change the list on the phone and wait to sync', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const { garlic, butter } = await listWithGarlicAndButter([phone, other]);
+  phone.goOffline();
+
+  await phone.data.checkOff(garlic.id);
+  await phone.data.uncheck(butter.id);
+  const towels = await phone.data.addManualItem('  Paper towels ');
+  await phone.data.addManualItem('Crème fraîche');
+
+  const onPhone = await phone.data.getShoppingList();
+  expect(view(onPhone)).toEqual([
+    butterLine(false),
+    { handAdded: 'Crème fraîche', ingredient: null, checked: false },
+    garlicBread(true),
+    { handAdded: 'Paper towels', ingredient: null, checked: false },
+  ]);
+  expect(onPhone.items.find((i) => i.id === garlic.id)?.check).toMatchObject({
+    status: 'checked',
+    checkedBy: phone.userId,
+  });
+  expect(await phone.data.getListSync()).toEqual({ status: 'offline', waiting: 4 });
+
+  // None of it has reached the server yet.
+  expect(view(await other.data.getShoppingList())).toEqual([butterLine(true), garlicBread(false)]);
+  expect(await pantryNames(other)).toEqual(['butter']);
+
+  // Removing needs a connection.
+  await expect(phone.data.removeFromShoppingList(towels)).rejects.toMatchObject({ code: 'offline' });
+  await expect(phone.data.removeFromShoppingList(garlic.id)).rejects.toMatchObject({ code: 'offline' });
+  expect(view(await phone.data.getShoppingList())).toHaveLength(4);
+});
+
+test('the Shopping List screen is told when changes are waiting to sync, and when they have', async () => {
+  const [phone] = await signInOnPhones('shopper', 1);
+  const { garlic } = await listWithGarlicAndButter([phone]);
+  const screen = watch(phone);
+  await vi.waitFor(() => expect(screen.last()).toMatchObject({ status: 'loaded', sync: { status: 'idle', waiting: 0 } }));
+
+  phone.goOffline();
+  await phone.data.checkOff(garlic.id);
+
+  await vi.waitFor(() => expect(screen.last()).toMatchObject({ sync: { status: 'offline', waiting: 1 } }));
+  const offline = screen.last();
+  if (offline.status !== 'loaded') throw new Error('expected the list');
+  expect(view(offline.list)).toEqual([butterLine(true), garlicBread(true)]);
+
+  phone.goOnline();
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  await vi.waitFor(() => expect(screen.last()).toMatchObject({ status: 'loaded', sync: { status: 'idle', waiting: 0 } }));
+  const synced = screen.last();
+  if (synced.status !== 'loaded') throw new Error('expected the list');
+  expect(view(synced.list)).toEqual([butterLine(true), garlicBread(true)]);
+  screen.stop();
+});
+
+test('on reconnect the queued changes are sent in the order they were made, and the server matches the phone', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const { garlic, butter } = await listWithGarlicAndButter([phone, other]);
+  phone.goOffline();
+
+  // Checked, unchecked, checked again: it ends checked only if they arrive in order.
+  await phone.data.checkOff(garlic.id);
+  await phone.data.uncheck(garlic.id);
+  await phone.data.checkOff(garlic.id);
+  await phone.data.uncheck(butter.id);
+  // Checking off an item added offline only works if the add arrives first.
+  const mayo = await phone.data.addManualItem('HELLMANN’S');
+  await phone.data.checkOff(mayo);
+  const towels = await phone.data.addManualItem('Paper towels');
+  await phone.data.checkOff(towels);
+  await phone.data.uncheck(towels);
+
+  phone.goOnline();
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+
+  const expected = [
+    butterLine(false),
+    garlicBread(true),
+    { handAdded: 'HELLMANN’S', ingredient: 'hellmann', checked: true },
+    { handAdded: 'Paper towels', ingredient: null, checked: false },
+  ];
+  expect(view(await other.data.getShoppingList())).toEqual(expected);
+  expect(view(await phone.data.getShoppingList())).toEqual(expected);
+  expect(await phone.data.getShoppingList()).toEqual(await other.data.getShoppingList());
+  expect(await pantryNames(other)).toEqual(['butter', 'garlic', 'hellmann']);
+  expect((await itemNamed(other, 'Paper towels')).id).toBe(towels);
+});
+
+// Phone B checks garlic off and then unchecks it (its last word: still to buy); phone A checks it
+// off, either after both of B's changes or before them. Both are offline, then each reconnects.
+test.each([
+  { a: 'after', arrivesFirst: 'A', checked: true },
+  { a: 'after', arrivesFirst: 'B', checked: true },
+  { a: 'before', arrivesFirst: 'A', checked: false },
+  { a: 'before', arrivesFirst: 'B', checked: false },
+] as const)(
+  'two phones changing one item: the change made later wins (A checks $a B, $arrivesFirst arrives first)',
+  async ({ a, arrivesFirst, checked }) => {
+    const [phoneA, phoneB] = await signInOnPhones('shopper', 2);
+    const { garlic } = await listWithGarlicAndButter([phoneA, phoneB]);
+    const t = Date.now();
+    await sleep(100); // so every change below was made before it arrives
+    phoneA.goOffline();
+    phoneB.goOffline();
+
+    phoneB.setClock(new Date(t + 10));
+    await phoneB.data.checkOff(garlic.id);
+    phoneB.setClock(new Date(t + 20));
+    await phoneB.data.uncheck(garlic.id);
+    phoneA.setClock(new Date(a === 'after' ? t + 30 : t + 5));
+    await phoneA.data.checkOff(garlic.id);
+
+    const [first, second] = arrivesFirst === 'A' ? [phoneA, phoneB] : [phoneB, phoneA];
+    first.goOnline();
+    expect(await first.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+    second.goOnline();
+    expect(await second.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+
+    for (const phone of [phoneA, phoneB]) {
+      expect(view(await phone.data.getShoppingList())).toEqual([butterLine(true), garlicBread(checked)]);
+    }
+    // Garlic was checked off at some point either way, so it's in the Pantry.
+    expect(await pantryNames(phoneA)).toEqual(['butter', 'garlic']);
+  },
+);
+
+test('sending the same queue again (an answer lost on the way back) changes nothing', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const { garlic, butter } = await listWithGarlicAndButter([phone, other]);
+  phone.goOffline();
+  await phone.data.checkOff(garlic.id);
+  await phone.data.uncheck(butter.id);
+  const towels = await phone.data.addManualItem('Paper towels');
+  await phone.data.checkOff(towels);
+  const queued = phone.saved();
+
+  phone.goOnline();
+  await phone.data.syncListChanges();
+  const expected = [
+    butterLine(false),
+    garlicBread(true),
+    { handAdded: 'Paper towels', ingredient: null, checked: true },
+  ];
+  expect(view(await other.data.getShoppingList())).toEqual(expected);
+
+  // The same phone as it was before it synced, sending all four again, twice at once.
+  const again = phone.relaunch(queued);
+  expect(await again.data.getListSync()).toEqual({ status: 'idle', waiting: 4 });
+  await Promise.all([again.data.syncListChanges(), again.data.syncListChanges()]);
+  expect(await again.data.getListSync()).toEqual({ status: 'idle', waiting: 0 });
+  expect(view(await other.data.getShoppingList())).toEqual(expected);
+
+  // After a later change elsewhere, sending the old queue once more doesn't undo it.
+  await other.data.uncheck(garlic.id);
+  await phone.relaunch(queued).data.syncListChanges();
+  expect(view(await other.data.getShoppingList())).toEqual([
+    butterLine(false),
+    garlicBread(false),
+    { handAdded: 'Paper towels', ingredient: null, checked: true },
+  ]);
+  expect(await pantryNames(other)).toEqual(['butter', 'garlic']);
+});
+
+test('an offline change to an item removed meanwhile is dropped without an error', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const { garlic, butter } = await listWithGarlicAndButter([phone, other]);
+  const towels = await other.data.addManualItem('Paper towels');
+  await phone.data.getShoppingList();
+  phone.goOffline();
+  await phone.data.checkOff(garlic.id);
+  await phone.data.checkOff(towels);
+  await phone.data.uncheck(butter.id);
+
+  await other.data.removeFromShoppingList(garlic.id);
+  await other.data.removeFromShoppingList(towels);
+  phone.goOnline();
+
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  expect(view(await other.data.getShoppingList())).toEqual([butterLine(false)]);
+  expect(view(await phone.data.getShoppingList())).toEqual([butterLine(false)]);
+  expect(await pantryNames(other)).toEqual(['butter']);
+});
+
+test('queued changes and the last list seen outlive the app being closed with no signal', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const { garlic } = await listWithGarlicAndButter([phone, other]);
+  phone.goOffline();
+  await phone.data.checkOff(garlic.id);
+  await phone.data.addManualItem("Crème fraîche, l'originale");
+
+  const reopened = phone.relaunch();
+  expect(view(await reopened.data.getShoppingList())).toEqual([
+    butterLine(true),
+    { handAdded: "Crème fraîche, l'originale", ingredient: null, checked: false },
+    garlicBread(true),
+  ]);
+  expect(await reopened.data.getListSync()).toEqual({ status: 'offline', waiting: 2 });
+
+  reopened.goOnline();
+  expect(await reopened.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  expect(view(await other.data.getShoppingList())).toEqual([
+    butterLine(true),
+    { handAdded: "Crème fraîche, l'originale", ingredient: null, checked: false },
+    garlicBread(true),
+  ]);
+});
+
+test('with no signal, a list this phone has never seen fails as offline', async () => {
+  const [phone] = await signInOnPhones('shopper', 1);
+  phone.goOffline();
+
+  await expect(phone.data.getShoppingList()).rejects.toMatchObject({ code: 'offline' });
+  const screen = watch(phone);
+  await vi.waitFor(() =>
+    expect(screen.last()).toMatchObject({ status: 'failed', error: { code: 'offline' }, sync: { status: 'offline' } }),
+  );
+  screen.stop();
+
+  phone.goOnline();
+  expect((await phone.data.getShoppingList()).items).toEqual([]);
+});
+
+test('saved data the app cannot read is ignored: unreadable changes are skipped, the rest still sync', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const { garlic } = await listWithGarlicAndButter([phone, other]);
+  phone.goOffline();
+  await phone.data.checkOff(garlic.id);
+  await phone.data.addManualItem('  Ünïcödé snacks ');
+
+  // Corrupt what was saved: the list becomes junk, and junk changes join the queue.
+  const saved = new Map(phone.saved());
+  for (const [key, value] of saved) {
+    const parsed: unknown = JSON.parse(value);
+    if (Array.isArray(parsed)) {
+      saved.set(
+        key,
+        JSON.stringify([
+          { id: 'x', madeAt: 'not a date', change: { kind: 'checkOff', itemId: garlic.id } },
+          ...parsed,
+          { id: 'y', madeAt: new Date().toISOString(), change: { kind: 'checkOff', itemId: 'not-a-uuid' } },
+          { id: 'z', madeAt: new Date().toISOString(), change: { kind: 'addManualItem', itemId: garlic.id, text: '   ' } },
+          { id: 'w', madeAt: new Date().toISOString(), change: { kind: 'removeEverything' } },
+          null,
+          'checkOff',
+        ]),
+      );
+    } else {
+      saved.set(key, '{"id": "cut short');
+    }
+  }
+  const reopened = phone.relaunch(saved);
+  await expect(reopened.data.getShoppingList()).rejects.toMatchObject({ code: 'offline' });
+  expect(await reopened.data.getListSync()).toEqual({ status: 'offline', waiting: 2 });
+
+  reopened.goOnline();
+  expect(await reopened.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  expect(view(await other.data.getShoppingList())).toEqual([
+    butterLine(true),
+    garlicBread(true),
+    { handAdded: 'Ünïcödé snacks', ingredient: null, checked: false },
+  ]);
+});
+
+test('two phones syncing at once, each twice, send every change once', async () => {
+  const [phoneA, phoneB] = await signInOnPhones('shopper', 2);
+  const { garlic, butter } = await listWithGarlicAndButter([phoneA, phoneB]);
+  phoneA.goOffline();
+  phoneB.goOffline();
+  await Promise.all([phoneA.data.checkOff(garlic.id), phoneA.data.checkOff(garlic.id)]);
+  await Promise.all([phoneB.data.uncheck(butter.id), phoneB.data.addManualItem('Foil')]);
+
+  phoneA.goOnline();
+  phoneB.goOnline();
+  const results = await Promise.all([
+    phoneA.data.syncListChanges(),
+    phoneA.data.syncListChanges(),
+    phoneB.data.syncListChanges(),
+    phoneB.data.syncListChanges(),
+  ]);
+
+  expect(results).toEqual(Array(4).fill({ status: 'idle', waiting: 0 }));
+  expect(view(await phoneA.data.getShoppingList())).toEqual([
+    butterLine(false),
+    { handAdded: 'Foil', ingredient: null, checked: false },
+    garlicBread(true),
+  ]);
+  expect(await pantryNames(phoneA)).toEqual(['butter', 'garlic']);
+});
