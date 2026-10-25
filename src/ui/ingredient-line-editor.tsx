@@ -46,7 +46,7 @@ export function IngredientLineEditor({
         label="As written"
         value={value.originalText}
         onChangeText={(originalText) => onChange({ ...value, originalText })}
-        placeholder="2 cloves garlic, minced"
+        placeholder="e.g. 2 cloves garlic, minced"
         accessibilityLabel={`Line ${number}`}
         testID={`${id}-text`}
       />
@@ -55,7 +55,7 @@ export function IngredientLineEditor({
           label="Amount"
           value={value.amountText}
           onChangeText={(amountText) => onChange({ ...value, amountText })}
-          placeholder="2 cloves"
+          placeholder="e.g. 2 cloves"
           accessibilityLabel={`Amount ${number}`}
           testID={`${id}-amount`}
         />
@@ -63,7 +63,7 @@ export function IngredientLineEditor({
           label="Ingredient"
           value={value.ingredientName}
           onChangeText={(ingredientName) => onChange({ ...value, ingredientName })}
-          placeholder="garlic"
+          placeholder="e.g. garlic"
           autoCapitalize="none"
           accessibilityLabel={`Ingredient ${number}`}
           testID={`${id}-ingredient`}
