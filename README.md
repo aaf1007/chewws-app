@@ -43,7 +43,7 @@ npm test
 
 The tests read the API URL and keys from `supabase status`, so they fail straight away with a message if the stack is down. Each call to `signInTestUser()` in `tests/harness.ts` creates a fresh user and returns that user's data layer. Tests call only data-layer actions.
 
-`npm run typecheck` and `npm run lint` cover the rest.
+`npm run verify` runs typecheck, lint, a check that `src/data/database.types.ts` is fresh, and the tests, stopping at the first failure.
 
 ## Running the app
 
@@ -77,11 +77,14 @@ The dev client then loads the JavaScript from Metro on your machine, and Metro r
 
 ### UI check
 
-`.maestro/dev-sign-in-and-out.yaml` taps through sign-in with the dev button, the empty library and sign-out. You need Maestro (`brew install mobile-dev-inc/tap/maestro`), a running app and Metro:
+`.maestro/dev-sign-in-and-out.yaml` taps through sign-in with the dev button, the empty library and sign-out. You need Maestro (`brew install mobile-dev-inc/tap/maestro`). Each flow relaunches the app itself:
 
 ```sh
-maestro test .maestro/dev-sign-in-and-out.yaml
+npm run dev:up   # local Supabase, Metro, simulator and dev build, whichever aren't up yet
+npm run e2e      # every flow in .maestro/
 ```
+
+See `docs/agents/verify.md` for writing flows.
 
 ## Making Apple and Google sign-in real
 
