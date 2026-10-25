@@ -19,6 +19,7 @@ import {
 export default function RecipeDetail() {
   const state = useRecipe(useLocalSearchParams<{ id: string }>().id);
   const [error, setError] = useState<string | null>(null);
+  const [listMessage, setListMessage] = useState<string | null>(null);
 
   if (state.status !== 'loaded') {
     return (
@@ -45,6 +46,21 @@ export default function RecipeDetail() {
             .catch((e: unknown) => setError(messageOf(e))),
       },
     ]);
+
+  const addToShoppingList = () => {
+    setError(null);
+    setListMessage(null);
+    data
+      .addRecipeToShoppingList(id)
+      .then((needed) =>
+        setListMessage(
+          needed.length === 0
+            ? 'You have every Ingredient this Recipe needs.'
+            : `On your Shopping List: ${needed.map((i) => i.name).join(', ')}.`,
+        ),
+      )
+      .catch((e: unknown) => setError(messageOf(e)));
+  };
 
   return (
     <Screen title={recipe.title} scroll>
@@ -75,6 +91,12 @@ export default function RecipeDetail() {
 
       {error ? <Text tone="danger">{error}</Text> : null}
       <View style={{ gap: spacing.sm }}>
+        <Button label="Add to Shopping List" icon="cart-outline" onPress={addToShoppingList} />
+        {listMessage ? (
+          <Text variant="caption" tone="textMuted">
+            {listMessage}
+          </Text>
+        ) : null}
         <Button
           label="Edit Recipe"
           variant="outlined"
