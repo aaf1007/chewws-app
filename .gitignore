@@ -43,3 +43,6 @@ example
 /android
 
 .env
+
+# dev:up logs
+.logs/

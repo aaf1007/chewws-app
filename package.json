@@ -43,6 +43,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "verify": "npm run typecheck && npm run lint && npm run db:types:check && npm test",
+    "dev:up": "scripts/dev-up.sh",
     "e2e": "maestro test .maestro/",
     "db:start": "supabase start",
     "db:stop": "supabase stop",
