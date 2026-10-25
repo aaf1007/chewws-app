@@ -1,4 +1,4 @@
-# Ticket 02: writes a Recipe by hand, changes a line's Ingredient, edits it and deletes it.
+# Ticket 02: writes a Recipe by hand (checking it as it goes), changes a line's Ingredient, edits it and deletes it.
 # Run with `npm run e2e -- .maestro/02-write-a-recipe.yaml`.
 appId: com.ant1007.recipeapp
 ---
@@ -26,9 +26,19 @@ appId: com.ant1007.recipeapp
 - tapOn:
     id: "line-1-amount"
 - inputText: "2 cloves"
+# An Ingredient the matcher leaves nothing of fails the same check the save does, and the error
+# stays until the Ingredient is one.
 - tapOn:
     id: "line-1-ingredient"
+- inputText: "?!"
+- hideKeyboard
+- tapOn: "Save Recipe"
+- assertVisible: "Ingredient line 1 needs an Ingredient."
+- tapOn:
+    id: "line-1-ingredient"
+- eraseText: 5
 - inputText: "Garlic"
+- assertNotVisible: "Ingredient line 1 needs an Ingredient."
 - hideKeyboard
 - tapOn: "Add line"
 - scrollUntilVisible:

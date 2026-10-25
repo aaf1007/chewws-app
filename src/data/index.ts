@@ -1,4 +1,5 @@
 export { createDataLayer, type DataLayer } from './data-layer';
+export { validateRecipeInput, type RecipeInputError } from './recipe-input';
 export {
   DataError,
   parseRecipeId,

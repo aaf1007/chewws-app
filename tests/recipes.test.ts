@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 
-import type { RecipeInput } from '../src/data';
+import { validateRecipeInput, type RecipeInput } from '../src/data';
 import { signInTestUser } from './harness';
 
 const garlicBread: RecipeInput = {
@@ -258,4 +258,56 @@ test('a missing Ingredient is reported by the line number the user sees, blank l
     code: 'ingredient_required',
     message: 'Ingredient line 3 needs an Ingredient.',
   });
+});
+
+test('the Recipe checks a form can run before saving are the ones a save enforces', async () => {
+  const a = await signInTestUser('a');
+  const mystery: RecipeInput = {
+    title: 'Mystery',
+    lines: [
+      { originalText: '2 cloves garlic', ingredientName: 'garlic' },
+      { originalText: '', amountText: '', ingredientName: '' },
+      { originalText: 'a pinch of something', ingredientName: '?!' },
+      { originalText: 'salt to taste', ingredientName: '  ' },
+    ],
+    steps: [],
+  };
+
+  expect(validateRecipeInput(mystery)).toEqual({
+    status: 'invalid',
+    errors: [
+      { code: 'ingredient_required', lineNumber: 3, message: 'Ingredient line 3 needs an Ingredient.' },
+      { code: 'ingredient_required', lineNumber: 4, message: 'Ingredient line 4 needs an Ingredient.' },
+    ],
+  });
+  await expect(a.data.createRecipe(mystery)).rejects.toMatchObject({
+    name: 'DataError',
+    code: 'ingredient_required',
+    message: 'Ingredient line 3 needs an Ingredient.',
+  });
+
+  expect(validateRecipeInput({ ...mystery, title: ' ' })).toMatchObject({
+    status: 'invalid',
+    errors: [{ code: 'title_required', message: 'Give the Recipe a title.' }, {}, {}],
+  });
+  await expect(a.data.createRecipe({ ...mystery, title: ' ' })).rejects.toMatchObject({
+    code: 'title_required',
+    message: 'Give the Recipe a title.',
+  });
+
+  expect(
+    validateRecipeInput({
+      title: ' Garlic bread ',
+      lines: [{ originalText: '', amountText: ' 1 ', ingredientName: 'Baguettes' }],
+      steps: [' Bake. ', ''],
+    }),
+  ).toEqual({
+    status: 'valid',
+    recipe: {
+      title: 'Garlic bread',
+      lines: [{ originalText: '1 Baguettes', amountText: '1', ingredientName: 'baguette' }],
+      steps: ['Bake.'],
+    },
+  });
+  expect(await a.data.listMyRecipes()).toEqual([]);
 });

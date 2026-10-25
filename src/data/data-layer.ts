@@ -1,7 +1,7 @@
 import type { AuthError, PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js';
 
 import type { Database } from './database.types';
-import { normaliseIngredientName } from './ingredient-matcher';
+import { validateRecipeInput } from './recipe-input';
 import {
   DataError,
   parseIngredientId,
@@ -52,37 +52,25 @@ function toRecipe(
 }
 
 /**
- * Checks and tidies what the user typed into the arguments the create and edit functions take.
- * Blank lines and steps are dropped; every other line needs an Ingredient name, which the
- * Ingredient matcher normalises. A line with no text of its own reads as its amount and Ingredient.
+ * What the user typed, as the arguments the create and edit functions take. Fails with the first
+ * rule `validateRecipeInput` reports broken.
  */
 function toRecipeArgs(input: RecipeInput) {
-  const title = input.title.trim();
-  if (!title) throw new DataError('title_required', 'Give the Recipe a title.');
-
-  const lines = input.lines
-    .map((line, index) => ({
-      // 1-based, counting blank lines, so errors name the line the user sees.
-      number: index + 1,
-      originalText: line.originalText.trim(),
-      amountText: (line.amountText ?? '').trim(),
-      ingredientName: line.ingredientName.trim(),
-    }))
-    .filter((line) => line.originalText || line.amountText || line.ingredientName)
-    .map((line) => {
-      const name = normaliseIngredientName(line.ingredientName);
-      if (!name) {
-        throw new DataError('ingredient_required', `Ingredient line ${line.number} needs an Ingredient.`);
-      }
-      return {
-        original_text: line.originalText || `${line.amountText} ${line.ingredientName}`.trim(),
-        amount_text: line.amountText || null,
-        ingredient_name: name,
-      };
-    });
-
-  const steps = input.steps.map((step) => step.trim()).filter(Boolean);
-  return { title, steps, lines };
+  const check = validateRecipeInput(input);
+  if (check.status === 'invalid') {
+    const [first] = check.errors;
+    throw new DataError(first.code, first.message);
+  }
+  const { title, steps, lines } = check.recipe;
+  return {
+    title,
+    steps,
+    lines: lines.map((line) => ({
+      original_text: line.originalText,
+      amount_text: line.amountText,
+      ingredient_name: line.ingredientName,
+    })),
+  };
 }
 
 function toProfile(row: ProfileRow): Profile {
