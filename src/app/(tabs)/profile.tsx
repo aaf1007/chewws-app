@@ -13,8 +13,8 @@ export default function Profile() {
     <Screen title="Profile">
       <View style={{ gap: spacing.sm }}>
         <SectionHeader title="Account" />
-        {/* In the screen body, not the header: the header's corners are where the dev client's
-            tools button and "Refreshing…" banner sit, and they swallowed taps on a header button. */}
+        {/* In the screen body, not the header: the dev client's floating tools button starts over
+            the header's right-hand corner and took the first tap on a header button there. */}
         <Button
           label="Sign out"
           variant="outlined"
