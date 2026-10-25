@@ -185,9 +185,10 @@ function fail(error: AuthError | PostgrestError): never {
 /**
  * Whether a response means the server wasn't reached, or can't answer yet, so a queued change
  * should wait and be sent again: no response at all, a session that needs refreshing, a timeout,
- * or the API gateway with nothing behind it.
+ * too many requests, or any server error (5xx: the server, or a gateway in front of it, failed;
+ * the change itself may be fine). Only a 4xx refuses the change.
  */
-const notReached = (status: number) => [0, 401, 408, 429, 502, 503, 504].includes(status);
+const notReached = (status: number) => status === 0 || [401, 408, 429].includes(status) || status >= 500;
 
 export type DataLayerOptions = {
   /** Where the phone keeps list changes waiting to be sent and the last list it saw. */

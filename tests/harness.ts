@@ -71,6 +71,11 @@ export type TestPhone = TestUser & {
   /** No signal: every request fails as it would in the app. */
   goOffline(): void;
   goOnline(): void;
+  /**
+   * The server, or a gateway in front of it, answers every request from this phone with this
+   * HTTP status (a fault, not an answer to the request), until it's set back to null.
+   */
+  serverAnswers(status: number | null): void;
   /** Sets the phone's clock; list changes made from now on are stamped from it. */
   setClock(at: Date): void;
   /** A copy of what the app has saved on this phone. */
@@ -120,9 +125,17 @@ export async function signInOnPhones(label: string, count: number): Promise<Test
   return Promise.all(
     Array.from({ length: count }, async () => {
       let offline = false;
-      const fetchThroughSignal: typeof fetch = (input, init) =>
-        offline ? Promise.reject(new TypeError('Network request failed')) : fetch(input, init);
-      const network = { goOffline: () => void (offline = true), goOnline: () => void (offline = false) };
+      let fault: number | null = null;
+      const fetchThroughSignal: typeof fetch = (input, init) => {
+        if (offline) return Promise.reject(new TypeError('Network request failed'));
+        if (fault !== null) return Promise.resolve(new Response(`Server error ${fault}`, { status: fault }));
+        return fetch(input, init);
+      };
+      const network = {
+        goOffline: () => void (offline = true),
+        goOnline: () => void (offline = false),
+        serverAnswers: (status: number | null) => void (fault = status),
+      };
       const first = createPhone(new Map(), new Map());
       await first.data.signInWithPassword(account);
       const userId = (await first.data.getMyProfile()).id;

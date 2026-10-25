@@ -277,6 +277,32 @@ test('an add sent again after its item was removed elsewhere (its answer lost) l
   expect(view(await other.data.getShoppingList())).toEqual([butterLine(true), garlicBread(false)]);
 });
 
+test.each([500, 520, 524])(
+  'changes sent while the server fails with %i stay queued, and land on the next sync',
+  async (status) => {
+    const [phone, other] = await signInOnPhones('shopper', 2);
+    const { garlic } = await listWithGarlicAndButter([phone, other]);
+    phone.goOffline();
+    await phone.data.checkOff(garlic.id);
+    const foil = await phone.data.addManualItem('Foil');
+
+    phone.goOnline();
+    phone.serverAnswers(status);
+    expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 2 });
+    // Made while it fails, a change waits too.
+    await phone.data.checkOff(foil);
+    expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 3 });
+
+    phone.serverAnswers(null);
+    expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+    expect(view(await other.data.getShoppingList())).toEqual([
+      butterLine(true),
+      { handAdded: 'Foil', ingredient: null, checked: true },
+      garlicBread(true),
+    ]);
+  },
+);
+
 test('queued changes and the last list seen outlive the app being closed with no signal', async () => {
   const [phone, other] = await signInOnPhones('shopper', 2);
   const { garlic } = await listWithGarlicAndButter([phone, other]);
