@@ -1,4 +1,5 @@
-export { createDataLayer, type DataLayer } from './data-layer';
+export { memoryStorage, type KeyValueStorage } from './change-queue';
+export { createDataLayer, type DataLayer, type DataLayerOptions } from './data-layer';
 export { normaliseIngredientName } from './ingredient-matcher';
 export { validateRecipeInput, type RecipeInputError } from './recipe-input';
 export {
@@ -8,6 +9,7 @@ export {
   type IdTokenProvider,
   type Ingredient,
   type IngredientId,
+  type ListSync,
   type Pantry,
   type Profile,
   type Recipe,
@@ -22,5 +24,6 @@ export {
   type ShoppingListItem,
   type ShoppingListItemId,
   type ShoppingListRecipeAmounts,
+  type ShoppingListView,
   type UserId,
 } from './types';

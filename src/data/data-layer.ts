@@ -1,8 +1,16 @@
 import type { AuthError, PostgrestError, Session, SupabaseClient } from '@supabase/supabase-js';
 
+import {
+  createChangeQueue,
+  memoryStorage,
+  type Delivery,
+  type KeyValueStorage,
+  type QueuedChange,
+} from './change-queue';
 import type { Database } from './database.types';
 import { normaliseIngredientName } from './ingredient-matcher';
-import { toListLines } from './list-engine';
+import { sortListItems, toListLines, withListChanges, type ListChange } from './list-engine';
+import { parseListChange, parseSavedShoppingList } from './list-storage';
 import { validateRecipeInput } from './recipe-input';
 import {
   DataError,
@@ -15,6 +23,7 @@ import {
   type IdTokenProvider,
   type Ingredient,
   type IngredientId,
+  type ListSync,
   type Pantry,
   type Profile,
   type Recipe,
@@ -25,6 +34,7 @@ import {
   type ShoppingList,
   type ShoppingListItem,
   type ShoppingListItemId,
+  type ShoppingListView,
   type UserId,
 } from './types';
 
@@ -138,12 +148,6 @@ function toShoppingListItem(
   return { kind: 'ingredient', id, ingredient, recipes, check };
 }
 
-/** An Ingredient line comes before a hand-added item of the same name. */
-const KIND_ORDER = { ingredient: 0, handAdded: 1 } as const;
-
-const itemName = (item: ShoppingListItem) =>
-  item.kind === 'ingredient' ? item.ingredient.name : item.text.toLowerCase();
-
 function toProfile(row: ProfileRow): Profile {
   return { id: parseUserId(row.id), username: row.username, createdAt: row.created_at };
 }
@@ -152,11 +156,44 @@ function toSessionState(session: Session | null): SessionState {
   return session ? { status: 'signedIn', userId: parseUserId(session.user.id) } : { status: 'signedOut' };
 }
 
-function fail(error: AuthError | PostgrestError): never {
-  throw new DataError(error.code ?? 'unknown', error.message, { cause: error });
+/** A request that never reached the server (no signal) fails with code `offline`. */
+function toDataError(error: AuthError | PostgrestError): DataError {
+  if (error.code === '' || ('status' in error && error.status === 0)) {
+    return new DataError('offline', "No connection. Try again when you're back online.", { cause: error });
+  }
+  return new DataError(error.code ?? 'unknown', error.message, { cause: error });
 }
 
-export function createDataLayer(client: SupabaseClient<Database>) {
+function fail(error: AuthError | PostgrestError): never {
+  throw toDataError(error);
+}
+
+/**
+ * Whether a response means the server wasn't reached, or can't answer yet, so a queued change
+ * should wait and be sent again: no response at all, a session that needs refreshing, a timeout,
+ * or the API gateway with nothing behind it.
+ */
+const notReached = (status: number) => [0, 401, 408, 429, 502, 503, 504].includes(status);
+
+export type DataLayerOptions = {
+  /** Where the phone keeps list changes waiting to be sent and the last list it saw. */
+  storage?: KeyValueStorage;
+  /** The phone's clock, in milliseconds. List changes are stamped with it. */
+  now?: () => number;
+  /** Makes a fresh UUID, for items added on the phone and its queued changes. */
+  newId?: () => string;
+};
+
+/**
+ * The data layer on top of a Supabase client. The client's `fetch` is the transport: when its
+ * requests fail, the phone is offline, and Shopping List changes wait on the phone (see
+ * `change-queue.ts`) until `syncListChanges` or the next change gets them through.
+ */
+export function createDataLayer(client: SupabaseClient<Database>, options: DataLayerOptions = {}) {
+  const storage = options.storage ?? memoryStorage();
+  const now = options.now ?? Date.now;
+  const newId = options.newId ?? (() => crypto.randomUUID());
+
   async function currentUserId(): Promise<UserId> {
     const { data, error } = await client.auth.getSession();
     if (error) fail(error);
@@ -325,33 +362,243 @@ export function createDataLayer(client: SupabaseClient<Database>) {
     return data.map(parseIngredientId);
   }
 
-  /** The signed-in user's Shopping List. */
-  async function getShoppingList(): Promise<ShoppingList> {
-    const me = await currentUserId();
-    const { data, error } = await client
+  /** The user's Shopping List as the server has it, or `unreachable` with no signal. */
+  async function fetchShoppingList(me: UserId): Promise<{ status: 'reached'; list: ShoppingList } | { status: 'unreachable' }> {
+    const { data, error, status } = await client
       .from('shopping_lists')
       .select(SHOPPING_LIST_WITH_ITEMS)
       .eq('owner_id', me)
-      .maybeSingle();
+      .maybeSingle()
+      .retry(false);
+    if (notReached(status)) return { status: 'unreachable' };
     if (error) fail(error);
     if (!data) throw new DataError('shopping_list_missing', `No Shopping List for user ${me}.`);
-    const items = data.shopping_list_items
-      .map(toShoppingListItem)
-      .sort(
-        (a, b) =>
-          compareText(itemName(a), itemName(b)) ||
-          KIND_ORDER[a.kind] - KIND_ORDER[b.kind] ||
-          compareText(a.id, b.id),
-      );
+    const items = sortListItems(data.shopping_list_items.map(toShoppingListItem));
     const recipes = new Map(
       items.flatMap((item) => (item.kind === 'ingredient' ? item.recipes : [])).map((r) => [r.recipe.id, r.recipe]),
     );
     return {
-      id: parseShoppingListId(data.id),
-      ownerId: parseUserId(data.owner_id),
-      items,
-      recipes: [...recipes.values()].sort((a, b) => compareText(a.title, b.title) || compareText(a.id, b.id)),
+      status: 'reached',
+      list: {
+        id: parseShoppingListId(data.id),
+        ownerId: parseUserId(data.owner_id),
+        items,
+        recipes: [...recipes.values()].sort((a, b) => compareText(a.title, b.title) || compareText(a.id, b.id)),
+      },
     };
+  }
+
+  const needsConnection = (what: string) =>
+    new DataError('offline', `You're offline. ${what} needs a connection.`);
+
+  /** Sends one queued Shopping List change, stamped with when it was made. */
+  async function sendListChange(me: UserId, { madeAt, change }: QueuedChange<ListChange>): Promise<Delivery> {
+    // Only the user who made a change sends it. Signed out, or a session that can't refresh with
+    // no signal, it waits.
+    const { data } = await client.auth.getSession();
+    if (data.session?.user.id !== me) return { status: 'unreachable' };
+    if (change.kind === 'addManualItem') {
+      const { data: id, error, status } = await client.rpc('add_manual_item', {
+        item_text: change.text,
+        ingredient_name: normaliseIngredientName(change.text),
+        item_id: change.itemId,
+        changed_at: madeAt,
+      });
+      if (notReached(status)) return { status: 'unreachable' };
+      if (error) return { status: 'refused', error: toDataError(error) };
+      if (!id) return { status: 'refused', error: idTaken() };
+      return { status: 'sent' };
+    }
+    const args = { item_id: change.itemId, changed_at: madeAt };
+    const { data: found, error, status } =
+      change.kind === 'checkOff' ? await client.rpc('check_off', args) : await client.rpc('uncheck', args);
+    if (notReached(status)) return { status: 'unreachable' };
+    if (error) return { status: 'refused', error: toDataError(error) };
+    // Gone (removed meanwhile, maybe from another phone): the change has nothing to change.
+    return found ? { status: 'sent' } : { status: 'dropped' };
+  }
+
+  /**
+   * One user's Shopping List on this phone: the changes waiting to be sent, the last list read
+   * from the server (kept in storage, so it shows with no signal after a restart), and the screens
+   * watching it.
+   */
+  function openShoppingList(me: UserId) {
+    const listKey = `recipeapp.shoppingList.${me}`;
+    const watchers = new Set<(view: ShoppingListView) => void>();
+    let lastSeen: ShoppingList | null = null;
+    let lastError: DataError | null = null;
+    let savingList: Promise<void> = Promise.resolve();
+
+    function keep(list: ShoppingList) {
+      lastSeen = list;
+      lastError = null;
+      const snapshot = JSON.stringify(list);
+      savingList = savingList.then(() => storage.setItem(listKey, snapshot)).catch(() => {});
+    }
+
+    const queue = createChangeQueue<ListChange>({
+      storage,
+      key: `recipeapp.listChanges.${me}`,
+      parseChange: parseListChange,
+      send: (change) => sendListChange(me, change),
+      onDelivered({ madeAt, change }, delivery) {
+        if (!lastSeen) return;
+        if (delivery.status === 'sent') keep(withListChanges(lastSeen, [{ madeAt, change }], me));
+        if (delivery.status === 'dropped') {
+          keep({ ...lastSeen, items: lastSeen.items.filter((item) => item.id !== change.itemId) });
+        }
+      },
+      // Read the list again for whoever's watching it, or to find out the phone is back online.
+      afterSync: (wasOffline) => (watchers.size > 0 || wasOffline ? refresh() : Promise.resolve('reached')),
+      now,
+      newId,
+    });
+
+    const ready: Promise<unknown> = Promise.all([
+      queue.ready,
+      storage
+        .getItem(listKey)
+        .catch(() => null)
+        .then((raw) => {
+          // A list read from the server meanwhile is newer than the saved one.
+          lastSeen ??= parseSavedShoppingList(raw);
+        }),
+    ]);
+
+    function sync(): ListSync {
+      const state = queue.state();
+      return { status: state.status, waiting: state.queue.length };
+    }
+
+    /** The list as the phone shows it: the last one seen, with the changes not yet sent on top. */
+    function shown(): ShoppingList | null {
+      return lastSeen && withListChanges(lastSeen, queue.state().queue, me);
+    }
+
+    function view(): ShoppingListView {
+      const list = shown();
+      if (list) return { status: 'loaded', list, sync: sync() };
+      if (lastError) return { status: 'failed', error: lastError, sync: sync() };
+      return { status: 'loading', sync: sync() };
+    }
+
+    function emit() {
+      const current = view();
+      for (const watcher of watchers) watcher(current);
+    }
+
+    async function refresh(): Promise<'reached' | 'unreachable'> {
+      try {
+        const fetched = await fetchShoppingList(me);
+        if (fetched.status === 'unreachable') {
+          lastError ??= needsConnection('Loading your Shopping List the first time');
+          return 'unreachable';
+        }
+        keep(fetched.list);
+      } catch (e) {
+        lastError = e instanceof DataError ? e : new DataError('unknown', String(e), { cause: e });
+      }
+      emit();
+      return 'reached';
+    }
+
+    function forget(itemId: ShoppingListItemId) {
+      if (lastSeen) keep({ ...lastSeen, items: lastSeen.items.filter((item) => item.id !== itemId) });
+      emit();
+    }
+
+    /** After a change made online, outside the queue: show the list as it is now. */
+    function refreshWatched() {
+      if (watchers.size > 0) void refresh();
+    }
+
+    queue.subscribe(emit);
+    return { queue, watchers, ready, keep, shown, view, emit, sync, refresh, refreshWatched, forget };
+  }
+
+  const shoppingLists = new Map<UserId, ReturnType<typeof openShoppingList>>();
+  function shoppingListOf(me: UserId) {
+    let list = shoppingLists.get(me);
+    if (!list) {
+      list = openShoppingList(me);
+      shoppingLists.set(me, list);
+    }
+    return list;
+  }
+
+  /**
+   * The signed-in user's Shopping List, with the changes made on this phone that haven't reached
+   * the server yet. With no signal, it's the last list this phone saw, with those changes; never
+   * seen, it fails with code `offline`.
+   */
+  async function getShoppingList(): Promise<ShoppingList> {
+    const me = await currentUserId();
+    const lists = shoppingListOf(me);
+    await lists.ready;
+    const fetched = await fetchShoppingList(me);
+    if (fetched.status === 'reached') {
+      lists.keep(fetched.list);
+      if (lists.queue.state().status === 'offline') void lists.queue.sync();
+      lists.emit();
+    } else {
+      lists.queue.markUnreachable();
+    }
+    const shown = lists.shown();
+    if (!shown) throw needsConnection('Loading your Shopping List the first time');
+    return shown;
+  }
+
+  /**
+   * Shows the signed-in user's Shopping List as it changes: at once from what the phone has, again
+   * when it's read from the server, and on every change made here, sent or not. Each view says
+   * whether changes are waiting to sync. Returns a function that stops watching.
+   */
+  function watchShoppingList(watcher: (view: ShoppingListView) => void): () => void {
+    let lists: ReturnType<typeof openShoppingList> | null = null;
+    let stopped = false;
+    currentUserId().then(
+      async (me) => {
+        if (stopped) return;
+        lists = shoppingListOf(me);
+        lists.watchers.add(watcher);
+        await lists.ready;
+        if (stopped) return;
+        watcher(lists.view());
+        await lists.queue.sync();
+      },
+      (e: unknown) => {
+        const error = e instanceof DataError ? e : new DataError('unknown', String(e), { cause: e });
+        if (!stopped) watcher({ status: 'failed', error, sync: { status: 'idle', waiting: 0 } });
+      },
+    );
+    return () => {
+      stopped = true;
+      lists?.watchers.delete(watcher);
+    };
+  }
+
+  /** Whether the signed-in user's list changes are waiting to sync. */
+  async function getListSync(): Promise<ListSync> {
+    const me = await currentUserId();
+    const lists = shoppingListOf(me);
+    await lists.ready;
+    return lists.sync();
+  }
+
+  /**
+   * Sends the list changes waiting on this phone, in the order they were made, if there are any or
+   * the phone was offline. The app calls it when it comes to the foreground and on a timer. Says
+   * what's still waiting.
+   */
+  async function syncListChanges(): Promise<ListSync> {
+    const { data } = await client.auth.getSession();
+    if (!data.session) return { status: 'idle', waiting: 0 };
+    const lists = shoppingListOf(parseUserId(data.session.user.id));
+    await lists.ready;
+    const { status, queue } = lists.queue.state();
+    if (status !== 'idle' || queue.length > 0) await lists.queue.sync();
+    return lists.sync();
   }
 
   /**
@@ -373,14 +620,33 @@ export function createDataLayer(client: SupabaseClient<Database>) {
     });
     if (error) fail(error);
     if (!data) throw new DataError('recipe_not_found', 'That Recipe no longer exists.');
+    shoppingListOf(recipe.ownerId).refreshWatched();
     return lines.map((line) => line.ingredient);
+  }
+
+  const idTaken = () => new DataError('shopping_list_item_id_taken', 'That item id is already in use.');
+
+  const itemGone = () =>
+    new DataError('shopping_list_item_not_found', 'That item is no longer on the Shopping List.');
+
+  /**
+   * Queues a Shopping List change and sends it, with every change queued before it. Resolves once
+   * the server has it, or at once with no signal: it waits on the phone, shown on the list, and is
+   * sent on reconnect. Fails if the server says its item is gone, or refuses it.
+   */
+  async function changeShoppingList(change: ListChange): Promise<void> {
+    const me = await currentUserId();
+    const outcome = await shoppingListOf(me).queue.enqueue(change);
+    if (outcome.status === 'dropped') throw itemGone();
+    if (outcome.status === 'refused') throw outcome.error;
   }
 
   /**
    * Adds something typed by hand to the user's Shopping List. If its name is an existing
    * Ingredient's, it's linked to it, so checking it off puts that Ingredient in the Pantry;
-   * otherwise ("paper towels") checking it off changes no Pantry. Pass `id` to choose the item's
-   * id, so adding the same item twice adds it once.
+   * otherwise ("paper towels") checking it off changes no Pantry. Works with no signal (see
+   * `changeShoppingList`). The phone makes the item's id, or pass `id` to choose it, so adding the
+   * same item twice adds it once.
    */
   async function addManualItem(
     text: string,
@@ -388,40 +654,43 @@ export function createDataLayer(client: SupabaseClient<Database>) {
   ): Promise<ShoppingListItemId> {
     const itemText = text.trim();
     if (!itemText) throw new DataError('item_text_required', 'Type what you need to buy.');
-    const { data, error } = await client.rpc('add_manual_item', {
-      item_text: itemText,
-      ingredient_name: normaliseIngredientName(itemText),
-      item_id: options.id,
-    });
-    if (error) fail(error);
-    if (!data) throw new DataError('shopping_list_item_id_taken', 'That item id is already in use.');
-    return parseShoppingListItemId(data);
+    const itemId = options.id ?? parseShoppingListItemId(newId());
+    await changeShoppingList({ kind: 'addManualItem', itemId, text: itemText });
+    return itemId;
   }
-
-  const itemGone = () =>
-    new DataError('shopping_list_item_not_found', 'That item is no longer on the Shopping List.');
 
   /**
    * Checks an item off. Its Ingredient, if it has one, goes into the list owner's Pantry. Checking
-   * off a checked item changes nothing.
+   * off a checked item changes nothing. Works with no signal (see `changeShoppingList`); if the
+   * item changed after this check was made, the later change stands.
    */
   async function checkOff(itemId: ShoppingListItemId): Promise<void> {
-    const { data, error } = await client.rpc('check_off', { item_id: itemId });
-    if (error) fail(error);
-    if (!data) throw itemGone();
+    await changeShoppingList({ kind: 'checkOff', itemId });
   }
 
-  /** Unchecks an item. The Pantry is left as it is. */
+  /** Unchecks an item. The Pantry is left as it is. Works with no signal, like `checkOff`. */
   async function uncheck(itemId: ShoppingListItemId): Promise<void> {
-    const { data, error } = await client.rpc('uncheck', { item_id: itemId });
-    if (error) fail(error);
-    if (!data) throw itemGone();
+    await changeShoppingList({ kind: 'uncheck', itemId });
   }
 
-  /** Takes one item off the Shopping List. Already gone is fine. */
+  /**
+   * Takes one item off the Shopping List. Already gone is fine. Needs a connection: the changes
+   * waiting on the phone are sent first, so an item added with no signal is there to remove.
+   */
   async function removeFromShoppingList(itemId: ShoppingListItemId): Promise<void> {
-    const { error } = await client.from('shopping_list_items').delete().eq('id', itemId);
+    const me = await currentUserId();
+    const lists = shoppingListOf(me);
+    await lists.ready;
+    const before = lists.queue.state();
+    if (before.status === 'offline' || before.queue.length > 0) await lists.queue.sync();
+    if (lists.queue.state().status === 'offline') throw needsConnection('Removing');
+    const { error, status } = await client.from('shopping_list_items').delete().eq('id', itemId);
+    if (notReached(status)) {
+      lists.queue.markUnreachable();
+      throw needsConnection('Removing');
+    }
     if (error) fail(error);
+    lists.forget(itemId);
   }
 
   /**
@@ -431,10 +700,14 @@ export function createDataLayer(client: SupabaseClient<Database>) {
   async function removeRecipeFromShoppingList(recipeId: RecipeId): Promise<void> {
     const { error } = await client.rpc('remove_recipe_from_shopping_list', { recipe_id: recipeId });
     if (error) fail(error);
+    shoppingListOf(await currentUserId()).refreshWatched();
   }
 
   return {
     getShoppingList,
+    watchShoppingList,
+    getListSync,
+    syncListChanges,
     addRecipeToShoppingList,
     addManualItem,
     checkOff,

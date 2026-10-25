@@ -10,8 +10,19 @@
  *
  * Where a checked-off line's Ingredient goes is decided by the `check_off` database function, not
  * here: it writes another user's Pantry, so the server can't take the client's word for it.
+ *
+ * It also puts a Shopping List in order, and shows it with the changes the phone hasn't sent yet.
  */
-import type { Ingredient, IngredientId, Recipe, RecipeId } from './types';
+import type {
+  Ingredient,
+  IngredientId,
+  Recipe,
+  RecipeId,
+  ShoppingList,
+  ShoppingListItem,
+  ShoppingListItemId,
+  UserId,
+} from './types';
 
 /** The parts of a Recipe the engine reads. */
 export type RecipeForList = Pick<Recipe, 'id' | 'lines'>;
@@ -44,4 +55,61 @@ export function toListLines(
     }
   }
   return [...lines.values()];
+}
+
+/** A change to a Shopping List the phone can make with no signal, queued until it's sent. */
+export type ListChange =
+  | { kind: 'checkOff'; itemId: ShoppingListItemId }
+  | { kind: 'uncheck'; itemId: ShoppingListItemId }
+  /** Something typed by hand, with the id the phone made for it. */
+  | { kind: 'addManualItem'; itemId: ShoppingListItemId; text: string };
+
+const compareText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/** An Ingredient line comes before a hand-added item of the same name. */
+const KIND_ORDER = { ingredient: 0, handAdded: 1 } as const;
+
+const itemName = (item: ShoppingListItem) =>
+  item.kind === 'ingredient' ? item.ingredient.name : item.text.toLowerCase();
+
+/** A Shopping List's order: by name (an Ingredient line's Ingredient, a hand-added item's text). */
+export function sortListItems(items: readonly ShoppingListItem[]): ShoppingListItem[] {
+  return [...items].sort(
+    (a, b) =>
+      compareText(itemName(a), itemName(b)) || KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || compareText(a.id, b.id),
+  );
+}
+
+/**
+ * The list as the phone shows it: the last list read from the server with the changes made since
+ * on top, in the order they were made. A check made here is by `me`, at the time it was made. An
+ * item added here has no Ingredient yet: the server matches it when it arrives. A change to an item
+ * that isn't on the list does nothing. Applying a change twice is the same as once.
+ */
+export function withListChanges(
+  list: ShoppingList,
+  changes: readonly { madeAt: string; change: ListChange }[],
+  me: UserId,
+): ShoppingList {
+  let items = list.items;
+  for (const { madeAt, change } of changes) {
+    if (change.kind === 'addManualItem') {
+      if (items.some((item) => item.id === change.itemId)) continue;
+      const added: ShoppingListItem = {
+        kind: 'handAdded',
+        id: change.itemId,
+        text: change.text,
+        ingredient: null,
+        check: { status: 'unchecked' },
+      };
+      items = [...items, added];
+      continue;
+    }
+    items = items.map((item) => {
+      if (item.id !== change.itemId) return item;
+      if (change.kind === 'uncheck') return { ...item, check: { status: 'unchecked' } };
+      return item.check.status === 'checked' ? item : { ...item, check: { status: 'checked', checkedAt: madeAt, checkedBy: me } };
+    });
+  }
+  return items === list.items ? list : { ...list, items: sortListItems(items) };
 }

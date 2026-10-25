@@ -1,8 +1,8 @@
 import pg from 'pg';
 import { inject } from 'vitest';
 
-import type { IngredientId, DataLayer, UserId } from '../src/data';
-import { signInAttacker } from './access-harness';
+import { createDataLayer, type DataLayer, type IngredientId, type KeyValueStorage, type UserId } from '../src/data';
+import { createTestAccount, createTestClient, signInAttacker } from './access-harness';
 
 export type TestUser = { userId: UserId; data: DataLayer };
 
@@ -62,4 +62,66 @@ export async function holdShoppingListLine(user: TestUser, ingredientId: Ingredi
       await session.end();
     },
   };
+}
+
+/** What a phone's app has saved: its storage's keys and values. */
+export type SavedOnPhone = ReadonlyMap<string, string>;
+
+export type TestPhone = TestUser & {
+  /** No signal: every request fails as it would in the app. */
+  goOffline(): void;
+  goOnline(): void;
+  /** Sets the phone's clock; list changes made from now on are stamped from it. */
+  setClock(at: Date): void;
+  /** A copy of what the app has saved on this phone. */
+  saved(): SavedOnPhone;
+  /** Writes into the app's storage, as an older app version or a cut-short write might have. */
+  overwriteSaved(key: string, value: string): void;
+  /** The app started again on this phone, still signed in, from what it saved (or from `saved`). */
+  relaunch(saved?: SavedOnPhone): TestPhone;
+};
+
+/**
+ * The same new user signed in on `count` phones. Each phone has its own app (data layer), storage,
+ * clock and signal. Behaviour tests reach the app only through `data`, as with `signInTestUser`.
+ */
+export async function signInOnPhones(label: string, count: number): Promise<TestPhone[]> {
+  const account = await createTestAccount(label);
+  return Promise.all(
+    Array.from({ length: count }, async () => {
+      let offline = false;
+      const fetchThroughSignal: typeof fetch = (input, init) =>
+        offline ? Promise.reject(new TypeError('Network request failed')) : fetch(input, init);
+      const client = createTestClient(fetchThroughSignal);
+      const network = { goOffline: () => void (offline = true), goOnline: () => void (offline = false) };
+      const first = createPhone(client, network, new Map());
+      await first.data.signInWithPassword(account);
+      const userId = (await first.data.getMyProfile()).id;
+
+      function createPhone(
+        phoneClient: typeof client,
+        signal: typeof network,
+        items: Map<string, string>,
+      ): Omit<TestPhone, 'userId'> {
+        let clock: number | null = null;
+        const storage: KeyValueStorage = {
+          getItem: async (key) => items.get(key) ?? null,
+          setItem: async (key, value) => void items.set(key, value),
+        };
+        const data = createDataLayer(phoneClient, {
+          storage,
+          now: () => (clock === null ? Date.now() : clock),
+        });
+        return {
+          data,
+          ...signal,
+          setClock: (at) => void (clock = at.getTime()),
+          saved: () => new Map(items),
+          overwriteSaved: (key, value) => void items.set(key, value),
+          relaunch: (saved) => ({ userId, ...createPhone(phoneClient, signal, new Map(saved ?? items)) }),
+        };
+      }
+      return { userId, ...first };
+    }),
+  );
 }

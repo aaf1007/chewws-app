@@ -105,6 +105,22 @@ export type ShoppingList = {
   recipes: { id: RecipeId; title: string }[];
 };
 
+/**
+ * Whether list changes made on this phone are waiting to reach the server. `idle`: none are, as far
+ * as the phone knows. `syncing`: sending them. `offline`: the last request didn't get through;
+ * `waiting` changes will be sent on reconnect.
+ */
+export type ListSync = { status: 'idle' | 'syncing' | 'offline'; waiting: number };
+
+/** A Shopping List as a screen shows it while it changes. */
+export type ShoppingListView =
+  /** Nothing to show yet: never seen on this phone, and being read. */
+  | { status: 'loading'; sync: ListSync }
+  /** The list with the changes made on this phone, sent or not. */
+  | { status: 'loaded'; list: ShoppingList; sync: ListSync }
+  /** Couldn't be read, and this phone has never seen it (code `offline` with no signal). */
+  | { status: 'failed'; error: DataError; sync: ListSync };
+
 export type IdTokenProvider = 'apple' | 'google';
 
 export class DataError extends Error {
