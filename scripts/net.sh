@@ -19,7 +19,12 @@ case "${1:-}" in
     echo "offline: $container paused"
     ;;
   online)
-    [ "$state" != paused ] || docker unpause "$container" >/dev/null
+    if [ "$state" = paused ]; then
+      docker unpause "$container" >/dev/null
+      # Kong's workers stop refreshing upstream addresses after a pause, so once `supabase db
+      # reset` restarts auth or storage at a new address it answers 502. Fresh workers don't.
+      docker exec "$container" kong reload >/dev/null
+    fi
     echo "online: $container running"
     ;;
   status)
