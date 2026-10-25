@@ -508,7 +508,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     // no signal, it waits.
     if (!(await hasSessionOf(me))) return { status: 'unreachable' };
     if (change.kind === 'addManualItem') {
-      const { data: id, error, status } = await client.rpc('add_manual_item', {
+      const { data: added, error, status } = await client.rpc('add_manual_item', {
         item_text: change.text,
         ingredient_name: normaliseIngredientName(change.text),
         item_id: change.itemId,
@@ -516,8 +516,11 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       });
       if (notReached(status)) return { status: 'unreachable' };
       if (error) return { status: 'refused', error: toDataError(error) };
-      if (!id) return { status: 'refused', error: idTaken() };
-      return { status: 'sent' };
+      if (added === 'added') return { status: 'sent' };
+      // Removed since it was first sent (that answer lost): it stays removed.
+      if (added === 'gone') return { status: 'dropped' };
+      if (added === 'taken') return { status: 'refused', error: idTaken() };
+      return { status: 'refused', error: new DataError('shopping_list_missing', 'You have no Shopping List.') };
     }
     const args = { item_id: change.itemId, changed_at: madeAt };
     const { data: found, error, status } =

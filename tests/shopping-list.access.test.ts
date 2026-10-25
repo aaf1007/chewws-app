@@ -164,7 +164,7 @@ test("a stranger's list functions cannot touch someone else's list or Pantry", a
   expect(checkOff).toMatchObject({ data: false, error: null });
   expect(uncheck).toMatchObject({ data: false, error: null });
   expect(addRecipe).toMatchObject({ data: false, error: null });
-  expect(takeId).toMatchObject({ data: null, error: null });
+  expect(takeId).toMatchObject({ data: 'taken', error: null });
   expect(removeRecipe.error).toBeNull();
   await expectOwnerListUnchanged();
   // And none of it landed on the stranger's own list or Pantry.

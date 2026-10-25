@@ -2,9 +2,9 @@
 // uncheck and add_manual_item directly, with change times of their choosing, as an attacker would.
 // The checks inside those functions are what have to stop them; and nobody, the owner included,
 // can stamp a change in the future to lock an item against later changes.
-import { expect, test } from 'vitest';
+import { expect, inject, test } from 'vitest';
 
-import { signInAttacker } from './access-harness';
+import { signInAttacker, type Attacker } from './access-harness';
 
 const longAgo = '2001-01-01T00:00:00Z';
 const farFuture = '2999-01-01T00:00:00Z';
@@ -53,7 +53,7 @@ test("a stranger's timestamped changes cannot check off, uncheck or take over so
   });
 
   for (const result of results) expect(result).toMatchObject({ data: false, error: null });
-  expect(takeId).toMatchObject({ data: null, error: null });
+  expect(takeId).toMatchObject({ data: 'taken', error: null });
   await expectOwnerListUnchanged();
   expect((await stranger.data.getShoppingList()).items).toEqual([]);
   expect((await stranger.data.getPantry()).ingredients).toEqual([]);
@@ -85,4 +85,57 @@ test('a change stamped in the future counts as made when it arrived, so it canno
     ['garlic', 'unchecked'],
     ['Paper towels', 'checked'],
   ]);
+});
+
+/** Reads, or writes into, a table through PostgREST as this user, bypassing the typed client. */
+async function callTable(user: Attacker, table: string, schema: string, insert?: object) {
+  const { url, anonKey } = inject('supabase');
+  const { data } = await user.client.auth.getSession();
+  if (!data.session) throw new Error('not signed in');
+  const res = await fetch(`${url}/rest/v1/${table}`, {
+    method: insert ? 'POST' : 'GET',
+    headers: {
+      apikey: anonKey,
+      Authorization: `Bearer ${data.session.access_token}`,
+      'Content-Type': 'application/json',
+      [insert ? 'Content-Profile' : 'Accept-Profile']: schema,
+    },
+    body: insert ? JSON.stringify(insert) : undefined,
+  });
+  return { status: res.status, body: await res.json() };
+}
+
+test('the record of removed items is not exposed through the Data API, and keeps an item removed only from its own list', async () => {
+  const { owner, stranger, towelsId } = await ownerListAndStranger();
+  await owner.data.removeFromShoppingList(towelsId);
+
+  for (const user of [owner, stranger]) {
+    expect(await callTable(user, 'removed_shopping_list_items', 'private')).toMatchObject({
+      status: 406,
+      body: { code: 'PGRST106' },
+    });
+    expect(
+      await callTable(user, 'removed_shopping_list_items', 'private', { item_id: towelsId, list_id: towelsId }),
+    ).toMatchObject({ status: 406, body: { code: 'PGRST106' } });
+    expect(await callTable(user, 'removed_shopping_list_items', 'public')).toMatchObject({
+      status: 404,
+      body: { code: 'PGRST205' },
+    });
+  }
+
+  // A stranger using the removed item's id adds it to their own list only; the owner's stays gone.
+  const strangerAdd = await stranger.client.rpc('add_manual_item', {
+    item_text: 'Paper towels',
+    ingredient_name: 'paper towel',
+    item_id: towelsId,
+  });
+  const ownerAdd = await owner.client.rpc('add_manual_item', {
+    item_text: 'Paper towels',
+    ingredient_name: 'paper towel',
+    item_id: towelsId,
+  });
+  expect(strangerAdd).toMatchObject({ data: 'added', error: null });
+  expect(ownerAdd).toMatchObject({ data: 'gone', error: null });
+  expect((await owner.data.getShoppingList()).items.map((i) => i.id)).not.toContain(towelsId);
+  expect((await stranger.data.getShoppingList()).items.map((i) => i.id)).toEqual([towelsId]);
 });

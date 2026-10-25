@@ -250,6 +250,33 @@ test('an offline change to an item removed meanwhile is dropped without an error
   expect(await pantryNames(other)).toEqual(['butter']);
 });
 
+test('an add sent again after its item was removed elsewhere (its answer lost) leaves the item removed', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  await listWithGarlicAndButter([phone, other]);
+  phone.goOffline();
+  const foil = await phone.data.addManualItem('Foil');
+  const queued = phone.saved();
+
+  // The add reaches the server, but its answer never reaches the phone: it's still queued there.
+  phone.goOnline();
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  const lost = phone.relaunch(queued);
+  expect(await lost.data.getListSync()).toEqual({ status: 'idle', waiting: 1 });
+
+  // Removed on the other phone, then the add is sent again.
+  await other.data.getShoppingList();
+  await other.data.removeFromShoppingList(foil);
+  expect(await lost.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+
+  expect(view(await other.data.getShoppingList())).toEqual([butterLine(true), garlicBread(false)]);
+  expect(view(await lost.data.getShoppingList())).toEqual([butterLine(true), garlicBread(false)]);
+  // Adding it by its id once more is reported as dropped: the item is gone.
+  await expect(phone.data.addManualItem('Foil', { id: foil })).rejects.toMatchObject({
+    code: 'shopping_list_item_not_found',
+  });
+  expect(view(await other.data.getShoppingList())).toEqual([butterLine(true), garlicBread(false)]);
+});
+
 test('queued changes and the last list seen outlive the app being closed with no signal', async () => {
   const [phone, other] = await signInOnPhones('shopper', 2);
   const { garlic } = await listWithGarlicAndButter([phone, other]);

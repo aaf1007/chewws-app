@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto';
+
 import { expect, test } from 'vitest';
 
-import type { RecipeLineInput, ShoppingList, ShoppingListItem } from '../src/data';
+import { parseShoppingListItemId, type RecipeLineInput, type ShoppingList, type ShoppingListItem } from '../src/data';
 import { holdShoppingListLine, signInTestUser, type TestUser } from './harness';
 
 /** The list as the user reads it: each line's name, its Recipes' amounts, and whether it's checked. */
@@ -234,10 +236,8 @@ test('the user adds hand-written items, linked to an Ingredient only when one of
 
 test('adding the same hand-written item twice with one id adds it once; different ones all land', async () => {
   const a = await signInTestUser('a');
-  const id = await a.data.addManualItem('Snacks');
-  await a.data.removeFromShoppingList(id);
-
   // The phone chose this id; sending the add twice at once is one item.
+  const id = parseShoppingListItemId(randomUUID());
   await Promise.all([a.data.addManualItem('Bin bags', { id }), a.data.addManualItem('Bin bags', { id })]);
   await expect(a.data.addManualItem('Bin bags', { id })).resolves.toBe(id);
   await Promise.all([a.data.addManualItem('Foil'), a.data.addManualItem('Foil'), a.data.addManualItem('Tea')]);

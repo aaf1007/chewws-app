@@ -5,6 +5,7 @@ export { validateRecipeInput, type RecipeInputError } from './recipe-input';
 export {
   DataError,
   parseRecipeId,
+  parseShoppingListItemId,
   type CheckState,
   type IdTokenProvider,
   type Ingredient,
