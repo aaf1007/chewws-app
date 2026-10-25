@@ -15,6 +15,7 @@ export { SearchField } from './search-field';
 export { SectionHeader } from './section-header';
 export { ShoppingListRow } from './shopping-list-row';
 export { StepEditor } from './step-editor';
+export { SyncNotice } from './sync-notice';
 export { StepNumber, StepRow } from './step-row';
 export { tabIcon, tabScreenOptions } from './tab-bar';
 export { Text, type TextProps } from './text';

@@ -20,6 +20,7 @@ import {
   ShoppingListRow,
   StepEditor,
   StepRow,
+  SyncNotice,
   Text,
   TextField,
   colors,
@@ -226,6 +227,11 @@ export default function UiGallery() {
         />
         <ShoppingListRow name="Garlic bread" action={{ label: 'Remove', onPress: noop }} />
       </View>
+
+      <SectionHeader title="Sync notices" />
+      <SyncNotice status="offline" message="You're offline. 3 changes will sync when you're back online." />
+      <SyncNotice status="offline" message="You're offline. This is your list as it was last loaded." />
+      <SyncNotice status="syncing" message="Syncing 2 changes…" />
 
       <SectionHeader title="Steps" />
       <StepRow number={1} text="Mash the garlic into the butter." />
