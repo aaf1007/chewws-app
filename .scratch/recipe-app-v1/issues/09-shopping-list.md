@@ -4,11 +4,11 @@
 
 **Blocked by:** 08 (Pantry and Staples).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Adding a Recipe adds only Ingredients the user doesn't have (Pantry or Staples)
-- [ ] Two Recipes needing the same Ingredient produce one line showing both amounts, labelled by Recipe
-- [ ] The user can add hand-written items
-- [ ] Checking off a Recipe Ingredient puts it in the user's Pantry; checking off a hand-added item that matches an Ingredient does too; one that doesn't changes no Pantry
-- [ ] The user can uncheck, remove an item, or remove all lines from one Recipe
-- [ ] Data-layer tests cover each of the rules above
+- [x] Adding a Recipe adds only Ingredients the user doesn't have (Pantry or Staples)
+- [x] Two Recipes needing the same Ingredient produce one line showing both amounts, labelled by Recipe
+- [x] The user can add hand-written items
+- [x] Checking off a Recipe Ingredient puts it in the user's Pantry; checking off a hand-added item that matches an Ingredient does too; one that doesn't changes no Pantry
+- [x] The user can uncheck, remove an item, or remove all lines from one Recipe
+- [x] Data-layer tests cover each of the rules above
