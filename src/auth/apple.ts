@@ -21,6 +21,8 @@ export async function signInWithApple(): Promise<'signedIn' | 'cancelled'> {
     });
   } catch (error) {
     if (hasCode(error, 'ERR_REQUEST_CANCELED')) return 'cancelled';
+    // iOS raises UNKNOWN, not CANCELED, when the user closes the "Sign in to your Apple Account" sheet.
+    if (hasCode(error, 'ERR_REQUEST_UNKNOWN')) return 'cancelled';
     throw error;
   }
 
