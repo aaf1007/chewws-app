@@ -34,6 +34,24 @@ export type Database = {
   }
   public: {
     Tables: {
+      ingredients: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           created_at: string
@@ -52,15 +70,97 @@ export type Database = {
         }
         Relationships: []
       }
+      recipe_lines: {
+        Row: {
+          amount_text: string | null
+          id: string
+          ingredient_id: string
+          original_text: string
+          position: number
+          recipe_id: string
+        }
+        Insert: {
+          amount_text?: string | null
+          id?: string
+          ingredient_id: string
+          original_text: string
+          position: number
+          recipe_id: string
+        }
+        Update: {
+          amount_text?: string | null
+          id?: string
+          ingredient_id?: string
+          original_text?: string
+          position?: number
+          recipe_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recipe_lines_ingredient_id_fkey"
+            columns: ["ingredient_id"]
+            isOneToOne: false
+            referencedRelation: "ingredients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recipe_lines_recipe_id_fkey"
+            columns: ["recipe_id"]
+            isOneToOne: false
+            referencedRelation: "recipes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      recipes: {
+        Row: {
+          created_at: string
+          id: string
+          owner_id: string
+          recipe_found: boolean
+          status: Database["public"]["Enums"]["recipe_status"]
+          steps: string[]
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          owner_id?: string
+          recipe_found?: boolean
+          status?: Database["public"]["Enums"]["recipe_status"]
+          steps?: string[]
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          owner_id?: string
+          recipe_found?: boolean
+          status?: Database["public"]["Enums"]["recipe_status"]
+          steps?: string[]
+          title?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      create_recipe: {
+        Args: { lines: Json; steps: string[]; title: string }
+        Returns: string
+      }
+      edit_recipe: {
+        Args: { lines: Json; recipe_id: string; steps: string[]; title: string }
+        Returns: string
+      }
     }
     Enums: {
-      [_ in never]: never
+      recipe_status: "draft" | "reviewed"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -190,7 +290,9 @@ export const Constants = {
     Enums: {},
   },
   public: {
-    Enums: {},
+    Enums: {
+      recipe_status: ["draft", "reviewed"],
+    },
   },
 } as const
 
