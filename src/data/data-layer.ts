@@ -2,12 +2,16 @@ import type { AuthError, PostgrestError, Session, SupabaseClient } from '@supaba
 
 import type { Database } from './database.types';
 import { normaliseIngredientName } from './ingredient-matcher';
+import { toListLines } from './list-engine';
 import { validateRecipeInput } from './recipe-input';
 import {
   DataError,
   parseIngredientId,
   parseRecipeId,
+  parseShoppingListId,
+  parseShoppingListItemId,
   parseUserId,
+  type CheckState,
   type IdTokenProvider,
   type Ingredient,
   type IngredientId,
@@ -18,6 +22,9 @@ import {
   type RecipeInput,
   type RecipeSummary,
   type SessionState,
+  type ShoppingList,
+  type ShoppingListItem,
+  type ShoppingListItemId,
   type UserId,
 } from './types';
 
@@ -25,6 +32,8 @@ type ProfileRow = Database['public']['Tables']['profiles']['Row'];
 type RecipeRow = Database['public']['Tables']['recipes']['Row'];
 type IngredientRow = Database['public']['Tables']['ingredients']['Row'];
 type RecipeLineRow = Database['public']['Tables']['recipe_lines']['Row'];
+type ShoppingListItemRow = Database['public']['Tables']['shopping_list_items']['Row'];
+type ShoppingListAmountRow = Database['public']['Tables']['shopping_list_amounts']['Row'];
 
 const RECIPE_WITH_LINES =
   '*, recipe_lines(position, original_text, amount_text, ingredient:ingredients(id, name))';
@@ -89,6 +98,51 @@ function toIngredientName(typed: string): string {
   if (!name) throw new DataError('ingredient_required', 'Type the name of an Ingredient.');
   return name;
 }
+
+const SHOPPING_LIST_WITH_ITEMS =
+  'id, owner_id, shopping_list_items(id, hand_added_text, checked_at, checked_by, ingredient:ingredients(id, name), shopping_list_amounts(amount_texts, created_at, recipe:recipes(id, title)))';
+
+const compareText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+function toCheckState(row: Pick<ShoppingListItemRow, 'checked_at' | 'checked_by'>): CheckState {
+  return row.checked_at === null
+    ? { status: 'unchecked' }
+    : {
+        status: 'checked',
+        checkedAt: row.checked_at,
+        checkedBy: row.checked_by === null ? null : parseUserId(row.checked_by),
+      };
+}
+
+function toShoppingListItem(
+  row: Pick<ShoppingListItemRow, 'id' | 'hand_added_text' | 'checked_at' | 'checked_by'> & {
+    ingredient: Pick<IngredientRow, 'id' | 'name'> | null;
+    shopping_list_amounts: (Pick<ShoppingListAmountRow, 'amount_texts' | 'created_at'> & {
+      recipe: Pick<RecipeRow, 'id' | 'title'>;
+    })[];
+  },
+): ShoppingListItem {
+  const id = parseShoppingListItemId(row.id);
+  const check = toCheckState(row);
+  const ingredient = row.ingredient ? toIngredient(row.ingredient) : null;
+  if (row.hand_added_text !== null) {
+    return { kind: 'handAdded', id, text: row.hand_added_text, ingredient, check };
+  }
+  if (!ingredient) throw new DataError('invalid_shopping_list_item', `Item ${row.id} has no Ingredient.`);
+  const recipes = [...row.shopping_list_amounts]
+    .sort((a, b) => compareText(a.created_at, b.created_at) || compareText(a.recipe.title, b.recipe.title))
+    .map((amount) => ({
+      recipe: { id: parseRecipeId(amount.recipe.id), title: amount.recipe.title },
+      amountTexts: amount.amount_texts,
+    }));
+  return { kind: 'ingredient', id, ingredient, recipes, check };
+}
+
+/** An Ingredient line comes before a hand-added item of the same name. */
+const KIND_ORDER = { ingredient: 0, handAdded: 1 } as const;
+
+const itemName = (item: ShoppingListItem) =>
+  item.kind === 'ingredient' ? item.ingredient.name : item.text.toLowerCase();
 
 function toProfile(row: ProfileRow): Profile {
   return { id: parseUserId(row.id), username: row.username, createdAt: row.created_at };
@@ -271,7 +325,122 @@ export function createDataLayer(client: SupabaseClient<Database>) {
     return data.map(parseIngredientId);
   }
 
+  /** The signed-in user's Shopping List. */
+  async function getShoppingList(): Promise<ShoppingList> {
+    const me = await currentUserId();
+    const { data, error } = await client
+      .from('shopping_lists')
+      .select(SHOPPING_LIST_WITH_ITEMS)
+      .eq('owner_id', me)
+      .maybeSingle();
+    if (error) fail(error);
+    if (!data) throw new DataError('shopping_list_missing', `No Shopping List for user ${me}.`);
+    const items = data.shopping_list_items
+      .map(toShoppingListItem)
+      .sort(
+        (a, b) =>
+          compareText(itemName(a), itemName(b)) ||
+          KIND_ORDER[a.kind] - KIND_ORDER[b.kind] ||
+          compareText(a.id, b.id),
+      );
+    const recipes = new Map(
+      items.flatMap((item) => (item.kind === 'ingredient' ? item.recipes : [])).map((r) => [r.recipe.id, r.recipe]),
+    );
+    return {
+      id: parseShoppingListId(data.id),
+      ownerId: parseUserId(data.owner_id),
+      items,
+      recipes: [...recipes.values()].sort((a, b) => compareText(a.title, b.title) || compareText(a.id, b.id)),
+    };
+  }
+
+  /**
+   * Puts the Ingredients one of the user's Recipes needs on their Shopping List, except those they
+   * have (Pantry or Staples). Each joins the line for its Ingredient, with this Recipe's amounts
+   * kept apart. Adding a Recipe that's already on the list changes nothing. Returns the
+   * Ingredients the Recipe needed that the user didn't have.
+   */
+  async function addRecipeToShoppingList(recipeId: RecipeId): Promise<Ingredient[]> {
+    const [recipe, had] = await Promise.all([getRecipe(recipeId), listIngredientsIHave()]);
+    if (!recipe) throw new DataError('recipe_not_found', 'That Recipe no longer exists.');
+    const lines = toListLines([recipe], new Set(had));
+    const { data, error } = await client.rpc('add_recipe_to_shopping_list', {
+      recipe_id: recipeId,
+      lines: lines.map((line) => ({
+        ingredient_id: line.ingredient.id,
+        amount_texts: line.amounts.flatMap((a) => a.amountTexts),
+      })),
+    });
+    if (error) fail(error);
+    if (!data) throw new DataError('recipe_not_found', 'That Recipe no longer exists.');
+    return lines.map((line) => line.ingredient);
+  }
+
+  /**
+   * Adds something typed by hand to the user's Shopping List. If its name is an existing
+   * Ingredient's, it's linked to it, so checking it off puts that Ingredient in the Pantry;
+   * otherwise ("paper towels") checking it off changes no Pantry. Pass `id` to choose the item's
+   * id, so adding the same item twice adds it once.
+   */
+  async function addManualItem(
+    text: string,
+    options: { id?: ShoppingListItemId } = {},
+  ): Promise<ShoppingListItemId> {
+    const itemText = text.trim();
+    if (!itemText) throw new DataError('item_text_required', 'Type what you need to buy.');
+    const { data, error } = await client.rpc('add_manual_item', {
+      item_text: itemText,
+      ingredient_name: normaliseIngredientName(itemText),
+      item_id: options.id,
+    });
+    if (error) fail(error);
+    if (!data) throw new DataError('shopping_list_item_id_taken', 'That item id is already in use.');
+    return parseShoppingListItemId(data);
+  }
+
+  const itemGone = () =>
+    new DataError('shopping_list_item_not_found', 'That item is no longer on the Shopping List.');
+
+  /**
+   * Checks an item off. Its Ingredient, if it has one, goes into the list owner's Pantry. Checking
+   * off a checked item changes nothing.
+   */
+  async function checkOff(itemId: ShoppingListItemId): Promise<void> {
+    const { data, error } = await client.rpc('check_off', { item_id: itemId });
+    if (error) fail(error);
+    if (!data) throw itemGone();
+  }
+
+  /** Unchecks an item. The Pantry is left as it is. */
+  async function uncheck(itemId: ShoppingListItemId): Promise<void> {
+    const { data, error } = await client.rpc('uncheck', { item_id: itemId });
+    if (error) fail(error);
+    if (!data) throw itemGone();
+  }
+
+  /** Takes one item off the Shopping List. Already gone is fine. */
+  async function removeFromShoppingList(itemId: ShoppingListItemId): Promise<void> {
+    const { error } = await client.from('shopping_list_items').delete().eq('id', itemId);
+    if (error) fail(error);
+  }
+
+  /**
+   * Takes all of one Recipe's lines off the Shopping List: its amounts go, and so does every line
+   * no other Recipe on the list needs. Not on the list is fine.
+   */
+  async function removeRecipeFromShoppingList(recipeId: RecipeId): Promise<void> {
+    const { error } = await client.rpc('remove_recipe_from_shopping_list', { recipe_id: recipeId });
+    if (error) fail(error);
+  }
+
   return {
+    getShoppingList,
+    addRecipeToShoppingList,
+    addManualItem,
+    checkOff,
+    uncheck,
+    removeFromShoppingList,
+    removeRecipeFromShoppingList,
     getPantry,
     addToPantry,
     markUsedUp,
