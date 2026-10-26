@@ -741,6 +741,45 @@ test('saved data the app cannot read is ignored: unreadable changes are skipped,
   screen.stop();
 });
 
+/** What an older version saved: hand-adds queued without the Shopping List they're for. */
+function withoutListIds(saved: ReadonlyMap<string, string>): Map<string, string> {
+  const older = new Map(saved);
+  for (const [key, value] of older) {
+    if (!key.startsWith('recipeapp.listChanges.')) continue;
+    const parsed: { queue: { change: Record<string, unknown> }[] } = JSON.parse(value);
+    for (const { change } of parsed.queue) delete change.listId;
+    older.set(key, JSON.stringify(parsed));
+  }
+  return older;
+}
+
+test('hand-adds an older version queued without their list go to the list the phone last saw for that user; with no list saved, they are skipped', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  await listWithGarlicAndButter([phone, other]);
+  phone.goOffline();
+  await phone.data.addManualItem('Foil');
+  await phone.data.addManualItem('Snacks');
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 2 });
+  const older = withoutListIds(phone.saved());
+
+  const noList = new Map(older);
+  noList.delete(`recipeapp.shoppingList.${phone.userId}`);
+  const skipped = phone.relaunch(noList);
+  skipped.goOnline();
+  expect(await skipped.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  expect(view(await other.data.getShoppingList())).toEqual([butterLine(true), garlicBread(false)]);
+
+  const reopened = phone.relaunch(older);
+  reopened.goOnline();
+  expect(await reopened.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  expect(view(await other.data.getShoppingList())).toEqual([
+    butterLine(true),
+    { handAdded: 'Foil', ingredient: null, checked: false },
+    garlicBread(false),
+    { handAdded: 'Snacks', ingredient: null, checked: false },
+  ]);
+});
+
 test('two phones syncing at once, each twice, send every change once', async () => {
   const [phoneA, phoneB] = await signInOnPhones('shopper', 2);
   const { garlic, butter } = await listWithGarlicAndButter([phoneA, phoneB]);

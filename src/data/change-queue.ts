@@ -308,6 +308,11 @@ export function createChangeQueue<C>(options: {
   key: string;
   parseChange: (raw: unknown) => C | null;
   /**
+   * Resolves once `parseChange` can read the changes saved, if it needs something read first (to
+   * fill in what an older version didn't save). They're read back after it.
+   */
+  parseAfter?: Promise<unknown>;
+  /**
    * Sends one change. `discarded()` says whether the queue has been thrown away since the send
    * began (`discard`, as when its user signs out): a send that waits before its request goes out,
    * say for a session to refresh, checks it after the wait, and sends nothing if so.
@@ -322,7 +327,7 @@ export function createChangeQueue<C>(options: {
   now: () => number;
   newId: () => string;
 }): ChangeQueue<C> {
-  const { storage, key, parseChange, send, nameOf, onDelivered, afterSync, now, newId } = options;
+  const { storage, key, parseChange, parseAfter, send, nameOf, onDelivered, afterSync, now, newId } = options;
   let state: QueueState<C> = { status: 'idle', queue: [], gaveUp: [] };
   let lastMadeAt = 0;
   const listeners = new Set<(state: QueueState<C>) => void>();
@@ -352,8 +357,9 @@ export function createChangeQueue<C>(options: {
     return saving;
   }
 
-  const ready = storage
-    .getItem(key)
+  const ready = Promise.resolve(parseAfter)
+    .catch(() => {})
+    .then(() => storage.getItem(key))
     .catch(() => null)
     .then((raw) => {
       const { queue, gaveUp } = parseSaved(raw, parseChange);

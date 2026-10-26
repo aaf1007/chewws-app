@@ -19,6 +19,7 @@ import type {
   Recipe,
   RecipeId,
   ShoppingList,
+  ShoppingListId,
   ShoppingListItem,
   ShoppingListItemId,
   UserId,
@@ -61,8 +62,11 @@ export function toListLines(
 export type ListChange =
   | { kind: 'checkOff'; itemId: ShoppingListItemId }
   | { kind: 'uncheck'; itemId: ShoppingListItemId }
-  /** Something typed by hand, with the id the phone made for it. */
-  | { kind: 'addManualItem'; itemId: ShoppingListItemId; text: string };
+  /**
+   * Something typed by hand, with the id the phone made for it, for the list `listId`: the server
+   * refuses it unless whoever sends it can use that list.
+   */
+  | { kind: 'addManualItem'; listId: ShoppingListId; itemId: ShoppingListItemId; text: string };
 
 const compareText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 

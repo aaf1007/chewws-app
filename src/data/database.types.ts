@@ -313,6 +313,7 @@ export type Database = {
           ingredient_name: string
           item_id?: string
           item_text: string
+          list_id: string
         }
         Returns: string
       }

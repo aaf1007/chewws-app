@@ -145,8 +145,9 @@ test("a stranger cannot remove someone else's items, Recipe amounts or Shopping 
 });
 
 test("a stranger's list functions cannot touch someone else's list or Pantry", async () => {
-  const { recipeId, garlic, butter, towelsId, stranger, strangerAttacker, expectOwnerListUnchanged } =
+  const { listId, recipeId, garlic, butter, towelsId, stranger, strangerAttacker, expectOwnerListUnchanged } =
     await ownerListAndStranger();
+  const strangerListId = (await strangerAttacker.data.getShoppingList()).id;
 
   const checkOff = await stranger.rpc('check_off', { item_id: garlic.id });
   const uncheck = await stranger.rpc('uncheck', { item_id: butter.id });
@@ -154,7 +155,13 @@ test("a stranger's list functions cannot touch someone else's list or Pantry", a
     recipe_id: recipeId,
     lines: [{ ingredient_id: garlic.ingredient.id, amount_texts: ['1 kg'] }],
   });
+  const addToList = await stranger.rpc('add_manual_item', {
+    list_id: listId,
+    item_text: 'Snacks',
+    ingredient_name: 'snack',
+  });
   const takeId = await stranger.rpc('add_manual_item', {
+    list_id: strangerListId,
     item_text: 'Snacks',
     ingredient_name: 'snack',
     item_id: towelsId,
@@ -164,6 +171,7 @@ test("a stranger's list functions cannot touch someone else's list or Pantry", a
   expect(checkOff).toMatchObject({ data: 'gone', error: null });
   expect(uncheck).toMatchObject({ data: 'gone', error: null });
   expect(addRecipe).toMatchObject({ data: null, error: null });
+  expect(addToList).toMatchObject({ data: null, error: null });
   expect(takeId).toMatchObject({ data: 'taken', error: null });
   expect(removeRecipe.error).toBeNull();
   await expectOwnerListUnchanged();

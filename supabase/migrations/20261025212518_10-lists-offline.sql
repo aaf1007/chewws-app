@@ -13,7 +13,9 @@
 -- `applied`, `superseded` (a later change made on a phone stands, so the phone reads the list
 -- again), or `gone` (the item is gone, or the caller can't use it; the phone drops the change). An
 -- add sent again for an item removed since (its first answer lost on the way back) says `gone` too:
--- removed items are recorded, so the add can't bring one back.
+-- removed items are recorded, so the add can't bring one back. An add names the list it's for, and
+-- is refused unless the caller can use that list, so a change sent with another user's session (one
+-- signed in on the same phone since it was made) can't land on theirs.
 
 drop function public.check_off(uuid);
 drop function public.uncheck(uuid);
@@ -129,11 +131,14 @@ begin
 end;
 $$;
 
--- As in ticket 09, plus `changed_at`: the item counts as made by a phone then, so checks the phone
--- made after adding it (sent after it, in order) aren't older than the item itself. Says what became of the
--- item: `added` (it's on the caller's list, now or already), `gone` (it was, and has been removed
--- since, so it stays removed), `taken` (the id is another list's item), or null with no list.
+-- As in ticket 09, plus `list_id` and `changed_at`. The item goes on the list `list_id`, which the
+-- caller must be able to use (private.can_use_shopping_list); it counts as made by a phone at
+-- `changed_at`, so checks the phone made after adding it (sent after it, in order) aren't older than
+-- the item itself. Says what became of the item: `added` (it's on that list, now or already), `gone`
+-- (it was, and has been removed since, so it stays removed), `taken` (the id is another list's
+-- item), or null when the caller can't use that list (someone else's, or none).
 create function public.add_manual_item(
+  list_id uuid,
   item_text text,
   ingredient_name text,
   item_id uuid default null,
@@ -145,11 +150,11 @@ security definer
 set search_path = ''
 as $$
 declare
-  list uuid := private.my_shopping_list();
+  list uuid := add_manual_item.list_id;
   new_id uuid := coalesce(add_manual_item.item_id, gen_random_uuid());
   made_at timestamptz := least(coalesce(add_manual_item.changed_at, now()), now());
 begin
-  if list is null then
+  if not private.can_use_shopping_list(list) then
     return null;
   end if;
   -- A removal of this item still under way would record it only once it commits, after the check
@@ -180,7 +185,7 @@ $$;
 
 revoke execute on function public.check_off(uuid, timestamptz) from public, anon;
 revoke execute on function public.uncheck(uuid, timestamptz) from public, anon;
-revoke execute on function public.add_manual_item(text, text, uuid, timestamptz) from public, anon;
+revoke execute on function public.add_manual_item(uuid, text, text, uuid, timestamptz) from public, anon;
 grant execute on function public.check_off(uuid, timestamptz) to authenticated;
 grant execute on function public.uncheck(uuid, timestamptz) to authenticated;
-grant execute on function public.add_manual_item(text, text, uuid, timestamptz) to authenticated;
+grant execute on function public.add_manual_item(uuid, text, text, uuid, timestamptz) to authenticated;

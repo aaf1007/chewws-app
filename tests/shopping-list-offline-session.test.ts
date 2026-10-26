@@ -635,3 +635,57 @@ test.each(REFRESH_REFUSALS)(
     session.stop();
   },
 );
+
+test.each(['its first send', 'the refresh after it'] as const)(
+  'a hand-add whose send gets a 401, while the user signs out and someone else signs in as %s is on the way: it never lands on their list, and is discarded with the sign-out',
+  async (window) => {
+    const [phone, other] = await signInOnPhones('shopper', 2);
+    const [next] = await signInOnPhones('next', 1);
+    await foilAndTowels([phone, other]);
+    phone.goOffline();
+    await phone.data.addManualItem('Snacks');
+
+    // Back online, the server refuses the access token the add goes out with, so the phone
+    // refreshes the session and sends it again. The request on the way is slow.
+    phone.goOnline();
+    phone.serverAnswersFor('add_manual_item', 401);
+    const send = phone.holdNextRequest('add_manual_item');
+    const syncing = phone.data.syncListChanges();
+    await send.reached;
+    const refresh = phone.holdNextRequest(REFRESH);
+    if (window === 'the refresh after it') {
+      send.release();
+      await refresh.reached;
+    }
+
+    // Meanwhile the user signs out (with no signal, so the server keeps their session and a
+    // refresh of it still gets through), and someone else signs in on the phone.
+    phone.goOffline();
+    await phone.data.signOut();
+    phone.goOnline();
+    expect(await phone.data.signInWithPassword(next.account)).toEqual(next.userId);
+    if (window === 'its first send') {
+      send.release();
+      // A refresh, if there is one, is now of the session signed in since.
+      await Promise.race([refresh.reached, syncing]);
+    }
+    phone.serverAnswersFor('add_manual_item', null);
+    refresh.release();
+    await syncing;
+
+    expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+    expect((await phone.data.getShoppingList()).items).toEqual([]);
+    expect((await next.data.getShoppingList()).items).toEqual([]);
+
+    // The user signs in again: the add went with their sign-out, as every change still waiting does.
+    await phone.data.signOut();
+    expect(await phone.data.signInWithPassword(phone.account)).toEqual(phone.userId);
+    expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+    const unchanged = [
+      { item: 'Foil', checked: false },
+      { item: 'Paper towels', checked: false },
+    ];
+    expect(view(await phone.data.getShoppingList())).toEqual(unchanged);
+    expect(view(await other.data.getShoppingList())).toEqual(unchanged);
+  },
+);
