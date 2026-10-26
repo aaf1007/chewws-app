@@ -604,6 +604,12 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       key: `recipeapp.listChanges.${me}`,
       parseChange: parseListChange,
       send: (change) => sendListChange(me, change),
+      // Named as the list shows it now: once given up, the item may go before the user is told.
+      nameOf({ change }) {
+        if (change.kind === 'addManualItem') return change.text;
+        const item = shown()?.items.find((i) => i.id === change.itemId);
+        return item ? nameOf(item) : 'an item';
+      },
       onDelivered({ madeAt, change }, delivery) {
         if (!lastSeen) return;
         if (delivery.status === 'sent') keep(withListChanges(lastSeen, [{ madeAt, change }], me));
@@ -638,14 +644,9 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       return lastSeen && withListChanges(lastSeen, queue.state().queue, me);
     }
 
-    /** The changes given up, named as the list shows their items. */
+    /** The changes given up, named as the list showed their items when they were. */
     function notSaved(): NotSavedListChange[] {
-      const items = shown()?.items ?? [];
-      return queue.state().gaveUp.map(({ change }) => {
-        const item = items.find((i) => i.id === change.itemId);
-        const itemName = change.kind === 'addManualItem' ? change.text : item ? nameOf(item) : 'an item';
-        return { kind: change.kind, itemName };
-      });
+      return queue.state().gaveUp.map(({ change, name }) => ({ kind: change.kind, itemName: name }));
     }
 
     function view(): ShoppingListView {
@@ -767,10 +768,13 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     return lists.sync();
   }
 
-  /** The user has seen the notice about list changes given up (`notSaved`): it goes. */
-  function dismissNotSavedListChanges(): void {
+  /**
+   * The user has seen the notice about list changes given up (`notSaved`): it goes, on this phone
+   * for good. Resolves once that's saved.
+   */
+  async function dismissNotSavedListChanges(): Promise<void> {
     const me = session.status === 'signedIn' ? session.userId : null;
-    if (me) shoppingLists.get(me)?.queue.dismissGaveUp();
+    if (me) await shoppingLists.get(me)?.queue.dismissGaveUp();
   }
 
   /**

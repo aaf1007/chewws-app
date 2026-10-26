@@ -12,10 +12,12 @@
  *   a change is made, and when the app calls it on coming to the foreground or on a timer.
  * - Changes are sent one at a time, oldest first. Sending is safe to repeat: if the answer to a
  *   change is lost, it's sent again and the server ends up the same.
- * - A server error (5xx) may pass, so the change waits too. One the server fails on
- *   `MAX_SERVER_FAILURES` times in a row (counted on the change, so across restarts) is given up:
- *   it leaves the queue, so the changes behind it are sent, and waits in `gaveUp` until whoever
- *   shows the list has told the user.
+ * - A server error (5xx) may pass, so the change waits too, and is tried again after a pause that
+ *   grows with each error in a row (`RETRY_DELAYS_MS`): it isn't sent before its `nextTryAt`,
+ *   whoever calls `sync`, and the changes behind it wait for it. Both are saved with the change, so
+ *   they outlive restarts. When its last retry fails too (about 21 minutes of errors), it's given
+ *   up: it leaves the queue, so the changes behind it are sent, and waits in `gaveUp` (saved too)
+ *   until whoever shows the list has told the user. No answer at all never counts.
  *
  * `nextQueueState` is the state machine, pure; `createChangeQueue` runs it.
  */
@@ -23,12 +25,38 @@ import { DataError } from './types';
 
 /**
  * A change made on this phone, waiting to be sent. `madeAt` is an ISO timestamp. `serverFailures`:
- * how many times in a row the server answered it with an error of its own (5xx).
+ * how many times in a row the server answered it with an error of its own (5xx). `nextTryAt`: after
+ * one, when it may be sent again (ms, from the phone's clock); null when it may be sent now.
  */
-export type QueuedChange<C> = { id: string; madeAt: string; change: C; serverFailures: number };
+export type QueuedChange<C> = {
+  id: string;
+  madeAt: string;
+  change: C;
+  serverFailures: number;
+  nextTryAt: number | null;
+};
 
-/** The server errors in a row after which a change is given up. */
-export const MAX_SERVER_FAILURES = 5;
+/** A change given up, with the name of what it changed, as the user knew it, for the notice. */
+export type GaveUpChange<C> = {
+  id: string;
+  madeAt: string;
+  change: C;
+  name: string;
+};
+
+/**
+ * How long a change waits after each server error in a row before it's tried again. When the try
+ * after the last pause fails too, about 21 minutes after the first error, it's given up.
+ */
+export const RETRY_DELAYS_MS = [10_000, 30_000, 60_000, 5 * 60_000, 15 * 60_000] as const;
+const LONGEST_DELAY_MS = 15 * 60_000;
+
+/**
+ * Whether a change may be sent at `now`. A next try further off than the longest pause means the
+ * phone's clock was turned back, so it's due.
+ */
+export const isDue = ({ nextTryAt }: QueuedChange<unknown>, now: number) =>
+  nextTryAt === null || now >= nextTryAt || nextTryAt - now > LONGEST_DELAY_MS;
 
 /**
  * `idle`: not sending, and the last request reached the server. `syncing`: sending the queue.
@@ -37,19 +65,26 @@ export const MAX_SERVER_FAILURES = 5;
 export type QueueState<C> = {
   status: 'idle' | 'syncing' | 'offline';
   queue: readonly QueuedChange<C>[];
-  /** Changes given up after `MAX_SERVER_FAILURES` server errors in a row, until `dismissed`. */
-  gaveUp: readonly QueuedChange<C>[];
+  /** Changes given up after their last retry failed, until `dismissed`. */
+  gaveUp: readonly GaveUpChange<C>[];
 };
 
 export type QueueEvent<C> =
   /** The changes saved on the phone, read back when the app starts. */
-  | { type: 'restored'; queue: readonly QueuedChange<C>[] }
+  | {
+      type: 'restored';
+      queue: readonly QueuedChange<C>[];
+      gaveUp: readonly GaveUpChange<C>[];
+    }
   | { type: 'queued'; change: QueuedChange<C> }
   | { type: 'syncStarted' }
   /** The server has the change, or has said it can never take it. */
   | { type: 'sent'; id: string }
-  /** The server answered the change with an error of its own (5xx). */
-  | { type: 'serverFailed'; id: string }
+  /**
+   * The server answered the change with an error of its own (5xx) at `at`. `name` is what it
+   * changed, kept if it's given up.
+   */
+  | { type: 'serverFailed'; id: string; at: number; name: string }
   /** The user has been told about the changes given up. */
   | { type: 'dismissed' }
   | { type: 'unreachable' }
@@ -62,7 +97,11 @@ export function nextQueueState<C>(state: QueueState<C>, event: QueueEvent<C>): Q
   switch (event.type) {
     case 'restored': {
       const restored = new Set(event.queue.map((c) => c.id));
-      return { ...state, queue: [...event.queue, ...state.queue.filter((c) => !restored.has(c.id))] };
+      return {
+        ...state,
+        queue: [...event.queue, ...state.queue.filter((c) => !restored.has(c.id))],
+        gaveUp: [...event.gaveUp, ...state.gaveUp],
+      };
     }
     case 'queued':
       return state.queue.some((c) => c.id === event.change.id)
@@ -75,11 +114,25 @@ export function nextQueueState<C>(state: QueueState<C>, event: QueueEvent<C>): Q
     case 'serverFailed': {
       const failed = state.queue.find((c) => c.id === event.id);
       if (!failed) return state;
-      const counted = { ...failed, serverFailures: failed.serverFailures + 1 };
-      if (counted.serverFailures < MAX_SERVER_FAILURES) {
-        return { ...state, queue: state.queue.map((c) => (c.id === event.id ? counted : c)) };
+      const serverFailures = failed.serverFailures + 1;
+      const delay: number | undefined = RETRY_DELAYS_MS[serverFailures - 1];
+      if (delay !== undefined) {
+        const counted = {
+          ...failed,
+          serverFailures,
+          nextTryAt: event.at + delay,
+        };
+        return {
+          ...state,
+          queue: state.queue.map((c) => (c.id === event.id ? counted : c)),
+        };
       }
-      return { ...state, queue: state.queue.filter((c) => c.id !== event.id), gaveUp: [...state.gaveUp, counted] };
+      const { id, madeAt, change } = failed;
+      return {
+        ...state,
+        queue: state.queue.filter((c) => c.id !== event.id),
+        gaveUp: [...state.gaveUp, { id, madeAt, change, name: event.name }],
+      };
     }
     case 'dismissed':
       return { ...state, gaveUp: [] };
@@ -130,27 +183,53 @@ export function memoryStorage(): KeyValueStorage {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-/** The saved queue, skipping anything that isn't a change this app can send. */
-function parseQueue<C>(raw: string | null, parseChange: (raw: unknown) => C | null): QueuedChange<C>[] {
-  if (raw === null) return [];
+type Saved<C> = { queue: QueuedChange<C>[]; gaveUp: GaveUpChange<C>[] };
+
+/** A saved change's id, time and change, or null if it isn't a change this app can send. */
+function parseEntry<C>(entry: unknown, parseChange: (raw: unknown) => C | null) {
+  if (!isRecord(entry) || typeof entry.id !== 'string' || typeof entry.madeAt !== 'string') return null;
+  if (Number.isNaN(Date.parse(entry.madeAt))) return null;
+  const change = parseChange(entry.change);
+  return change === null ? null : { entry, id: entry.id, madeAt: entry.madeAt, change };
+}
+
+/**
+ * The saved queue and changes given up, skipping anything this app can't read. An older version
+ * saved the queue alone, as an array.
+ */
+function parseSaved<C>(raw: string | null, parseChange: (raw: unknown) => C | null): Saved<C> {
+  const saved: Saved<C> = { queue: [], gaveUp: [] };
+  if (raw === null) return saved;
   let value: unknown;
   try {
     value = JSON.parse(raw);
   } catch {
-    return [];
+    return saved;
   }
-  if (!Array.isArray(value)) return [];
-  const queue: QueuedChange<C>[] = [];
-  for (const entry of value) {
-    if (!isRecord(entry) || typeof entry.id !== 'string' || typeof entry.madeAt !== 'string') continue;
-    if (Number.isNaN(Date.parse(entry.madeAt))) continue;
-    const change = parseChange(entry.change);
+  const queue: unknown = Array.isArray(value) ? value : isRecord(value) ? value.queue : null;
+  const gaveUp: unknown = isRecord(value) ? value.gaveUp : null;
+  for (const raw of Array.isArray(queue) ? queue : []) {
+    const parsed = parseEntry(raw, parseChange);
+    if (!parsed) continue;
+    const { entry, id, madeAt, change } = parsed;
     // Saved before failures were counted, or unreadable: none yet.
     const failures = entry.serverFailures;
     const serverFailures = typeof failures === 'number' && Number.isInteger(failures) && failures >= 0 ? failures : 0;
-    if (change !== null) queue.push({ id: entry.id, madeAt: entry.madeAt, change, serverFailures });
+    const nextTryAt = typeof entry.nextTryAt === 'number' && Number.isFinite(entry.nextTryAt) ? entry.nextTryAt : null;
+    saved.queue.push({ id, madeAt, change, serverFailures, nextTryAt });
   }
-  return queue;
+  for (const raw of Array.isArray(gaveUp) ? gaveUp : []) {
+    const parsed = parseEntry(raw, parseChange);
+    if (parsed && typeof parsed.entry.name === 'string') {
+      saved.gaveUp.push({
+        id: parsed.id,
+        madeAt: parsed.madeAt,
+        change: parsed.change,
+        name: parsed.entry.name,
+      });
+    }
+  }
+  return saved;
 }
 
 export type ChangeQueue<C> = {
@@ -164,8 +243,8 @@ export type ChangeQueue<C> = {
   markUnreachable(): void;
   /** Throws away every change waiting, unsent; whoever waits on one hears it's refused with `error`. */
   discard(error: DataError): Promise<void>;
-  /** The user has been told about the changes given up: forgets them. */
-  dismissGaveUp(): void;
+  /** The user has been told about the changes given up: forgets them. Resolves once saved. */
+  dismissGaveUp(): Promise<void>;
   state(): QueueState<C>;
   subscribe(listener: (state: QueueState<C>) => void): () => void;
 };
@@ -175,6 +254,8 @@ export function createChangeQueue<C>(options: {
   key: string;
   parseChange: (raw: unknown) => C | null;
   send: (change: QueuedChange<C>) => Promise<Delivery>;
+  /** What the change changed, as the user knows it, to name it if it's given up. */
+  nameOf: (change: QueuedChange<C>) => string;
   /** Runs before a sent change leaves the queue, so whoever shows it can keep showing it. */
   onDelivered: (change: QueuedChange<C>, delivery: Delivered) => void;
   /** Runs once the queue is empty, e.g. to read the list again. Says whether the server was reached. */
@@ -182,7 +263,7 @@ export function createChangeQueue<C>(options: {
   now: () => number;
   newId: () => string;
 }): ChangeQueue<C> {
-  const { storage, key, parseChange, send, onDelivered, afterSync, now, newId } = options;
+  const { storage, key, parseChange, send, nameOf, onDelivered, afterSync, now, newId } = options;
   let state: QueueState<C> = { status: 'idle', queue: [], gaveUp: [] };
   let lastMadeAt = 0;
   const listeners = new Set<(state: QueueState<C>) => void>();
@@ -201,7 +282,10 @@ export function createChangeQueue<C>(options: {
   // Saves run one after another, each writing the queue as it was when it was asked for.
   let saving: Promise<void> = Promise.resolve();
   function save(): Promise<void> {
-    const snapshot = JSON.stringify(state.queue);
+    const snapshot = JSON.stringify({
+      queue: state.queue,
+      gaveUp: state.gaveUp,
+    });
     saving = saving.then(() => storage.setItem(key, snapshot)).catch(() => {});
     return saving;
   }
@@ -210,9 +294,9 @@ export function createChangeQueue<C>(options: {
     .getItem(key)
     .catch(() => null)
     .then((raw) => {
-      const restored = parseQueue(raw, parseChange);
-      lastMadeAt = Math.max(0, ...restored.map((c) => Date.parse(c.madeAt)));
-      dispatch({ type: 'restored', queue: restored });
+      const { queue, gaveUp } = parseSaved(raw, parseChange);
+      lastMadeAt = Math.max(0, ...queue.map((c) => Date.parse(c.madeAt)));
+      dispatch({ type: 'restored', queue, gaveUp });
     });
 
   /** The server wasn't reached: whoever is waiting on a change hears it's queued. */
@@ -225,6 +309,11 @@ export function createChangeQueue<C>(options: {
     const wasOffline = state.status === 'offline';
     dispatch({ type: 'syncStarted' });
     for (let head = state.queue[0]; head; head = state.queue[0]) {
+      // The server failed on it a moment ago: it, and the changes behind it, wait for its next try.
+      if (!isDue(head, now())) {
+        wentOffline();
+        return;
+      }
       let delivery: Delivery;
       try {
         delivery = await send(head);
@@ -239,7 +328,12 @@ export function createChangeQueue<C>(options: {
         return;
       }
       if (delivery.status === 'serverFailed') {
-        dispatch({ type: 'serverFailed', id: head.id });
+        dispatch({
+          type: 'serverFailed',
+          id: head.id,
+          at: now(),
+          name: nameOf(head),
+        });
         await save();
         if (state.queue.some((c) => c.id === head.id)) {
           wentOffline();
@@ -290,6 +384,7 @@ export function createChangeQueue<C>(options: {
       madeAt: new Date(lastMadeAt).toISOString(),
       change,
       serverFailures: 0,
+      nextTryAt: null,
     };
     dispatch({ type: 'queued', change: queued });
     await save();
@@ -311,7 +406,11 @@ export function createChangeQueue<C>(options: {
       await save();
       for (const id of [...waiting.keys()]) settle(id, { status: 'refused', error });
     },
-    dismissGaveUp: () => dispatch({ type: 'dismissed' }),
+    async dismissGaveUp() {
+      await ready;
+      dispatch({ type: 'dismissed' });
+      await save();
+    },
     state: () => state,
     subscribe(listener) {
       listeners.add(listener);

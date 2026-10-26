@@ -105,7 +105,7 @@ export default function ShoppingList() {
           key={i}
           status="notSaved"
           message={notSavedMessage(change)}
-          action={i === state.notSaved.length - 1 ? { label: 'OK', onPress: data.dismissNotSavedListChanges } : undefined}
+          action={i === state.notSaved.length - 1 ? { label: 'OK', onPress: () => void data.dismissNotSavedListChanges() } : undefined}
           testID="shopping-list-not-saved"
         />
       ))}
