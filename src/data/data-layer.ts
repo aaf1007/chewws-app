@@ -2,7 +2,6 @@ import {
   isAuthRetryableFetchError,
   type AuthError,
   type PostgrestError,
-  type Session,
   type SupabaseClient,
 } from '@supabase/supabase-js';
 
@@ -173,6 +172,25 @@ function parseSavedUserId(raw: string | null): UserId | null {
   }
 }
 
+/** A session the auth client kept on the phone, as much of it as ending it needs. */
+type KeptSession = { accessToken: string; refreshToken: string; expiresAt: number | null };
+
+/** A session as the auth client saved it, or null if `raw` isn't one. */
+function parseKeptSession(raw: string): KeptSession | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof value !== 'object' || value === null) return null;
+  const accessToken = 'access_token' in value ? value.access_token : null;
+  const refreshToken = 'refresh_token' in value ? value.refresh_token : null;
+  const expiresAt = 'expires_at' in value ? value.expires_at : null;
+  if (typeof accessToken !== 'string' || typeof refreshToken !== 'string') return null;
+  return { accessToken, refreshToken, expiresAt: typeof expiresAt === 'number' ? expiresAt : null };
+}
+
 const sameSession = (a: SessionState, b: SessionState) =>
   a.status === b.status && (a.status !== 'signedIn' || (b.status === 'signedIn' && a.userId === b.userId));
 
@@ -208,10 +226,10 @@ export type DataLayerOptions = {
   /** Makes a fresh UUID, for items added on the phone and its queued changes. */
   newId?: () => string;
   /**
-   * Where the auth client keeps its session (the same object as its `auth.storage`), so signing
-   * out ends it on the phone at once, signal or not. Without it, signing out waits on the auth client.
+   * Where the auth client keeps its session (the same object as its `auth.storage`), so the data
+   * layer ends it on the phone itself, at once, signal or not.
    */
-  sessionStorage?: SessionStorage;
+  sessionStorage: SessionStorage;
 };
 
 /**
@@ -219,7 +237,8 @@ export type DataLayerOptions = {
  * requests fail, the phone is offline, and Shopping List changes wait on the phone (see
  * `change-queue.ts`) until `syncListChanges` or the next change gets them through.
  */
-export function createDataLayer(client: SupabaseClient<Database>, options: DataLayerOptions = {}) {
+export function createDataLayer(client: SupabaseClient<Database>, options: DataLayerOptions) {
+  const { sessionStorage } = options;
   const storage = options.storage ?? memoryStorage();
   const now = options.now ?? Date.now;
   const newId = options.newId ?? (() => crypto.randomUUID());
@@ -235,8 +254,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
 
   // Who is signed in on this phone. The auth client says, but its session runs out after an hour
   // and only a signal can refresh it: until then it has no session to give, and the user is still
-  // signed in. So the phone remembers who signed in, and forgets them only on a real sign-out,
-  // which includes a refresh the server refuses (the auth client then reports SIGNED_OUT).
+  // signed in. So the phone remembers who signed in, and forgets them only when their session ends
+  // on this phone (`endSessionOnPhone`): signing out, or a refresh the server refuses.
   const signedInKey = 'recipeapp.signedInUser';
   let session: SessionState = { status: 'loading' };
   let remembered: Promise<UserId | null> = storage
@@ -244,21 +263,41 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     .then(parseSavedUserId)
     .catch(() => null);
   let savingSignedIn: Promise<void> = Promise.resolve();
-  let authEvents = 0;
-  /** The session the auth client last reported, to end it on the server when signing out. */
-  let heldSession: Session | null = null;
   const sessionWatchers = new Set<(state: SessionState) => void>();
+
+  // Signing in and ending a session on this phone take turns: each runs once the one asked for
+  // before it is done, so a sign-in waits for a sign-out still finishing. `turn` counts every
+  // change of who holds the session (a sign-in, a session ended, a session the auth client
+  // reports), so a session end the auth client asked for before one of them is stale.
+  let turn = 0;
+  let lastInTurn: Promise<unknown> = Promise.resolve();
+  function inTurn<T>(op: () => Promise<T>): Promise<T> {
+    const run = lastInTurn.then(op);
+    lastInTurn = run.catch(() => {});
+    return run;
+  }
+  /** The refresh tokens of sessions ended on this phone. The auth client may yet report one it held. */
+  const ended = new Set<string>();
+
+  function remember(id: UserId | null): Promise<void> {
+    remembered = Promise.resolve(id);
+    const save = () => (id ? storage.setItem(signedInKey, JSON.stringify(id)) : storage.removeItem(signedInKey));
+    savingSignedIn = savingSignedIn.then(save).catch(() => {});
+    return savingSignedIn;
+  }
 
   function setSession(next: SessionState) {
     if (sameSession(session, next)) return;
     session = next;
-    if (next.status !== 'loading') {
-      const id = next.status === 'signedIn' ? next.userId : null;
-      remembered = Promise.resolve(id);
-      const saved = JSON.stringify(id);
-      savingSignedIn = savingSignedIn.then(() => storage.setItem(signedInKey, saved)).catch(() => {});
-    }
+    if (next.status === 'signedIn') void remember(next.userId);
     for (const watcher of sessionWatchers) watcher(next);
+  }
+
+  /** A session the auth client holds, for a sign-in or one it reports: that user is signed in. */
+  function signedInAs(id: UserId): UserId {
+    turn += 1;
+    setSession({ status: 'signedIn', userId: id });
+    return id;
   }
 
   // Until the auth client answers (with no signal, after it gives up refreshing), the user
@@ -268,29 +307,67 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   });
 
   /**
+   * Why a session ends on this phone. `signedOut`: the user signed out. The auth client asks for
+   * the others, at `turn` `seen`: `refused`, it dropped the session because the server refused to
+   * refresh it (revoked, or signed out everywhere); `noSession`, the app started and it had no
+   * session it could use, and not for lack of a signal.
+   */
+  type SessionEnd = { reason: 'signedOut' } | { reason: 'refused' | 'noSession'; seen: number };
+
+  /**
+   * Ends the session on this phone; the only thing that does. The session the auth client kept is
+   * cleared, the phone forgets who signed in, their Shopping List changes still waiting are thrown
+   * away unsent with the list last seen, and then they're signed out. Runs in turn. An end the
+   * auth client asked for does nothing if someone signed in or out since, or if the auth client
+   * holds a session not ended here: that session is newer, and never this end's to end. Returns
+   * the sessions cleared, to end them on the server too.
+   */
+  function endSessionOnPhone(end: SessionEnd): Promise<KeptSession[]> {
+    return inTurn(async () => {
+      if (end.reason !== 'signedOut') {
+        if (turn !== end.seen) return [];
+        const kept = (await sessionStorage.saved()).map(parseKeptSession);
+        if (kept.some((s) => s !== null && !ended.has(s.refreshToken))) return [];
+      }
+      turn += 1;
+      const me = session.status === 'signedIn' ? session.userId : await remembered;
+      const cleared = (await sessionStorage.clear()).map(parseKeptSession).filter((s) => s !== null);
+      for (const { refreshToken } of cleared) ended.add(refreshToken);
+      await remember(null);
+      if (me) {
+        const list = shoppingListOf(me);
+        shoppingLists.delete(me);
+        await list.discard();
+      }
+      setSession({ status: 'signedOut' });
+      return cleared;
+    });
+  }
+
+  /**
    * The auth client started without a session: there is none, or it couldn't refresh it for lack
    * of a signal (a network failure, not an answer from the server). Only the first signs out.
    */
-  async function settleWithoutSession(seenEvents: number) {
+  async function settleWithoutSession(seen: number) {
     const { data, error } = await client.auth.getSession();
     const id = await remembered;
-    if (authEvents !== seenEvents) return; // A sign-in or sign-out since has the say.
-    if (data.session) setSession({ status: 'signedIn', userId: parseUserId(data.session.user.id) });
+    if (turn !== seen) return; // A sign-in, a sign-out or a session reported since has the say.
+    if (data.session && !ended.has(data.session.refresh_token)) signedInAs(parseUserId(data.session.user.id));
     else if (id && error && isAuthRetryableFetchError(error)) setSession({ status: 'signedIn', userId: id });
-    else setSession({ status: 'signedOut' });
+    else await endSessionOnPhone({ reason: 'noSession', seen });
   }
 
   client.auth.onAuthStateChange((event, authSession) => {
-    authEvents += 1;
-    heldSession = authSession;
     if (authSession) {
-      setSession({ status: 'signedIn', userId: parseUserId(authSession.user.id) });
+      // One ended on this phone, as the auth client held it before then, has no say.
+      if (!ended.has(authSession.refresh_token)) signedInAs(parseUserId(authSession.user.id));
     } else if (event === 'INITIAL_SESSION') {
       // Asking the auth client from inside its own callback would wait on itself.
-      const seen = authEvents;
+      const seen = turn;
       setTimeout(() => void settleWithoutSession(seen), 0);
     } else if (event === 'SIGNED_OUT') {
-      setSession({ status: 'signedOut' });
+      // Not waited on: the auth client waits on this callback, maybe in the middle of a sync.
+      void endSessionOnPhone({ reason: 'refused', seen: turn });
     }
   });
 
@@ -320,55 +397,49 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     return data.session?.user.id === me;
   }
 
-  async function signInWithIdToken(input: {
-    provider: IdTokenProvider;
-    token: string;
-    nonce?: string;
-  }): Promise<UserId> {
-    const { data, error } = await client.auth.signInWithIdToken(input);
-    if (error) fail(error);
-    const id = parseUserId(data.user.id);
-    setSession({ status: 'signedIn', userId: id });
-    return id;
+  /** Signs in, once any sign-out still finishing is done. */
+  function signInWithIdToken(input: { provider: IdTokenProvider; token: string; nonce?: string }): Promise<UserId> {
+    return inTurn(async () => {
+      const { data, error } = await client.auth.signInWithIdToken(input);
+      if (error) fail(error);
+      return signedInAs(parseUserId(data.user.id));
+    });
   }
 
-  async function signInWithPassword(input: { email: string; password: string }): Promise<UserId> {
-    const { data, error } = await client.auth.signInWithPassword(input);
-    if (error) fail(error);
-    const id = parseUserId(data.user.id);
-    setSession({ status: 'signedIn', userId: id });
-    return id;
+  /** Signs in, once any sign-out still finishing is done. */
+  function signInWithPassword(input: { email: string; password: string }): Promise<UserId> {
+    return inTurn(async () => {
+      const { data, error } = await client.auth.signInWithPassword(input);
+      if (error) fail(error);
+      return signedInAs(parseUserId(data.user.id));
+    });
   }
 
   /**
-   * Signs out on this phone at once, signal or not: the phone forgets the user, the session the
-   * auth client saved, and the user's Shopping List (its changes still waiting are thrown away, so
-   * they're never sent, as them or as whoever signs in next). Then, if the server can be reached,
-   * this phone's session ends there too. The user's other phones stay signed in.
+   * Signs out on this phone at once, signal or not (`endSessionOnPhone`): the phone forgets the
+   * user, the session the auth client saved, and the user's Shopping List (its changes still
+   * waiting are thrown away, so they're never sent, as them or as whoever signs in next). Then, if
+   * the server can be reached, this phone's session ends there too. The user's other phones stay
+   * signed in.
    */
   async function signOut(): Promise<void> {
-    const me = await listOwner();
-    const held = heldSession;
-    authEvents += 1; // A session the auth client was still settling has no say any more.
-    await options.sessionStorage?.clear();
-    setSession({ status: 'signedOut' });
-    if (me) {
-      await shoppingListOf(me).discard();
-      shoppingLists.delete(me);
-    }
-    await endSessionOnServer(held);
+    await endOnServer(await endSessionOnPhone({ reason: 'signedOut' }));
   }
 
-  /** Best effort: with no signal, or a session that ran out, the server keeps it until it expires. */
-  async function endSessionOnServer(held: Session | null) {
-    try {
-      if (held?.expires_at && held.expires_at * 1000 > Date.now()) {
-        await client.auth.admin.signOut(held.access_token, 'local');
+  /**
+   * Best effort: ends on the server the sessions just cleared from this phone, each by its own
+   * access token, so it can never end a session made since. With no signal, or an access token
+   * that ran out (refreshing it would hand the auth client a session again), the server keeps the
+   * session until its refresh token expires; the phone no longer has it.
+   */
+  async function endOnServer(sessions: KeptSession[]) {
+    for (const { accessToken, expiresAt } of sessions) {
+      if (expiresAt === null || expiresAt * 1000 <= Date.now()) continue;
+      try {
+        await client.auth.admin.signOut(accessToken, 'local');
+      } catch {
+        // Signed out on the phone already.
       }
-      // Lets the auth client let go of the session too. It has none saved any more, so it asks no server.
-      await client.auth.signOut({ scope: 'local' });
-    } catch {
-      // Signed out on the phone already.
     }
   }
 

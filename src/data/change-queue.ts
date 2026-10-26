@@ -168,6 +168,7 @@ export type ChangeOutcome = Delivered | { status: 'queued' };
 export type KeyValueStorage = {
   getItem(key: string): Promise<string | null>;
   setItem(key: string, value: string): Promise<void>;
+  removeItem(key: string): Promise<void>;
 };
 
 export function memoryStorage(): KeyValueStorage {
@@ -176,6 +177,9 @@ export function memoryStorage(): KeyValueStorage {
     getItem: async (key) => items.get(key) ?? null,
     setItem: async (key, value) => {
       items.set(key, value);
+    },
+    removeItem: async (key) => {
+      items.delete(key);
     },
   };
 }

@@ -268,3 +268,49 @@ test("signing out with a signal ends this phone's session on the server too; the
   copySession.stop();
   otherSession.stop();
 });
+
+/**
+ * Started with no signal and the access token run out, the app's auth client retries refreshing it
+ * for about 25 seconds, waiting longer each time (0.2 s, 0.4 s, 0.8 s…). With a signal back 2
+ * seconds in, its next retry, about 3 seconds in, gets through; this is comfortably after that.
+ */
+const STARTUP_REFRESH_DONE_MS = 6_000;
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test.each(['someone else', 'the same user'] as const)(
+  'signed out while the app was still starting with no signal and the access token run out, then %s signs in once there is a signal: they stay signed in, and their session still works',
+  async (who) => {
+    const [phone] = await signInOnPhones('shopper', 1, { autoRefreshToken: true });
+    const [next] = await signInOnPhones('next', 1);
+    const { account, userId } = who === 'someone else' ? next : phone;
+    phone.expireAccessToken();
+    phone.goOffline();
+    const started = phone.relaunch();
+    const session = watchSession(started);
+    await vi.waitFor(() => expect(session.last()).toEqual(signedIn(phone)));
+    // The app shows the user signed out as soon as the phone says so, without waiting for more.
+    const signingOut = started.data.signOut();
+    await vi.waitFor(() => expect(session.last()).toEqual(signedOut));
+
+    // The auth client is still trying to refresh the session it started with.
+    await wait(2_000);
+    started.goOnline();
+    expect(await started.data.signInWithPassword(account)).toEqual(userId);
+    await wait(STARTUP_REFRESH_DONE_MS);
+    await signingOut;
+    expect(session.last()).toEqual({ status: 'signedIn', userId });
+    expect((await started.data.getMyProfile()).id).toEqual(userId);
+
+    // Their session wasn't ended on the server: opened again with its access token run out, the
+    // app refreshes it.
+    started.expireAccessToken();
+    const reopened = started.relaunch();
+    const reopenedSession = watchSession(reopened);
+    expect((await reopened.data.getMyProfile()).id).toEqual(userId);
+    expect(reopenedSession.states).toEqual([{ status: 'signedIn', userId }]);
+    session.stop();
+    reopenedSession.stop();
+  },
+  RUN_OUT_TEST_TIMEOUT_MS,
+);

@@ -157,12 +157,24 @@ function expireSavedSession(items: Map<string, string>) {
   }
 }
 
+export type PhoneOptions = {
+  /**
+   * The auth client refreshes its session when the app starts and on a timer, as the app's does.
+   * Off by default: tests then decide when a session is refreshed.
+   */
+  autoRefreshToken?: boolean;
+};
+
 /**
  * The same new user signed in on `count` phones. Each phone has its own app (data layer), storage,
  * clock and signal, and its own auth client, which keeps its session in the phone's storage.
  * Behaviour tests reach the app only through `data`, as with `signInTestUser`.
  */
-export async function signInOnPhones(label: string, count: number): Promise<TestPhone[]> {
+export async function signInOnPhones(
+  label: string,
+  count: number,
+  { autoRefreshToken = false }: PhoneOptions = {},
+): Promise<TestPhone[]> {
   const account = await createTestAccount(label);
   return Promise.all(
     Array.from({ length: count }, async () => {
@@ -209,9 +221,10 @@ export async function signInOnPhones(label: string, count: number): Promise<Test
         const storage: KeyValueStorage = {
           getItem: async (key) => items.get(key) ?? null,
           setItem: async (key, value) => void items.set(key, value),
+          removeItem: async (key) => void items.delete(key),
         };
         const sessionStorage = createSessionStorage(authStorageOn(authItems));
-        const client = createTestClient(fetchThroughSignal, sessionStorage);
+        const client = createTestClient(fetchThroughSignal, sessionStorage, { autoRefreshToken });
         const data = createDataLayer(client, {
           storage,
           sessionStorage,
