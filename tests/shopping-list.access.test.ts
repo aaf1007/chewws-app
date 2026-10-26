@@ -163,13 +163,34 @@ test("a stranger's list functions cannot touch someone else's list or Pantry", a
 
   expect(checkOff).toMatchObject({ data: 'gone', error: null });
   expect(uncheck).toMatchObject({ data: 'gone', error: null });
-  expect(addRecipe).toMatchObject({ data: false, error: null });
+  expect(addRecipe).toMatchObject({ data: null, error: null });
   expect(takeId).toMatchObject({ data: 'taken', error: null });
   expect(removeRecipe.error).toBeNull();
   await expectOwnerListUnchanged();
   // And none of it landed on the stranger's own list or Pantry.
   expect((await strangerAttacker.data.getShoppingList()).items).toEqual([]);
   expect((await strangerAttacker.data.getPantry()).ingredients).toEqual([]);
+});
+
+test("adding a Recipe can't put an Ingredient on the list that the Recipe doesn't have, even the owner's own", async () => {
+  const { owner, recipeId, garlic, expectOwnerListUnchanged } = await ownerListAndStranger();
+  const onion = await owner.data.createRecipe({
+    title: 'Onion soup',
+    lines: [{ originalText: '6 onions', amountText: '6', ingredientName: 'onion' }],
+    steps: [],
+  });
+  const onionId = (await owner.data.getRecipe(onion))?.lines[0].ingredient.id;
+
+  const added = await owner.client.rpc('add_recipe_to_shopping_list', {
+    recipe_id: recipeId,
+    lines: [
+      { ingredient_id: garlic.ingredient.id, amount_texts: ['2 cloves'] },
+      { ingredient_id: onionId, amount_texts: ['1 kg'] },
+    ],
+  });
+
+  expect(added).toMatchObject({ data: null, error: { code: '22023' } });
+  await expectOwnerListUnchanged();
 });
 
 test('the shared list rules are not exposed through the Data API', async () => {

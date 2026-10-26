@@ -981,9 +981,9 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
 
   /**
    * Puts the Ingredients one of the user's Recipes needs on their Shopping List, except those they
-   * have (Pantry or Staples). Each joins the line for its Ingredient, with this Recipe's amounts
-   * kept apart. Adding a Recipe that's already on the list changes nothing. Returns the
-   * Ingredients the Recipe needed that the user didn't have.
+   * have (Pantry or Staples), as the server sees it when it adds them. Each joins the line for its
+   * Ingredient, with this Recipe's amounts kept apart. Adding a Recipe that's already on the list
+   * changes nothing. Returns the Ingredients the Recipe needed that the user didn't have.
    */
   async function addRecipeToShoppingList(recipeId: RecipeId): Promise<Ingredient[]> {
     const [recipe, had] = await Promise.all([getRecipe(recipeId), listIngredientsIHave()]);
@@ -999,7 +999,9 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     if (error) fail(error);
     if (!data) throw new DataError('recipe_not_found', 'That Recipe no longer exists.');
     shoppingListOf(recipe.ownerId).refreshWatched();
-    return lines.map((line) => line.ingredient);
+    // The server leaves off what the user has by the time it adds them, which may be more.
+    const onList = new Set(data.map(parseIngredientId));
+    return lines.filter((line) => onList.has(line.ingredient.id)).map((line) => line.ingredient);
   }
 
   const idTaken = () => new DataError('shopping_list_item_id_taken', 'That item id is already in use.');

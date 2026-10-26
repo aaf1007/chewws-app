@@ -318,7 +318,7 @@ export type Database = {
       }
       add_recipe_to_shopping_list: {
         Args: { lines: Json; recipe_id: string }
-        Returns: boolean
+        Returns: string[]
       }
       add_staple: { Args: { ingredient_name: string }; Returns: string }
       add_to_pantry: { Args: { ingredient_name: string }; Returns: string }

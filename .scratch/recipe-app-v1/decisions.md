@@ -23,6 +23,7 @@ Defaults chosen where the tickets leave things open. Override any by editing thi
 - Hand-added items only look up an existing Ingredient by normalised name; they never create one. The match is stored when the item is added. So "paper towels" matches nothing and checking it off changes no Pantry.
 - `checkOff` is a security-definer RPC that writes the **list owner's** Pantry, so ticket 13 (shared lists) needs no rewrite.
 - Unchecking leaves the Pantry alone.
+- `add_recipe_to_shopping_list` takes the list engine's lines but trusts only what it can check (PR #1 review): an Ingredient id not on one of that Recipe's lines is refused (22023), and the Ingredients the user has are left off as `private.ingredients_had` says inside the RPC, not as the phone read them before calling it. It returns the Ingredients it put the Recipe on the list for.
 - Adding the same Recipe twice changes nothing. Deleting a Recipe removes its amount rows; an unchecked line with no amounts left is removed.
 - **For ticket 13:** Friends on a shared list must see the Recipe titles on its lines, but Recipes are owner-only, so `recipe:recipes(id, title)` comes back null for a Friend and `toShoppingListItem` (`src/data/data-layer.ts`) throws; ticket 13 either stores the title on the amount row or adds a list-scoped policy on Recipes. `add_manual_item`, `add_recipe_to_shopping_list` and `getShoppingList` act on the caller's own list today and will need a list id.
 

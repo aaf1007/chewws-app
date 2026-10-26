@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { expect, test } from 'vitest';
 
 import { parseShoppingListItemId, type RecipeLineInput, type ShoppingList, type ShoppingListItem } from '../src/data';
-import { holdShoppingListLine, signInTestUser, type TestUser } from './harness';
+import { holdShoppingListLine, signInOnPhones, signInTestUser, type TestUser } from './harness';
 
 /** The list as the user reads it: each line's name, its Recipes' amounts, and whether it's checked. */
 const view = (list: ShoppingList) =>
@@ -75,6 +75,23 @@ test("adding a Recipe adds only the Ingredients the user doesn't have in their P
     { ingredient: 'garlic', recipes: [['Garlic bread', '2 cloves']], checked: false },
   ]);
   expect((await a.data.getShoppingList()).recipes).toEqual([{ id, title: 'Garlic bread' }]);
+});
+
+test('an Ingredient that goes into the Pantry while a Recipe is being added, after the app read what the user has, is not put on the list', async () => {
+  const [phone, other] = await signInOnPhones('a', 2);
+  const id = await recipe(phone, 'Garlic bread', garlicBread);
+  const held = phone.holdNextRequest('add_recipe_to_shopping_list');
+  const adding = phone.data.addRecipeToShoppingList(id);
+  await held.reached;
+
+  await other.data.addToPantry('garlic');
+  held.release();
+
+  expect((await adding).map((i) => i.name)).toEqual(['butter', 'egg']);
+  expect(view(await phone.data.getShoppingList())).toEqual([
+    { ingredient: 'butter', recipes: [['Garlic bread', '4 tbsp']], checked: false },
+    { ingredient: 'egg', recipes: [['Garlic bread', '1']], checked: false },
+  ]);
 });
 
 test('Recipes needing the same Ingredient share one line, each with its own amounts, never added up', async () => {

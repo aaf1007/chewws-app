@@ -116,6 +116,11 @@ export type TestPhone = TestUser & {
    * every request to change one item. Other requests get through.
    */
   serverAnswersFor(text: string, status: number | null): void;
+  /**
+   * For race tests only: the phone's next request that names `text` (in its URL or body) waits
+   * before it goes out until `release()` is called; `reached` resolves when it's waiting.
+   */
+  holdNextRequest(text: string): { reached: Promise<void>; release(): void };
   /** Sets the phone's clock; list changes made from now on are stamped from it. */
   setClock(at: Date): void;
   /** A copy of what the app has saved on this phone. */
@@ -192,7 +197,15 @@ export async function signInOnPhones(
         for (const [text, status] of faultsFor) if (request.includes(text)) return status;
         return fault;
       };
-      const fetchThroughSignal: typeof fetch = (input, init) => {
+      const holds = new Map<string, { reached(): void; released: Promise<void> }>();
+      const fetchThroughSignal: typeof fetch = async (input, init) => {
+        const request = `${input instanceof Request ? input.url : String(input)} ${typeof init?.body === 'string' ? init.body : ''}`;
+        for (const [text, hold] of holds) {
+          if (!request.includes(text)) continue;
+          holds.delete(text);
+          hold.reached();
+          await hold.released;
+        }
         if (offline) return Promise.reject(new TypeError('Network request failed'));
         const status = faultFor(input, init);
         if (status !== null) return Promise.resolve(new Response(`Server error ${status}`, { status }));
@@ -204,6 +217,12 @@ export async function signInOnPhones(
         serverAnswers: (status: number | null) => void (fault = status),
         serverAnswersFor: (text: string, status: number | null) =>
           void (status === null ? faultsFor.delete(text) : faultsFor.set(text, status)),
+        holdNextRequest(text: string) {
+          const reached = Promise.withResolvers<void>();
+          const released = Promise.withResolvers<void>();
+          holds.set(text, { reached: reached.resolve, released: released.promise });
+          return { reached: reached.promise, release: released.resolve };
+        },
       };
       const first = createPhone(new Map(), new Map());
       await first.data.signInWithPassword(account);
