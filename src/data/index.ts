@@ -12,6 +12,7 @@ export {
   type Ingredient,
   type IngredientId,
   type ListSync,
+  type NotSavedListChange,
   type Pantry,
   type Profile,
   type Recipe,

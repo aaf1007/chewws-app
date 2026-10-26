@@ -12,13 +12,23 @@
  *   a change is made, and when the app calls it on coming to the foreground or on a timer.
  * - Changes are sent one at a time, oldest first. Sending is safe to repeat: if the answer to a
  *   change is lost, it's sent again and the server ends up the same.
+ * - A server error (5xx) may pass, so the change waits too. One the server fails on
+ *   `MAX_SERVER_FAILURES` times in a row (counted on the change, so across restarts) is given up:
+ *   it leaves the queue, so the changes behind it are sent, and waits in `gaveUp` until whoever
+ *   shows the list has told the user.
  *
  * `nextQueueState` is the state machine, pure; `createChangeQueue` runs it.
  */
 import { DataError } from './types';
 
-/** A change made on this phone, waiting to be sent. `madeAt` is an ISO timestamp. */
-export type QueuedChange<C> = { id: string; madeAt: string; change: C };
+/**
+ * A change made on this phone, waiting to be sent. `madeAt` is an ISO timestamp. `serverFailures`:
+ * how many times in a row the server answered it with an error of its own (5xx).
+ */
+export type QueuedChange<C> = { id: string; madeAt: string; change: C; serverFailures: number };
+
+/** The server errors in a row after which a change is given up. */
+export const MAX_SERVER_FAILURES = 5;
 
 /**
  * `idle`: not sending, and the last request reached the server. `syncing`: sending the queue.
@@ -27,6 +37,8 @@ export type QueuedChange<C> = { id: string; madeAt: string; change: C };
 export type QueueState<C> = {
   status: 'idle' | 'syncing' | 'offline';
   queue: readonly QueuedChange<C>[];
+  /** Changes given up after `MAX_SERVER_FAILURES` server errors in a row, until `dismissed`. */
+  gaveUp: readonly QueuedChange<C>[];
 };
 
 export type QueueEvent<C> =
@@ -36,6 +48,10 @@ export type QueueEvent<C> =
   | { type: 'syncStarted' }
   /** The server has the change, or has said it can never take it. */
   | { type: 'sent'; id: string }
+  /** The server answered the change with an error of its own (5xx). */
+  | { type: 'serverFailed'; id: string }
+  /** The user has been told about the changes given up. */
+  | { type: 'dismissed' }
   | { type: 'unreachable' }
   /** The queue is empty and the server was reached. */
   | { type: 'synced' }
@@ -56,12 +72,23 @@ export function nextQueueState<C>(state: QueueState<C>, event: QueueEvent<C>): Q
       return { ...state, status: 'syncing' };
     case 'sent':
       return { ...state, queue: state.queue.filter((c) => c.id !== event.id) };
+    case 'serverFailed': {
+      const failed = state.queue.find((c) => c.id === event.id);
+      if (!failed) return state;
+      const counted = { ...failed, serverFailures: failed.serverFailures + 1 };
+      if (counted.serverFailures < MAX_SERVER_FAILURES) {
+        return { ...state, queue: state.queue.map((c) => (c.id === event.id ? counted : c)) };
+      }
+      return { ...state, queue: state.queue.filter((c) => c.id !== event.id), gaveUp: [...state.gaveUp, counted] };
+    }
+    case 'dismissed':
+      return { ...state, gaveUp: [] };
     case 'unreachable':
       return { ...state, status: 'offline' };
     case 'synced':
       return { ...state, status: 'idle' };
     case 'discarded':
-      return { status: 'idle', queue: [] };
+      return { status: 'idle', queue: [], gaveUp: [] };
   }
 }
 
@@ -73,11 +100,16 @@ export type Delivery =
   | { status: 'dropped' }
   /** The server will never take it. */
   | { status: 'refused'; error: DataError }
+  /** The server answered with an error of its own (5xx): it may pass, so the change is tried again. */
+  | { status: 'serverFailed'; error: DataError }
   /** The request didn't reach the server. */
   | { status: 'unreachable' };
 
+/** How a change left the queue. */
+export type Delivered = Extract<Delivery, { status: 'sent' | 'dropped' | 'refused' }>;
+
 /** What the code that made a change hears back: how it was delivered, or that it's waiting. */
-export type ChangeOutcome = Exclude<Delivery, { status: 'unreachable' }> | { status: 'queued' };
+export type ChangeOutcome = Delivered | { status: 'queued' };
 
 /** Where the phone keeps things between launches. AsyncStorage in the app. */
 export type KeyValueStorage = {
@@ -113,7 +145,10 @@ function parseQueue<C>(raw: string | null, parseChange: (raw: unknown) => C | nu
     if (!isRecord(entry) || typeof entry.id !== 'string' || typeof entry.madeAt !== 'string') continue;
     if (Number.isNaN(Date.parse(entry.madeAt))) continue;
     const change = parseChange(entry.change);
-    if (change !== null) queue.push({ id: entry.id, madeAt: entry.madeAt, change });
+    // Saved before failures were counted, or unreadable: none yet.
+    const failures = entry.serverFailures;
+    const serverFailures = typeof failures === 'number' && Number.isInteger(failures) && failures >= 0 ? failures : 0;
+    if (change !== null) queue.push({ id: entry.id, madeAt: entry.madeAt, change, serverFailures });
   }
   return queue;
 }
@@ -129,6 +164,8 @@ export type ChangeQueue<C> = {
   markUnreachable(): void;
   /** Throws away every change waiting, unsent; whoever waits on one hears it's refused with `error`. */
   discard(error: DataError): Promise<void>;
+  /** The user has been told about the changes given up: forgets them. */
+  dismissGaveUp(): void;
   state(): QueueState<C>;
   subscribe(listener: (state: QueueState<C>) => void): () => void;
 };
@@ -139,14 +176,14 @@ export function createChangeQueue<C>(options: {
   parseChange: (raw: unknown) => C | null;
   send: (change: QueuedChange<C>) => Promise<Delivery>;
   /** Runs before a sent change leaves the queue, so whoever shows it can keep showing it. */
-  onDelivered: (change: QueuedChange<C>, delivery: Exclude<Delivery, { status: 'unreachable' }>) => void;
+  onDelivered: (change: QueuedChange<C>, delivery: Delivered) => void;
   /** Runs once the queue is empty, e.g. to read the list again. Says whether the server was reached. */
   afterSync: (wasOffline: boolean) => Promise<'reached' | 'unreachable'>;
   now: () => number;
   newId: () => string;
 }): ChangeQueue<C> {
   const { storage, key, parseChange, send, onDelivered, afterSync, now, newId } = options;
-  let state: QueueState<C> = { status: 'idle', queue: [] };
+  let state: QueueState<C> = { status: 'idle', queue: [], gaveUp: [] };
   let lastMadeAt = 0;
   const listeners = new Set<(state: QueueState<C>) => void>();
   const waiting = new Map<string, (outcome: ChangeOutcome) => void>();
@@ -201,6 +238,17 @@ export function createChangeQueue<C>(options: {
         wentOffline();
         return;
       }
+      if (delivery.status === 'serverFailed') {
+        dispatch({ type: 'serverFailed', id: head.id });
+        await save();
+        if (state.queue.some((c) => c.id === head.id)) {
+          wentOffline();
+          return;
+        }
+        // Given up: the changes behind it are sent.
+        settle(head.id, { status: 'refused', error: delivery.error });
+        continue;
+      }
       onDelivered(head, delivery);
       dispatch({ type: 'sent', id: head.id });
       await save();
@@ -237,7 +285,12 @@ export function createChangeQueue<C>(options: {
   async function enqueue(change: C): Promise<ChangeOutcome> {
     await ready;
     lastMadeAt = Math.max(now(), lastMadeAt + 1);
-    const queued: QueuedChange<C> = { id: newId(), madeAt: new Date(lastMadeAt).toISOString(), change };
+    const queued: QueuedChange<C> = {
+      id: newId(),
+      madeAt: new Date(lastMadeAt).toISOString(),
+      change,
+      serverFailures: 0,
+    };
     dispatch({ type: 'queued', change: queued });
     await save();
     const outcome = new Promise<ChangeOutcome>((resolve) => waiting.set(queued.id, resolve));
@@ -258,6 +311,7 @@ export function createChangeQueue<C>(options: {
       await save();
       for (const id of [...waiting.keys()]) settle(id, { status: 'refused', error });
     },
+    dismissGaveUp: () => dispatch({ type: 'dismissed' }),
     state: () => state,
     subscribe(listener) {
       listeners.add(listener);

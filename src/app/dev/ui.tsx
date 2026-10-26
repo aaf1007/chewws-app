@@ -232,6 +232,7 @@ export default function UiGallery() {
       <SyncNotice status="offline" message="You're offline. 3 changes will sync when you're back online." />
       <SyncNotice status="offline" message="You're offline. This is your list as it was last loaded." />
       <SyncNotice status="syncing" message="Syncing 2 changes…" />
+      <SyncNotice status="notSaved" message="Couldn't check off Foil." action={{ label: 'OK', onPress: () => {} }} />
 
       <SectionHeader title="Steps" />
       <StepRow number={1} text="Mash the garlic into the butter." />

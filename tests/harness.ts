@@ -111,6 +111,11 @@ export type TestPhone = TestUser & {
    * HTTP status (a fault, not an answer to the request), until it's set back to null.
    */
   serverAnswers(status: number | null): void;
+  /**
+   * As `serverAnswers`, but only for requests that name `text` (in their URL or body), such as
+   * every request to change one item. Other requests get through.
+   */
+  serverAnswersFor(text: string, status: number | null): void;
   /** Sets the phone's clock; list changes made from now on are stamped from it. */
   setClock(at: Date): void;
   /** A copy of what the app has saved on this phone. */
@@ -163,15 +168,24 @@ export async function signInOnPhones(label: string, count: number): Promise<Test
     Array.from({ length: count }, async () => {
       let offline = false;
       let fault: number | null = null;
+      const faultsFor = new Map<string, number>();
+      const faultFor = (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const request = `${input instanceof Request ? input.url : String(input)} ${typeof init?.body === 'string' ? init.body : ''}`;
+        for (const [text, status] of faultsFor) if (request.includes(text)) return status;
+        return fault;
+      };
       const fetchThroughSignal: typeof fetch = (input, init) => {
         if (offline) return Promise.reject(new TypeError('Network request failed'));
-        if (fault !== null) return Promise.resolve(new Response(`Server error ${fault}`, { status: fault }));
+        const status = faultFor(input, init);
+        if (status !== null) return Promise.resolve(new Response(`Server error ${status}`, { status }));
         return fetch(input, init);
       };
       const network = {
         goOffline: () => void (offline = true),
         goOnline: () => void (offline = false),
         serverAnswers: (status: number | null) => void (fault = status),
+        serverAnswersFor: (text: string, status: number | null) =>
+          void (status === null ? faultsFor.delete(text) : faultsFor.set(text, status)),
       };
       const first = createPhone(new Map(), new Map());
       await first.data.signInWithPassword(account);

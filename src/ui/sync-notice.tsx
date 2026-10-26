@@ -1,28 +1,52 @@
-import { StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
-import { Icon } from './icon';
+import { Icon, type IconName } from './icon';
 import { Text } from './text';
-import { colors, radii, spacing } from './theme';
+import { colors, radii, spacing, type ColorRole } from './theme';
+
+export type SyncNoticeStatus = 'offline' | 'syncing' | 'notSaved';
+
+const ICON: Record<SyncNoticeStatus, { name: IconName; tone: ColorRole }> = {
+  offline: { name: 'cloud-offline-outline', tone: 'textMuted' },
+  syncing: { name: 'sync-outline', tone: 'textMuted' },
+  notSaved: { name: 'alert-circle-outline', tone: 'danger' },
+};
 
 /**
- * A gray rounded notice that list changes haven't reached the server: a cloud with a slash while
- * offline, arrows while they're being sent. The message says what's waiting.
+ * A gray rounded notice about list changes and the server: a cloud with a slash while they wait
+ * offline, arrows while they're being sent, a warning when one couldn't be saved. The message says
+ * which. `action` adds a small button, such as "OK" to dismiss it.
  */
 export function SyncNotice({
   status,
   message,
+  action,
   testID,
 }: {
-  status: 'offline' | 'syncing';
+  status: SyncNoticeStatus;
   message: string;
+  action?: { label: string; onPress: () => void };
   testID?: string;
 }) {
+  const icon = ICON[status];
   return (
-    <View accessible accessibilityRole="text" accessibilityLabel={message} testID={testID} style={styles.notice}>
-      <Icon name={status === 'offline' ? 'cloud-offline-outline' : 'sync-outline'} tone="textMuted" />
+    <View
+      accessible={!action}
+      accessibilityRole={action ? undefined : 'text'}
+      accessibilityLabel={action ? undefined : message}
+      testID={testID}
+      style={styles.notice}>
+      <Icon name={icon.name} tone={icon.tone} />
       <Text variant="caption" tone="textMuted" style={styles.message}>
         {message}
       </Text>
+      {action ? (
+        <Pressable accessibilityRole="button" accessibilityLabel={action.label} onPress={action.onPress} hitSlop={spacing.sm}>
+          <Text variant="caption" tone="accent">
+            {action.label}
+          </Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }

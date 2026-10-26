@@ -31,6 +31,7 @@ import {
   type Ingredient,
   type IngredientId,
   type ListSync,
+  type NotSavedListChange,
   type Pantry,
   type Profile,
   type Recipe,
@@ -155,6 +156,9 @@ function toShoppingListItem(
   return { kind: 'ingredient', id, ingredient, recipes, check };
 }
 
+/** An item's name as the list shows it. */
+const nameOf = (item: ShoppingListItem) => (item.kind === 'ingredient' ? item.ingredient.name : item.text);
+
 function toProfile(row: ProfileRow): Profile {
   return { id: parseUserId(row.id), username: row.username, createdAt: row.created_at };
 }
@@ -191,6 +195,10 @@ function fail(error: AuthError | PostgrestError): never {
  * the change itself may be fine). Only a 4xx refuses the change.
  */
 const notReached = (status: number) => status === 0 || [401, 408, 429].includes(status) || status >= 500;
+
+/** For a queued change, a server error is told apart: one that never passes gives the change up. */
+const serverFailed = (status: number): Delivery | null =>
+  status >= 500 ? { status: 'serverFailed', error: new DataError('server_error', `The server failed (${status}).`) } : null;
 
 export type DataLayerOptions = {
   /** Where the phone keeps list changes waiting to be sent and the last list it saw. */
@@ -551,6 +559,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
         item_id: change.itemId,
         changed_at: madeAt,
       });
+      const failed = serverFailed(status);
+      if (failed) return failed;
       if (notReached(status)) return { status: 'unreachable' };
       if (error) return { status: 'refused', error: toDataError(error) };
       if (added === 'added') return { status: 'sent' };
@@ -562,6 +572,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     const args = { item_id: change.itemId, changed_at: madeAt };
     const { data: found, error, status } =
       change.kind === 'checkOff' ? await client.rpc('check_off', args) : await client.rpc('uncheck', args);
+    const failed = serverFailed(status);
+    if (failed) return failed;
     if (notReached(status)) return { status: 'unreachable' };
     if (error) return { status: 'refused', error: toDataError(error) };
     // Gone (removed meanwhile, maybe from another phone): the change has nothing to change.
@@ -626,11 +638,21 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       return lastSeen && withListChanges(lastSeen, queue.state().queue, me);
     }
 
+    /** The changes given up, named as the list shows their items. */
+    function notSaved(): NotSavedListChange[] {
+      const items = shown()?.items ?? [];
+      return queue.state().gaveUp.map(({ change }) => {
+        const item = items.find((i) => i.id === change.itemId);
+        const itemName = change.kind === 'addManualItem' ? change.text : item ? nameOf(item) : 'an item';
+        return { kind: change.kind, itemName };
+      });
+    }
+
     function view(): ShoppingListView {
       const list = shown();
-      if (list) return { status: 'loaded', list, sync: sync() };
-      if (lastError) return { status: 'failed', error: lastError, sync: sync() };
-      return { status: 'loading', sync: sync() };
+      if (list) return { status: 'loaded', list, sync: sync(), notSaved: notSaved() };
+      if (lastError) return { status: 'failed', error: lastError, sync: sync(), notSaved: notSaved() };
+      return { status: 'loading', sync: sync(), notSaved: notSaved() };
     }
 
     function emit() {
@@ -728,7 +750,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       },
       (e: unknown) => {
         const error = e instanceof DataError ? e : new DataError('unknown', String(e), { cause: e });
-        if (!stopped) watcher({ status: 'failed', error, sync: { status: 'idle', waiting: 0 } });
+        if (!stopped) watcher({ status: 'failed', error, sync: { status: 'idle', waiting: 0 }, notSaved: [] });
       },
     );
     return () => {
@@ -743,6 +765,12 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     const lists = shoppingListOf(me);
     await lists.ready;
     return lists.sync();
+  }
+
+  /** The user has seen the notice about list changes given up (`notSaved`): it goes. */
+  function dismissNotSavedListChanges(): void {
+    const me = session.status === 'signedIn' ? session.userId : null;
+    if (me) shoppingLists.get(me)?.queue.dismissGaveUp();
   }
 
   /**
@@ -867,6 +895,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     watchShoppingList,
     getListSync,
     syncListChanges,
+    dismissNotSavedListChanges,
     addRecipeToShoppingList,
     addManualItem,
     checkOff,

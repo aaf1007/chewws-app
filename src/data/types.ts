@@ -112,14 +112,23 @@ export type ShoppingList = {
  */
 export type ListSync = { status: 'idle' | 'syncing' | 'offline'; waiting: number };
 
-/** A Shopping List as a screen shows it while it changes. */
+/**
+ * A list change made on this phone that the server failed on too many times in a row, so it was
+ * given up: the server doesn't have it. `itemName` is the item's name, as the list showed it.
+ */
+export type NotSavedListChange = { kind: 'checkOff' | 'uncheck' | 'addManualItem'; itemName: string };
+
+/**
+ * A Shopping List as a screen shows it while it changes. `notSaved`: changes given up, to tell the
+ * user about until they dismiss them.
+ */
 export type ShoppingListView =
   /** Nothing to show yet: never seen on this phone, and being read. */
-  | { status: 'loading'; sync: ListSync }
+  | { status: 'loading'; sync: ListSync; notSaved: NotSavedListChange[] }
   /** The list with the changes made on this phone, sent or not. */
-  | { status: 'loaded'; list: ShoppingList; sync: ListSync }
+  | { status: 'loaded'; list: ShoppingList; sync: ListSync; notSaved: NotSavedListChange[] }
   /** Couldn't be read, and this phone has never seen it (code `offline` with no signal). */
-  | { status: 'failed'; error: DataError; sync: ListSync };
+  | { status: 'failed'; error: DataError; sync: ListSync; notSaved: NotSavedListChange[] };
 
 export type IdTokenProvider = 'apple' | 'google';
 

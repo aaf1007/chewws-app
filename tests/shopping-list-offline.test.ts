@@ -327,6 +327,63 @@ test.each([500, 520, 524])(
   },
 );
 
+test('a change the server fails on every time is given up after 5 tries, even across a restart; the changes behind it land, and the user is told', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const foil = await other.data.addManualItem('Foil');
+  const towels = await other.data.addManualItem('Paper towels');
+  await phone.data.getShoppingList();
+  phone.goOffline();
+  await phone.data.checkOff(foil);
+  await phone.data.checkOff(towels);
+
+  // Every request to change Foil fails on the server; the rest get through.
+  phone.goOnline();
+  phone.serverAnswersFor(foil, 500);
+  for (let tries = 1; tries <= 3; tries++) {
+    expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 2 });
+  }
+  const reopened = phone.relaunch();
+  expect(await reopened.data.syncListChanges()).toEqual({ status: 'offline', waiting: 2 });
+  // The fifth: Foil's change is given up, and Paper towels' is sent.
+  expect(await reopened.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+
+  const unchanged = { handAdded: 'Foil', ingredient: null, checked: false };
+  const sent = { handAdded: 'Paper towels', ingredient: null, checked: true };
+  expect(view(await other.data.getShoppingList())).toEqual([unchanged, sent]);
+  expect(view(await reopened.data.getShoppingList())).toEqual([unchanged, sent]);
+  const screen = watch(reopened);
+  await vi.waitFor(() =>
+    expect(screen.last()).toMatchObject({ status: 'loaded', notSaved: [{ kind: 'checkOff', itemName: 'Foil' }] }),
+  );
+
+  // Once the user has seen it, the notice goes.
+  reopened.data.dismissNotSavedListChanges();
+  await vi.waitFor(() => expect(screen.last()).toMatchObject({ status: 'loaded', notSaved: [] }));
+  screen.stop();
+});
+
+test('a change the server fails on twice, then takes, lands as usual', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const foil = await other.data.addManualItem('Foil');
+  await phone.data.getShoppingList();
+  phone.goOffline();
+  await phone.data.checkOff(foil);
+
+  phone.goOnline();
+  phone.serverAnswersFor(foil, 503);
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 1 });
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 1 });
+  phone.serverAnswersFor(foil, null);
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+
+  const checked = [{ handAdded: 'Foil', ingredient: null, checked: true }];
+  expect(view(await other.data.getShoppingList())).toEqual(checked);
+  const screen = watch(phone);
+  await vi.waitFor(() => expect(screen.last()).toMatchObject({ status: 'loaded', notSaved: [] }));
+  expect(view(await phone.data.getShoppingList())).toEqual(checked);
+  screen.stop();
+});
+
 test('queued changes and the last list seen outlive the app being closed with no signal', async () => {
   const [phone, other] = await signInOnPhones('shopper', 2);
   const { garlic } = await listWithGarlicAndButter([phone, other]);

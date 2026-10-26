@@ -3,7 +3,7 @@ import { useCallback, useState } from 'react';
 import { View } from 'react-native';
 
 import { messageOf } from '@/auth/errors';
-import type { ListSync, ShoppingListItem, ShoppingListView } from '@/data';
+import type { ListSync, NotSavedListChange, ShoppingListItem, ShoppingListView } from '@/data';
 import { data } from '@/data/app';
 import { AddField, EmptyState, Screen, SectionHeader, ShoppingListRow, SyncNotice, Text } from '@/ui';
 
@@ -36,8 +36,21 @@ function syncNoticeOf(sync: ListSync): { status: 'offline' | 'syncing'; message:
   return null;
 }
 
+const VERB: Record<NotSavedListChange['kind'], string> = {
+  checkOff: 'check off',
+  uncheck: 'uncheck',
+  addManualItem: 'add',
+};
+
+/** "Couldn't check off Foil." */
+const notSavedMessage = ({ kind, itemName }: NotSavedListChange) => `Couldn't ${VERB[kind]} ${itemName}.`;
+
 export default function ShoppingList() {
-  const [state, setState] = useState<ShoppingListView>({ status: 'loading', sync: { status: 'idle', waiting: 0 } });
+  const [state, setState] = useState<ShoppingListView>({
+    status: 'loading',
+    sync: { status: 'idle', waiting: 0 },
+    notSaved: [],
+  });
   const [changeError, setChangeError] = useState<string | null>(null);
 
   // The list as the phone has it, updated on every change (sent or still waiting for a signal)
@@ -87,6 +100,15 @@ export default function ShoppingList() {
         testID="shopping-list-add"
       />
       {notice ? <SyncNotice status={notice.status} message={notice.message} testID="shopping-list-sync" /> : null}
+      {state.notSaved.map((change, i) => (
+        <SyncNotice
+          key={i}
+          status="notSaved"
+          message={notSavedMessage(change)}
+          action={i === state.notSaved.length - 1 ? { label: 'OK', onPress: data.dismissNotSavedListChanges } : undefined}
+          testID="shopping-list-not-saved"
+        />
+      ))}
       {changeError ? <Text tone="danger">{changeError}</Text> : null}
       {state.status === 'failed' ? <Text tone="danger">{state.error.message}</Text> : null}
 
