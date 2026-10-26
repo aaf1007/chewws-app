@@ -382,3 +382,42 @@ test(
   },
   RUN_OUT_TEST_TIMEOUT_MS,
 );
+
+/** How long the app takes to settle who is signed in after a cold start with no signal, at most. */
+const COLD_START_SETTLED_MS = 40_000;
+
+test.each(['kept', 'none'] as const)(
+  'opened from cold with no signal and the access token run out, no user remembered on the phone (signed in on an older version), and a session %s: signed in as its user with the list as last seen, or signed out; never left loading',
+  async (session) => {
+    const [phone, other] = await signInOnPhones('shopper', 2);
+    await foilAndTowels([phone, other]);
+    phone.goOffline();
+    phone.expireAccessToken();
+    const saved = new Map(phone.saved());
+    saved.delete('recipeapp.signedInUser');
+    const reopened = phone.relaunch(saved, session === 'kept' ? undefined : new Map());
+    const states = watchSession(reopened);
+    await vi.waitFor(() => expect(states.last()).toBeDefined(), { timeout: COLD_START_SETTLED_MS });
+
+    if (session === 'none') {
+      expect(states.states).toEqual([signedOut]);
+      await expect(reopened.data.getShoppingList()).rejects.toMatchObject({ code: 'not_signed_in' });
+      states.stop();
+      return;
+    }
+    expect(states.states).toEqual([signedIn(reopened)]);
+    const screen = watch(reopened);
+    await vi.waitFor(() => expect(screen.last()).toMatchObject({ status: 'loaded' }));
+    expect(listOf(screen.last())).toEqual([
+      { item: 'Foil', checked: false },
+      { item: 'Paper towels', checked: false },
+    ]);
+    // Once the auth client gives up refreshing, the user is still signed in.
+    await wait(STARTUP_REFRESH_DONE_MS);
+    await reopened.data.syncListChanges();
+    expect(states.states).toEqual([signedIn(reopened)]);
+    screen.stop();
+    states.stop();
+  },
+  RUN_OUT_TEST_TIMEOUT_MS,
+);

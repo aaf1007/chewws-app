@@ -172,8 +172,21 @@ function parseSavedUserId(raw: string | null): UserId | null {
   }
 }
 
-/** A session the auth client kept on the phone, as much of it as ending it needs. */
-type KeptSession = { accessToken: string; refreshToken: string; expiresAt: number | null };
+/**
+ * A session the auth client kept on the phone, as much of it as ending it needs, and whose it is
+ * (null if that can't be read).
+ */
+type KeptSession = { accessToken: string; refreshToken: string; expiresAt: number | null; userId: UserId | null };
+
+/** The id of the user `user` (a kept session's), or null if it has none this app can read. */
+function parseKeptUserId(user: unknown): UserId | null {
+  if (typeof user !== 'object' || user === null || !('id' in user) || typeof user.id !== 'string') return null;
+  try {
+    return parseUserId(user.id);
+  } catch {
+    return null;
+  }
+}
 
 /** A session as the auth client saved it, or null if `raw` isn't one. */
 function parseKeptSession(raw: string): KeptSession | null {
@@ -188,7 +201,12 @@ function parseKeptSession(raw: string): KeptSession | null {
   const refreshToken = 'refresh_token' in value ? value.refresh_token : null;
   const expiresAt = 'expires_at' in value ? value.expires_at : null;
   if (typeof accessToken !== 'string' || typeof refreshToken !== 'string') return null;
-  return { accessToken, refreshToken, expiresAt: typeof expiresAt === 'number' ? expiresAt : null };
+  return {
+    accessToken,
+    refreshToken,
+    expiresAt: typeof expiresAt === 'number' ? expiresAt : null,
+    userId: parseKeptUserId('user' in value ? value.user : null),
+  };
 }
 
 const sameSession = (a: SessionState, b: SessionState) =>
@@ -255,13 +273,17 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   // Who is signed in on this phone. The auth client says, but its session runs out after an hour
   // and only a signal can refresh it: until then it has no session to give, and the user is still
   // signed in. So the phone remembers who signed in, and forgets them only when their session ends
-  // on this phone (`endSessionOnPhone`): signing out, or a refresh the server refuses.
+  // on this phone (`endSessionOnPhone`): signing out, or a refresh the server refuses. Signed in
+  // on a version that didn't remember them (or what it saved can't be read), the session the auth
+  // client kept on the phone says who (the auth client reads it as it's created, so
+  // `sessionStorage` knows where it is by now). With neither, no one is signed in.
   const signedInKey = 'recipeapp.signedInUser';
   let session: SessionState = { status: 'loading' };
   let remembered: Promise<UserId | null> = storage
     .getItem(signedInKey)
     .then(parseSavedUserId)
-    .catch(() => null);
+    .catch(() => null)
+    .then(async (id) => id ?? (await keptUserId()));
   let savingSignedIn: Promise<void> = Promise.resolve();
   const sessionWatchers = new Set<(state: SessionState) => void>();
 
@@ -276,6 +298,15 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     lastInTurn = run.catch(() => {});
     return run;
   }
+  /** Whose the session the auth client keeps on the phone is, if it keeps one. */
+  async function keptUserId(): Promise<UserId | null> {
+    try {
+      return (await sessionStorage.saved()).map(parseKeptSession).find((s) => s?.userId)?.userId ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   /** The refresh tokens of sessions ended on this phone. The auth client may yet report one it held. */
   const ended = new Set<string>();
 
@@ -327,7 +358,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       if (end.reason !== 'signedOut') {
         if (turn !== end.seen) return [];
         const kept = (await sessionStorage.saved()).map(parseKeptSession);
-        if (kept.some((s) => s !== null && !ended.has(s.refreshToken))) return [];
+        // One that says whose it isn't, no one can be signed in with.
+        if (kept.some((s) => s?.userId && !ended.has(s.refreshToken))) return [];
       }
       turn += 1;
       const me = session.status === 'signedIn' ? session.userId : await remembered;
