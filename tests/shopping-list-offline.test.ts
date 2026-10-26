@@ -227,10 +227,14 @@ test("a phone whose clock runs 30 s behind the server checks off a line just aft
 
 test('a change the server skips, as another phone changed the item later, is not shown as made: the list is read again', async () => {
   const [phoneA, phoneB] = await signInOnPhones('shopper', 2);
+  // A's clock runs a minute behind from the start. A phone never stamps a change before its last
+  // one, so setting it back only after A checks off butter below would stamp A's garlic just after
+  // that, a few ms before B's uncheck: within the server clock's drift from the phones' (the
+  // server stamps a change no later than its own now), and B's uncheck could lose.
+  phoneA.setClock(new Date(Date.now() - MINUTE));
   const { garlic } = await listWithGarlicAndButter([phoneA, phoneB]);
   // B unchecks garlic (already unchecked); A checks it off, by A's clock a minute before.
   await phoneB.data.uncheck(garlic.id);
-  phoneA.setClock(new Date(Date.now() - MINUTE));
   await phoneA.data.checkOff(garlic.id);
 
   expect(await phoneA.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
