@@ -1,6 +1,5 @@
 import {
   isAuthApiError,
-  isAuthRetryableFetchError,
   isAuthSessionMissingError,
   type AuthError,
   type PostgrestError,
@@ -361,11 +360,11 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   });
 
   /**
-   * Why a session ends on this phone. `signedOut`: the user signed out. The auth client asks for
-   * the others, at `turn` `seen`: `refused`, it dropped the session because the server refused to
-   * refresh it (revoked, or signed out everywhere); `noSession`, the app started and it had no
-   * session it could use, and not for lack of a signal. `refused` is also asked for by `asSignedIn`,
-   * whose refresh of `refusedSessionId` the server refused while the auth client kept it.
+   * Why a session ends on this phone. `signedOut`: the user signed out. The others are asked for
+   * at `turn` `seen`, and only when `refusesSession` says the server refused `refusedSessionId`
+   * (revoked, or signed out everywhere), or there was no session: `refused`, the auth client
+   * dropped its session, or `asSignedIn`'s refresh was refused; `noSession`, the app started and
+   * the auth client had no session it could use.
    */
   type SessionEnd =
     | { reason: 'signedOut' }
@@ -402,29 +401,32 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   }
 
   /**
-   * The auth client started without a session: there is none, or it couldn't refresh it for lack
-   * of a signal (a network failure, not an answer from the server). Only the first signs out.
+   * The auth client has no session to give: it started without one (`noSession`), or dropped the
+   * one it had (`refused`). There is none, or refreshing it failed. Only no session at all, or a
+   * refresh the server refused (`refusesSession`), signs out; any other failure (no signal, a rate
+   * limit, a timeout, a proxy's error page) keeps the user signed in, and the session kept on the
+   * phone (`sessionStorage` never lets the auth client remove it) is refreshed later.
    */
-  async function settleWithoutSession(seen: number) {
+  async function settleWithoutSession(reason: 'refused' | 'noSession', seen: number) {
+    const kept = (await sessionStorage.saved()).map(parseKeptSession).find((s) => s !== null);
     const { data, error } = await client.auth.getSession();
     const id = await remembered;
     if (turn !== seen) return; // A sign-in, a sign-out or a session reported since has the say.
     if (data.session && !ended(sessionIdOf(data.session))) signedInAs(parseUserId(data.session.user.id));
-    else if (id && error && isAuthRetryableFetchError(error)) setSession({ status: 'signedIn', userId: id });
-    else await endSessionOnPhone({ reason: 'noSession', seen });
+    else if (id && error && !refusesSession(error)) setSession({ status: 'signedIn', userId: id });
+    else await endSessionOnPhone({ reason, seen, refusedSessionId: error ? kept?.sessionId : undefined });
   }
 
   client.auth.onAuthStateChange((event, authSession) => {
     if (authSession) {
       // One ended on this phone, as the auth client held it before then, has no say.
       if (!ended(sessionIdOf(authSession))) signedInAs(parseUserId(authSession.user.id));
-    } else if (event === 'INITIAL_SESSION') {
-      // Asking the auth client from inside its own callback would wait on itself.
+    } else if (event === 'INITIAL_SESSION' || event === 'SIGNED_OUT') {
+      // Asking the auth client from inside its own callback would wait on itself. Not waited on:
+      // the auth client waits on this callback, maybe in the middle of a sync.
       const seen = turn;
-      setTimeout(() => void settleWithoutSession(seen), 0);
-    } else if (event === 'SIGNED_OUT') {
-      // Not waited on: the auth client waits on this callback, maybe in the middle of a sync.
-      void endSessionOnPhone({ reason: 'refused', seen: turn });
+      const reason = event === 'INITIAL_SESSION' ? 'noSession' : 'refused';
+      setTimeout(() => void settleWithoutSession(reason, seen), 0);
     }
   });
 

@@ -9,6 +9,11 @@
  * A session cleared here has ended on this phone, and is never saved here again: a refresh of it
  * that lands late (it was under way as the user signed out) is dropped, so it can't sign them back
  * in, now or after a restart.
+ *
+ * The auth client can't remove a session saved here: only `clear` does, as the data layer ends it.
+ * The auth client drops its session on any refresh error but a network failure once its access
+ * token has run out, a rate limit or a proxy's error page too; the data layer decides which of
+ * those the server refusing the session is, and the rest keep the session to refresh later.
  */
 export type AuthStorage = {
   getItem(key: string): Promise<string | null>;
@@ -77,9 +82,11 @@ export function createSessionStorage(storage: AuthStorage): SessionStorage {
       if (sessionId !== null && ended.has(sessionId)) return;
       await storage.setItem(key, value);
     },
-    removeItem(key) {
+    async removeItem(key) {
       keys.add(key);
-      return storage.removeItem(key);
+      const value = await storage.getItem(key);
+      if (value !== null && sessionIdIn(value) !== null) return;
+      await storage.removeItem(key);
     },
     saved: values,
     async clear() {

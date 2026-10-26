@@ -564,3 +564,64 @@ test.each([
     session.stop();
   },
 );
+
+test.each([
+  ['rate limited by the auth server (429)', 429, { code: 'over_request_rate_limit', message: 'Request rate limit reached' }],
+  ['timed out at a gateway (408, plain text)', 408, undefined],
+  ['refused by a proxy (403, not JSON)', 403, undefined],
+] as const)(
+  'opened from cold with the access token run out, its refresh %s: still signed in, with the changes still waiting sent once the auth server answers',
+  async (_, status, json) => {
+    const [phone, other] = await signInOnPhones('shopper', 2);
+    const { foil } = await foilAndTowels([phone, other]);
+    phone.goOffline();
+    await phone.data.checkOff(foil);
+    phone.expireAccessToken();
+
+    const reopened = phone.relaunch();
+    reopened.goOnline();
+    reopened.serverAnswersFor(REFRESH, status, json);
+    const session = watchSession(reopened);
+    // Waits on the auth client, which answers once it has tried the refresh.
+    expect(await reopened.data.syncListChanges()).toEqual({ status: 'offline', waiting: 1 });
+    expect([...reopened.savedAuth().keys()]).not.toEqual([]);
+    expect(session.states).toEqual([signedIn(reopened)]);
+
+    reopened.serverAnswersFor(REFRESH, null);
+    passTime(61_000);
+    expect(await reopened.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+    expect(view(await other.data.getShoppingList())).toEqual([
+      { item: 'Foil', checked: true },
+      { item: 'Paper towels', checked: false },
+    ]);
+    expect(session.states).toEqual([signedIn(reopened)]);
+    session.stop();
+  },
+);
+
+test('opened from cold with the access token run out, its refresh refused (400 refresh_token_not_found): signed out, the changes still waiting thrown away', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const { foil } = await foilAndTowels([phone, other]);
+  phone.goOffline();
+  await phone.data.checkOff(foil);
+  phone.expireAccessToken();
+
+  const reopened = phone.relaunch();
+  reopened.goOnline();
+  reopened.serverAnswersFor(REFRESH, 400, {
+    code: 'refresh_token_not_found',
+    message: 'Invalid Refresh Token: Refresh Token Not Found',
+  });
+  const session = watchSession(reopened);
+  await vi.waitFor(() => expect(session.last()).toEqual(signedOut));
+  expect([...reopened.saved().keys()]).toEqual([]);
+  expect([...reopened.savedAuth().keys()]).toEqual([]);
+  await expect(reopened.data.getListSync()).rejects.toMatchObject({ code: 'not_signed_in' });
+
+  reopened.serverAnswersFor(REFRESH, null);
+  expect(view(await other.data.getShoppingList())).toEqual([
+    { item: 'Foil', checked: false },
+    { item: 'Paper towels', checked: false },
+  ]);
+  session.stop();
+});
