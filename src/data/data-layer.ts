@@ -626,11 +626,21 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   const needsConnection = (what: string) =>
     new DataError('offline', `You're offline. ${what} needs a connection.`);
 
-  /** Sends one queued Shopping List change, stamped with when it was made. */
-  async function sendListChange(me: UserId, { madeAt, change }: QueuedChange<ListChange>): Promise<Delivery> {
+  /**
+   * Sends one queued Shopping List change, stamped with when it was made. Nothing is sent once its
+   * queue is `discarded`.
+   */
+  async function sendListChange(
+    me: UserId,
+    { madeAt, change }: QueuedChange<ListChange>,
+    discarded: () => boolean,
+  ): Promise<Delivery> {
     // Only the user who made a change sends it. Signed out, or a session that can't refresh with
     // no signal, it waits.
     if (!(await hasSessionOf(me))) return { status: 'unreachable' };
+    // Their session ended on this phone while that waited (a refresh with no signal retries for
+    // about 25 seconds), and the change with it, even if they've signed in again since.
+    if (discarded()) return { status: 'refused', error: notSignedIn() };
     if (change.kind === 'addManualItem') {
       const { data: added, error, status } = await client.rpc('add_manual_item', {
         item_text: change.text,
@@ -684,7 +694,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       storage,
       key: `recipeapp.listChanges.${me}`,
       parseChange: parseListChange,
-      send: (change) => sendListChange(me, change),
+      send: (change, discarded) => sendListChange(me, change, discarded),
       // Named as the list shows it now: once given up, the item may go before the user is told.
       nameOf({ change }) {
         if (change.kind === 'addManualItem') return change.text;

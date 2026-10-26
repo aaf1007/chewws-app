@@ -293,7 +293,12 @@ export function createChangeQueue<C>(options: {
   storage: KeyValueStorage;
   key: string;
   parseChange: (raw: unknown) => C | null;
-  send: (change: QueuedChange<C>) => Promise<Delivery>;
+  /**
+   * Sends one change. `discarded()` says whether the queue has been thrown away since the send
+   * began (`discard`, as when its user signs out): a send that waits before its request goes out,
+   * say for a session to refresh, checks it after the wait, and sends nothing if so.
+   */
+  send: (change: QueuedChange<C>, discarded: () => boolean) => Promise<Delivery>;
   /** What the change changed, as the user knows it, to name it if it's given up. */
   nameOf: (change: QueuedChange<C>) => string;
   /** Runs before a sent change leaves the queue, so whoever shows it can keep showing it. */
@@ -365,7 +370,7 @@ export function createChangeQueue<C>(options: {
       }
       let delivery: Delivery;
       try {
-        delivery = await send(head);
+        delivery = await send(head, () => discardedWith !== null);
       } catch (e) {
         delivery = {
           status: 'refused',

@@ -354,3 +354,31 @@ test.each(['someone else', 'the same user'] as const)(
   },
   RUN_OUT_TEST_TIMEOUT_MS,
 );
+
+test(
+  'signed out while a list change waits for a refresh with no signal, then the same user signs in again once there is a signal: the change is never sent',
+  async () => {
+    const [phone, other] = await signInOnPhones('shopper', 2);
+    const { foil } = await foilAndTowels([phone, other]);
+    phone.goOffline();
+    await phone.data.checkOff(foil);
+    phone.expireAccessToken();
+
+    // Sending it first refreshes the session, which with no signal retries for about 25 seconds.
+    const syncing = phone.data.syncListChanges();
+    await wait(300);
+    await phone.data.signOut();
+
+    phone.goOnline();
+    expect(await phone.data.signInWithPassword(phone.account)).toEqual(phone.userId);
+    await syncing;
+    expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+    const unchanged = [
+      { item: 'Foil', checked: false },
+      { item: 'Paper towels', checked: false },
+    ];
+    expect(view(await other.data.getShoppingList())).toEqual(unchanged);
+    expect(view(await phone.data.getShoppingList())).toEqual(unchanged);
+  },
+  RUN_OUT_TEST_TIMEOUT_MS,
+);
