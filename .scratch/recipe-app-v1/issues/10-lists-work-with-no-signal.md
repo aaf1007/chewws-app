@@ -11,3 +11,7 @@
 - [x] Two conflicting changes to the same item resolve to the later one
 - [x] The app tells the user when list changes are waiting to sync
 - [x] Data-layer tests simulate offline changes and reconnect, including a conflicting check from a second client
+
+## Comments
+
+2026-10-25: Known limits. Rare edge cases of signing out while an offline sync is under way, beyond those fixed in the final fix round (a change discarded while its send waited for a session is never sent; a cold start offline with no remembered user signs in as the kept session's user; ended sessions are remembered by session id), are known limits, not blockers. The limits accepted while building this ticket (clock skew, a check made in a dead zone just before signing out is lost, a session ended offline stays alive on the server until its refresh token expires) are in `decisions.md` §10.
