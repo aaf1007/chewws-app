@@ -97,6 +97,21 @@ export async function holdShoppingListRemoval(itemId: ShoppingListItemId): Promi
   return { waitForWaiting, commit };
 }
 
+/**
+ * A request that left a phone: whose session it carried (the `sub` of its `Authorization` bearer
+ * token, read without checking it; null for none, as with the anon key) and its path, such as
+ * `/rest/v1/rpc/add_manual_item`.
+ */
+export type SentRequest = { user: string | null; path: string };
+
+/** Whose session a request's `Authorization` header carries, if any. */
+function userOfBearer(authorization: string | null): string | null {
+  const payload = authorization?.match(/^Bearer [^.]+\.([^.]+)\./)?.[1];
+  if (!payload) return null;
+  const { sub }: { sub?: unknown } = JSON.parse(Buffer.from(payload, 'base64url').toString());
+  return typeof sub === 'string' ? sub : null;
+}
+
 /** What a phone's app has saved: its storage's keys and values. */
 export type SavedOnPhone = ReadonlyMap<string, string>;
 
@@ -122,6 +137,8 @@ export type TestPhone = TestUser & {
    * before it goes out until `release()` is called; `reached` resolves when it's waiting.
    */
   holdNextRequest(text: string): { reached: Promise<void>; release(): void };
+  /** Every request that has left this phone (with a signal), in order, faulted ones included. */
+  requestsMade(): SentRequest[];
   /** Sets the phone's clock; list changes made from now on are stamped from it. */
   setClock(at: Date): void;
   /** A copy of what the app has saved on this phone. */
@@ -143,6 +160,12 @@ export type TestPhone = TestUser & {
    * `release()` is called; `reached` resolves when it has read.
    */
   slowNextSessionRead(): { reached: Promise<void>; release(): void };
+  /**
+   * For race tests only: the auth client's first read of its session after it next saves one (as
+   * a refresh does) waits before it reads, until `release()` is called; `reached` resolves when
+   * it's waiting. It reads what is saved once released.
+   */
+  holdSessionReadAfterNextSave(): { reached: Promise<void>; release(): void };
   /**
    * The app started again on this phone (a cold start: a new auth client too), from what it saved
    * (or from `saved`) and the session the auth client saved (or `savedAuth`).
@@ -200,6 +223,7 @@ export async function signInOnPhones(
         return fault;
       };
       const holds = new Map<string, { reached(): void; released: Promise<void> }>();
+      const sent: SentRequest[] = [];
       const fetchThroughSignal: typeof fetch = async (input, init) => {
         const request = `${input instanceof Request ? input.url : String(input)} ${typeof init?.body === 'string' ? init.body : ''}`;
         for (const [text, hold] of holds) {
@@ -209,6 +233,11 @@ export async function signInOnPhones(
           await hold.released;
         }
         if (offline) return Promise.reject(new TypeError('Network request failed'));
+        const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+        sent.push({
+          user: userOfBearer(headers.get('Authorization')),
+          path: new URL(input instanceof Request ? input.url : String(input)).pathname,
+        });
         const f = faultFor(input, init);
         if (f?.json) {
           const headers = { 'Content-Type': 'application/json', 'X-Supabase-Api-Version': '2024-01-01' };
@@ -229,6 +258,7 @@ export async function signInOnPhones(
           holds.set(text, { reached: reached.resolve, released: released.promise });
           return { reached: reached.promise, release: released.resolve };
         },
+        requestsMade: () => [...sent],
       };
       const first = createPhone(new Map(), new Map());
       await first.data.signInWithPassword(account);
@@ -256,9 +286,20 @@ export async function signInOnPhones(
         };
         const sessionStorage = createSessionStorage(authStorageOn(authItems));
         let slowRead: { reached(): void; released: Promise<void> } | null = null;
+        let readAfterSave: { saved: boolean; reached(): void; released: Promise<void> } | null = null;
         const authClientStorage = {
           ...sessionStorage,
+          async setItem(key: string, value: string) {
+            await sessionStorage.setItem(key, value);
+            if (key.endsWith('-auth-token') && readAfterSave) readAfterSave.saved = true;
+          },
           async getItem(key: string) {
+            const held = key.endsWith('-auth-token') && readAfterSave?.saved ? readAfterSave : null;
+            if (held) {
+              readAfterSave = null;
+              held.reached();
+              await held.released;
+            }
             const value = await sessionStorage.getItem(key);
             const slow = key.endsWith('-auth-token') ? slowRead : null;
             if (slow) {
@@ -288,6 +329,12 @@ export async function signInOnPhones(
             const reached = Promise.withResolvers<void>();
             const released = Promise.withResolvers<void>();
             slowRead = { reached: reached.resolve, released: released.promise };
+            return { reached: reached.promise, release: released.resolve };
+          },
+          holdSessionReadAfterNextSave() {
+            const reached = Promise.withResolvers<void>();
+            const released = Promise.withResolvers<void>();
+            readAfterSave = { saved: false, reached: reached.resolve, released: released.promise };
             return { reached: reached.promise, release: released.resolve };
           },
           relaunch: (saved, savedAuth) => ({

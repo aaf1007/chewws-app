@@ -636,43 +636,63 @@ test.each(REFRESH_REFUSALS)(
   },
 );
 
-test.each(['its first send', 'the refresh after it'] as const)(
-  'a hand-add whose send gets a 401, while the user signs out and someone else signs in as %s is on the way: it never lands on their list, and is discarded with the sign-out',
+const ADD_MANUAL_ITEM = '/rest/v1/rpc/add_manual_item';
+
+test.each(['its first send', 'its retry, after the refresh'] as const)(
+  'a hand-add whose send gets a 401, while the user signs out and someone else signs in as %s is on the way: nothing goes out as the newcomer, and the add is discarded with the sign-out',
   async (window) => {
     const [phone, other] = await signInOnPhones('shopper', 2);
     const [next] = await signInOnPhones('next', 1);
     await foilAndTowels([phone, other]);
     phone.goOffline();
     await phone.data.addManualItem('Snacks');
+    const sentBefore = phone.requestsMade().length;
 
     // Back online, the server refuses the access token the add goes out with, so the phone
-    // refreshes the session and sends it again. The request on the way is slow.
+    // refreshes the session and sends it again.
     phone.goOnline();
     phone.serverAnswersFor('add_manual_item', 401);
     const send = phone.holdNextRequest('add_manual_item');
     const syncing = phone.data.syncListChanges();
     await send.reached;
-    const refresh = phone.holdNextRequest(REFRESH);
-    if (window === 'the refresh after it') {
-      send.release();
-      await refresh.reached;
-    }
 
     // Meanwhile the user signs out (with no signal, so the server keeps their session and a
     // refresh of it still gets through), and someone else signs in on the phone.
-    phone.goOffline();
-    await phone.data.signOut();
-    phone.goOnline();
-    expect(await phone.data.signInWithPassword(next.account)).toEqual(next.userId);
-    if (window === 'its first send') {
-      send.release();
-      // A refresh, if there is one, is now of the session signed in since.
-      await Promise.race([refresh.reached, syncing]);
+    async function switchUsers() {
+      phone.goOffline();
+      await phone.data.signOut();
+      phone.goOnline();
+      expect(await phone.data.signInWithPassword(next.account)).toEqual(next.userId);
     }
-    phone.serverAnswersFor('add_manual_item', null);
-    refresh.release();
+    if (window === 'its first send') {
+      // The first send is slow: it's answered after the switch, so a refresh after it would be of
+      // the session signed in since.
+      const refresh = phone.holdNextRequest(REFRESH);
+      await switchUsers();
+      send.release();
+      await Promise.race([refresh.reached, syncing]);
+      phone.serverAnswersFor('add_manual_item', null);
+      refresh.release();
+    } else {
+      // The first send's 401 comes back and the user's session is refreshed. The retry then reads
+      // the session the auth client just saved, slowly (AsyncStorage on a phone can be), and the
+      // switch happens before it has read: what it reads is the newcomer's session.
+      const read = phone.holdSessionReadAfterNextSave();
+      send.release();
+      await read.reached;
+      phone.serverAnswersFor('add_manual_item', null);
+      await switchUsers();
+      read.release();
+    }
     await syncing;
 
+    // Not one list change went out with the newcomer's session.
+    const listChangesAsNext = () =>
+      phone
+        .requestsMade()
+        .slice(sentBefore)
+        .filter((sent) => sent.user === next.userId && sent.path.startsWith('/rest/v1/rpc/'));
+    expect(listChangesAsNext()).toEqual([]);
     expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
     expect((await phone.data.getShoppingList()).items).toEqual([]);
     expect((await next.data.getShoppingList()).items).toEqual([]);
@@ -687,5 +707,14 @@ test.each(['its first send', 'the refresh after it'] as const)(
     ];
     expect(view(await phone.data.getShoppingList())).toEqual(unchanged);
     expect(view(await other.data.getShoppingList())).toEqual(unchanged);
+
+    // The add went out once, the first send, as the user; never again, as anyone.
+    expect(listChangesAsNext()).toEqual([]);
+    expect(
+      phone
+        .requestsMade()
+        .slice(sentBefore)
+        .filter((sent) => sent.path === ADD_MANUAL_ITEM),
+    ).toEqual([{ user: phone.userId, path: ADD_MANUAL_ITEM }]);
   },
 );
