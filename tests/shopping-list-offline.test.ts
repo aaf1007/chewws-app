@@ -496,6 +496,29 @@ test("no signal at a change's next try doesn't count toward giving it up", async
   expect(view(await other.data.getShoppingList())).toEqual([{ handAdded: 'Foil', ingredient: null, checked: true }]);
 });
 
+test("the phone's clock going back a second as a change's last pause starts doesn't send it early; going back more than 15 minutes does", async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const foil = await other.data.addManualItem('Foil');
+  await phone.data.getShoppingList();
+  phone.serverAnswersFor(foil, 500);
+  const t0 = Date.now();
+  phone.setClock(new Date(t0));
+  await phone.data.checkOff(foil);
+  for (const at of [10, 40, 100, 400]) {
+    phone.setClock(new Date(t0 + at * SECOND));
+    await phone.data.syncListChanges();
+  }
+  // Five server errors: its last pause, 15 minutes, starts now. The server would take it.
+  phone.serverAnswersFor(foil, null);
+  phone.setClock(new Date(t0 + 399 * SECOND));
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 1 });
+  expect(view(await other.data.getShoppingList())).toEqual([{ handAdded: 'Foil', ingredient: null, checked: false }]);
+
+  phone.setClock(new Date(t0 + 400 * SECOND - 16 * MINUTE));
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  expect(view(await other.data.getShoppingList())).toEqual([{ handAdded: 'Foil', ingredient: null, checked: true }]);
+});
+
 test('a change the server fails on twice, then takes, lands as usual', async () => {
   const [phone, other] = await signInOnPhones('shopper', 2);
   const foil = await other.data.addManualItem('Foil');

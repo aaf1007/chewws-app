@@ -49,14 +49,20 @@ export type GaveUpChange<C> = {
  * after the last pause fails too, about 21 minutes after the first error, it's given up.
  */
 export const RETRY_DELAYS_MS = [10_000, 30_000, 60_000, 5 * 60_000, 15 * 60_000] as const;
-const LONGEST_DELAY_MS = 15 * 60_000;
+
+/** How far the phone's clock may go back during a pause before the pause counts as over. */
+const CLOCK_BACK_MARGIN_MS = 60_000;
 
 /**
- * Whether a change may be sent at `now`. A next try further off than the longest pause means the
- * phone's clock was turned back, so it's due.
+ * Whether a change may be sent at `now`. A next try further off than the change's own pause, by
+ * more than a minute, means the phone's clock went back past when the server failed on it, so
+ * it's due. A small step back (a clock sync) leaves it waiting.
  */
-export const isDue = ({ nextTryAt }: QueuedChange<unknown>, now: number) =>
-  nextTryAt === null || now >= nextTryAt || nextTryAt - now > LONGEST_DELAY_MS;
+export function isDue({ nextTryAt, serverFailures }: QueuedChange<unknown>, now: number): boolean {
+  if (nextTryAt === null || now >= nextTryAt) return true;
+  const pause: number = RETRY_DELAYS_MS[serverFailures - 1] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1];
+  return nextTryAt - now > pause + CLOCK_BACK_MARGIN_MS;
+}
 
 /**
  * `idle`: not sending, and the last request reached the server. `syncing`: sending the queue.
