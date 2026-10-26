@@ -1,5 +1,7 @@
 import {
+  isAuthApiError,
   isAuthRetryableFetchError,
+  isAuthSessionMissingError,
   type AuthError,
   type PostgrestError,
   type SupabaseClient,
@@ -51,6 +53,15 @@ type IngredientRow = Database['public']['Tables']['ingredients']['Row'];
 type RecipeLineRow = Database['public']['Tables']['recipe_lines']['Row'];
 type ShoppingListItemRow = Database['public']['Tables']['shopping_list_items']['Row'];
 type ShoppingListAmountRow = Database['public']['Tables']['shopping_list_amounts']['Row'];
+
+/** The auth server's error codes (auth-js 2.118) for a session or refresh token it won't honour. */
+const SESSION_REFUSED_CODES: ReadonlySet<string> = new Set([
+  'refresh_token_not_found',
+  'refresh_token_already_used',
+  'session_not_found',
+  'session_expired',
+  'bad_jwt',
+]);
 
 const RECIPE_WITH_LINES =
   '*, recipe_lines(position, original_text, amount_text, ingredient:ingredients(id, name))';
@@ -446,9 +457,10 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   /**
    * Makes a request as the user signed in. A 401 means the server refused the session's access
    * token: the session is refreshed once and the request made again. With no signal to refresh
-   * it, the request is `unreachable`; a refresh the server refuses ends the session on this phone
-   * (`ended`), even when the auth client keeps it because its access token hasn't run out by the
-   * phone's clock. A 401 after a refresh that worked is returned as the answer.
+   * it, or any answer that doesn't refuse the session (a rate limit, a timeout, a proxy's error
+   * page), the request is `unreachable`; a refresh the server refuses ends the session on this
+   * phone (`ended`), even when the auth client keeps it because its access token hasn't run out by
+   * the phone's clock. A 401 after a refresh that worked is returned as the answer.
    */
   async function asSignedIn<R extends { status: number }>(
     request: () => PromiseLike<R>,
@@ -460,9 +472,23 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     const refusedSessionId = data.session ? sessionIdOf(data.session) : undefined;
     const { error } = await client.auth.refreshSession();
     if (!error) return request();
-    if (isAuthRetryableFetchError(error)) return 'unreachable';
+    if (!refusesSession(error)) return 'unreachable';
     await endSessionOnPhone({ reason: 'refused', seen, refusedSessionId });
     return 'ended';
+  }
+
+  /**
+   * Whether a failed refresh is the auth server refusing the session itself. Anything else (no
+   * signal, a 408 or 429, a 5xx, a body that isn't the auth server's JSON) says nothing about it.
+   */
+  function refusesSession(error: AuthError): boolean {
+    if (isAuthSessionMissingError(error)) return true;
+    return (
+      isAuthApiError(error) &&
+      [400, 401, 403].includes(error.status) &&
+      error.code !== undefined &&
+      SESSION_REFUSED_CODES.has(error.code)
+    );
   }
 
   /** Signs in, once any sign-out still finishing is done. */

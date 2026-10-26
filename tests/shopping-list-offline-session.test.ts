@@ -461,7 +461,9 @@ test.each(['kept', 'none'] as const)(
   RUN_OUT_TEST_TIMEOUT_MS,
 );
 
-test('the server refuses the session while list changes wait (every request answers 401, its refresh too): the user is signed out, never left offline', async () => {
+const REFRESH = 'grant_type=refresh_token';
+
+test('the server refuses the session while list changes wait (every request answers 401, its refresh refresh_token_not_found): the user is signed out, never left offline', async () => {
   const [phone, other] = await signInOnPhones('shopper', 2);
   const { foil } = await foilAndTowels([phone, other]);
   const session = watchSession(phone);
@@ -471,6 +473,11 @@ test('the server refuses the session while list changes wait (every request answ
 
   phone.goOnline();
   phone.serverAnswers(401);
+  // As the auth server refuses a refresh token it no longer has.
+  phone.serverAnswersFor(REFRESH, 400, {
+    code: 'refresh_token_not_found',
+    message: 'Invalid Refresh Token: Refresh Token Not Found',
+  });
   await phone.data.syncListChanges();
   await vi.waitFor(() => expect(session.last()).toEqual(signedOut));
   expect([...phone.savedAuth().keys()]).toEqual([]);
@@ -524,3 +531,36 @@ test("the server answers an item's changes with 401 even after the session is re
   screen.stop();
   session.stop();
 });
+
+test.each([
+  ['rate limited by the auth server (429)', 429, { code: 'over_request_rate_limit', message: 'Request rate limit reached' }],
+  ['timed out at a gateway (408, plain text)', 408, undefined],
+  ['refused by a proxy (403, not JSON)', 403, undefined],
+] as const)(
+  'a 401 whose refresh is %s is no answer about the session: the user stays signed in with their changes waiting',
+  async (_, status, json) => {
+    const [phone, other] = await signInOnPhones('shopper', 2);
+    const { foil } = await foilAndTowels([phone, other]);
+    const session = watchSession(phone);
+    await vi.waitFor(() => expect(session.last()).toEqual(signedIn(phone)));
+    phone.goOffline();
+    await phone.data.checkOff(foil);
+
+    phone.goOnline();
+    phone.serverAnswers(401);
+    phone.serverAnswersFor(REFRESH, status, json);
+    expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 1 });
+    expect(session.states).toEqual([signedIn(phone)]);
+    expect([...phone.savedAuth().keys()]).not.toEqual([]);
+
+    phone.serverAnswers(null);
+    phone.serverAnswersFor(REFRESH, null);
+    expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+    expect(view(await other.data.getShoppingList())).toEqual([
+      { item: 'Foil', checked: true },
+      { item: 'Paper towels', checked: false },
+    ]);
+    expect(session.states).toEqual([signedIn(phone)]);
+    session.stop();
+  },
+);

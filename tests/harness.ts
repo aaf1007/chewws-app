@@ -113,9 +113,10 @@ export type TestPhone = TestUser & {
   serverAnswers(status: number | null): void;
   /**
    * As `serverAnswers`, but only for requests that name `text` (in their URL or body), such as
-   * every request to change one item. Other requests get through.
+   * every request to change one item. Other requests get through. With `json`, the answer is that
+   * JSON body, as the auth server sends it (with its API version header), instead of plain text.
    */
-  serverAnswersFor(text: string, status: number | null): void;
+  serverAnswersFor(text: string, status: number | null, json?: object): void;
   /**
    * For race tests only: the phone's next request that names `text` (in its URL or body) waits
    * before it goes out until `release()` is called; `reached` resolves when it's waiting.
@@ -190,11 +191,12 @@ export async function signInOnPhones(
   return Promise.all(
     Array.from({ length: count }, async () => {
       let offline = false;
-      let fault: number | null = null;
-      const faultsFor = new Map<string, number>();
+      type Fault = { status: number; json?: object };
+      let fault: Fault | null = null;
+      const faultsFor = new Map<string, Fault>();
       const faultFor = (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
         const request = `${input instanceof Request ? input.url : String(input)} ${typeof init?.body === 'string' ? init.body : ''}`;
-        for (const [text, status] of faultsFor) if (request.includes(text)) return status;
+        for (const [text, f] of faultsFor) if (request.includes(text)) return f;
         return fault;
       };
       const holds = new Map<string, { reached(): void; released: Promise<void> }>();
@@ -207,16 +209,20 @@ export async function signInOnPhones(
           await hold.released;
         }
         if (offline) return Promise.reject(new TypeError('Network request failed'));
-        const status = faultFor(input, init);
-        if (status !== null) return Promise.resolve(new Response(`Server error ${status}`, { status }));
+        const f = faultFor(input, init);
+        if (f?.json) {
+          const headers = { 'Content-Type': 'application/json', 'X-Supabase-Api-Version': '2024-01-01' };
+          return Promise.resolve(new Response(JSON.stringify(f.json), { status: f.status, headers }));
+        }
+        if (f) return Promise.resolve(new Response(`Server error ${f.status}`, { status: f.status }));
         return fetch(input, init);
       };
       const network = {
         goOffline: () => void (offline = true),
         goOnline: () => void (offline = false),
-        serverAnswers: (status: number | null) => void (fault = status),
-        serverAnswersFor: (text: string, status: number | null) =>
-          void (status === null ? faultsFor.delete(text) : faultsFor.set(text, status)),
+        serverAnswers: (status: number | null) => void (fault = status === null ? null : { status }),
+        serverAnswersFor: (text: string, status: number | null, json?: object) =>
+          void (status === null ? faultsFor.delete(text) : faultsFor.set(text, { status, json })),
         holdNextRequest(text: string) {
           const reached = Promise.withResolvers<void>();
           const released = Promise.withResolvers<void>();
