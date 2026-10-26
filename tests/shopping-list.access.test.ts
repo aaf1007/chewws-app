@@ -161,8 +161,8 @@ test("a stranger's list functions cannot touch someone else's list or Pantry", a
   });
   const removeRecipe = await stranger.rpc('remove_recipe_from_shopping_list', { recipe_id: recipeId });
 
-  expect(checkOff).toMatchObject({ data: false, error: null });
-  expect(uncheck).toMatchObject({ data: false, error: null });
+  expect(checkOff).toMatchObject({ data: 'gone', error: null });
+  expect(uncheck).toMatchObject({ data: 'gone', error: null });
   expect(addRecipe).toMatchObject({ data: false, error: null });
   expect(takeId).toMatchObject({ data: 'taken', error: null });
   expect(removeRecipe.error).toBeNull();

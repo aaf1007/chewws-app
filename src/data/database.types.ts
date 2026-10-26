@@ -216,6 +216,7 @@ export type Database = {
           id: string
           ingredient_id: string | null
           list_id: string
+          phone_changed_at: string | null
           updated_at: string
         }
         Insert: {
@@ -226,6 +227,7 @@ export type Database = {
           id?: string
           ingredient_id?: string | null
           list_id: string
+          phone_changed_at?: string | null
           updated_at?: string
         }
         Update: {
@@ -236,6 +238,7 @@ export type Database = {
           id?: string
           ingredient_id?: string | null
           list_id?: string
+          phone_changed_at?: string | null
           updated_at?: string
         }
         Relationships: [
@@ -321,7 +324,7 @@ export type Database = {
       add_to_pantry: { Args: { ingredient_name: string }; Returns: string }
       check_off: {
         Args: { changed_at?: string; item_id: string }
-        Returns: boolean
+        Returns: string
       }
       create_recipe: {
         Args: { lines: Json; steps: string[]; title: string }
@@ -339,7 +342,7 @@ export type Database = {
       }
       uncheck: {
         Args: { changed_at?: string; item_id: string }
-        Returns: boolean
+        Returns: string
       }
     }
     Enums: {

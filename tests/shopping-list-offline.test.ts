@@ -203,6 +203,44 @@ test.each([
   },
 );
 
+test("a phone whose clock runs 30 s behind the server checks off a line just after adding its Recipe: it's checked, and in the Pantry", async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  phone.setClock(new Date(Date.now() - 30 * SECOND));
+  const bread = await phone.data.createRecipe({
+    title: 'Garlic bread',
+    lines: [
+      { originalText: '2 cloves garlic, minced', amountText: '2 cloves', ingredientName: 'garlic' },
+      { originalText: '4 tbsp butter', amountText: '4 tbsp', ingredientName: 'butter' },
+    ],
+    steps: [],
+  });
+  await phone.data.addRecipeToShoppingList(bread);
+  const garlic = await itemNamed(phone, 'garlic');
+
+  await phone.data.checkOff(garlic.id);
+
+  expect(await phone.data.getListSync()).toEqual({ status: 'idle', waiting: 0 });
+  expect(view(await other.data.getShoppingList())).toEqual([butterLine(false), garlicBread(true)]);
+  expect(view(await phone.data.getShoppingList())).toEqual([butterLine(false), garlicBread(true)]);
+  expect(await pantryNames(other)).toEqual(['garlic']);
+});
+
+test('a change the server skips, as another phone changed the item later, is not shown as made: the list is read again', async () => {
+  const [phoneA, phoneB] = await signInOnPhones('shopper', 2);
+  const { garlic } = await listWithGarlicAndButter([phoneA, phoneB]);
+  // B unchecks garlic (already unchecked); A checks it off, by A's clock a minute before.
+  await phoneB.data.uncheck(garlic.id);
+  phoneA.setClock(new Date(Date.now() - MINUTE));
+  await phoneA.data.checkOff(garlic.id);
+
+  expect(await phoneA.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  expect(view(await phoneB.data.getShoppingList())).toEqual([butterLine(true), garlicBread(false)]);
+  expect(await pantryNames(phoneB)).toEqual(['butter']);
+  // What phone A saved is the list as the server has it, not its own check.
+  phoneA.goOffline();
+  expect(view(await phoneA.data.getShoppingList())).toEqual([butterLine(true), garlicBread(false)]);
+});
+
 test('sending the same queue again (an answer lost on the way back) changes nothing', async () => {
   const [phone, other] = await signInOnPhones('shopper', 2);
   const { garlic, butter } = await listWithGarlicAndButter([phone, other]);

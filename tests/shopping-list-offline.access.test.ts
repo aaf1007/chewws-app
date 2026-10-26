@@ -52,7 +52,7 @@ test("a stranger's timestamped changes cannot check off, uncheck or take over so
     changed_at: farFuture,
   });
 
-  for (const result of results) expect(result).toMatchObject({ data: false, error: null });
+  for (const result of results) expect(result).toMatchObject({ data: 'gone', error: null });
   expect(takeId).toMatchObject({ data: 'taken', error: null });
   await expectOwnerListUnchanged();
   expect((await stranger.data.getShoppingList()).items).toEqual([]);
@@ -68,7 +68,7 @@ test('a change stamped in the future counts as made when it arrived, so it canno
     ingredient_name: 'foil',
     changed_at: farFuture,
   });
-  expect(checked).toMatchObject({ data: true, error: null });
+  expect(checked).toMatchObject({ data: 'applied', error: null });
   expect(added.error).toBeNull();
   const soon = Date.now() + 60_000;
   for (const item of (await owner.data.getShoppingList()).items) {

@@ -712,14 +712,17 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       return { status: 'refused', error: new DataError('shopping_list_missing', 'You have no Shopping List.') };
     }
     const args = { item_id: change.itemId, changed_at: madeAt };
-    const { data: found, error, status } =
+    const { data: result, error, status } =
       change.kind === 'checkOff' ? await client.rpc('check_off', args) : await client.rpc('uncheck', args);
     const failed = serverFailed(status);
     if (failed) return failed;
     if (notReached(status)) return { status: 'unreachable' };
     if (error) return { status: 'refused', error: toDataError(error) };
+    if (result === 'applied') return { status: 'sent' };
+    // A phone changed the item after this change was made: that change stands.
+    if (result === 'superseded') return { status: 'superseded' };
     // Gone (removed meanwhile, maybe from another phone): the change has nothing to change.
-    return found ? { status: 'sent' } : { status: 'dropped' };
+    return { status: 'dropped' };
   }
 
   /**
@@ -734,6 +737,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     let lastError: DataError | null = null;
     let savingList: Promise<void> = Promise.resolve();
     let discarded = false;
+    // A change the server skipped for a later one: the list last seen is out of date.
+    let superseded = false;
 
     function keep(list: ShoppingList) {
       if (discarded) return; // A read or change that finishes after its user signed out.
@@ -760,9 +765,12 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
         if (delivery.status === 'dropped') {
           keep({ ...lastSeen, items: lastSeen.items.filter((item) => item.id !== change.itemId) });
         }
+        if (delivery.status === 'superseded') superseded = true;
       },
-      // Read the list again for whoever's watching it, or to find out the phone is back online.
-      afterSync: (wasOffline) => (watchers.size > 0 || wasOffline ? refresh() : Promise.resolve('reached')),
+      // Read the list again for whoever's watching it, to find out the phone is back online, or to
+      // show the later change that beat one of this phone's.
+      afterSync: (wasOffline) =>
+        watchers.size > 0 || wasOffline || superseded ? refresh() : Promise.resolve('reached'),
       now,
       newId,
     });
@@ -816,7 +824,10 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
           return 'unreachable';
         }
         if (fetched.status === 'serverFailed') lastError ??= fetched.error;
-        else keep(fetched.list);
+        else {
+          superseded = false;
+          keep(fetched.list);
+        }
       } catch (e) {
         lastError = e instanceof DataError ? e : new DataError('unknown', String(e), { cause: e });
       }
@@ -974,8 +985,9 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
 
   /**
    * Queues a Shopping List change and sends it, with every change queued before it. Resolves once
-   * the server has it, or at once with no signal: it waits on the phone, shown on the list, and is
-   * sent on reconnect. Fails if the server says its item is gone, or refuses it.
+   * the server has it (or has a later change to the item, made on another phone, which stands), or
+   * at once with no signal: it waits on the phone, shown on the list, and is sent on reconnect.
+   * Fails if the server says its item is gone, or refuses it.
    */
   async function changeShoppingList(change: ListChange): Promise<void> {
     const me = await requireListOwner();

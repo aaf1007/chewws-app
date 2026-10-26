@@ -175,8 +175,10 @@ export function nextQueueState<C>(state: QueueState<C>, event: QueueEvent<C>): Q
 
 /** What happened when a change was sent. */
 export type Delivery =
-  /** The server has it (it applied, or a later change to the item already had). */
+  /** The server has it: it applied. */
   | { status: 'sent' }
+  /** A later change to its item, made elsewhere, stands instead: whoever shows the list reads it again. */
+  | { status: 'superseded' }
   /** Its item is gone, so there's nothing to change. */
   | { status: 'dropped' }
   /** The server will never take it. */
@@ -187,7 +189,7 @@ export type Delivery =
   | { status: 'unreachable' };
 
 /** How a change left the queue. */
-export type Delivered = Extract<Delivery, { status: 'sent' | 'dropped' | 'refused' }>;
+export type Delivered = Extract<Delivery, { status: 'sent' | 'superseded' | 'dropped' | 'refused' }>;
 
 /** What the code that made a change hears back: how it was delivered, or that it's waiting. */
 export type ChangeOutcome = Delivered | { status: 'queued' };
