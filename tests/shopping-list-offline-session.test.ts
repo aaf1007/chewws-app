@@ -460,3 +460,67 @@ test.each(['kept', 'none'] as const)(
   },
   RUN_OUT_TEST_TIMEOUT_MS,
 );
+
+test('the server refuses the session while list changes wait (every request answers 401, its refresh too): the user is signed out, never left offline', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const { foil } = await foilAndTowels([phone, other]);
+  const session = watchSession(phone);
+  await vi.waitFor(() => expect(session.last()).toEqual(signedIn(phone)));
+  phone.goOffline();
+  await phone.data.checkOff(foil);
+
+  phone.goOnline();
+  phone.serverAnswers(401);
+  await phone.data.syncListChanges();
+  await vi.waitFor(() => expect(session.last()).toEqual(signedOut));
+  expect([...phone.savedAuth().keys()]).toEqual([]);
+  await expect(phone.data.getListSync()).rejects.toMatchObject({ code: 'not_signed_in' });
+
+  phone.serverAnswers(null);
+  expect(view(await other.data.getShoppingList())).toEqual([
+    { item: 'Foil', checked: false },
+    { item: 'Paper towels', checked: false },
+  ]);
+  session.stop();
+});
+
+test("the server answers an item's changes with 401 even after the session is refreshed: retried with backoff like a server error, then given up and the user told", async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const { foil, towels } = await foilAndTowels([phone, other]);
+  const session = watchSession(phone);
+  phone.goOffline();
+  await phone.data.checkOff(foil);
+  await phone.data.checkOff(towels);
+
+  phone.goOnline();
+  phone.serverAnswersFor(foil, 401);
+  const t0 = Date.now();
+  phone.setClock(new Date(t0));
+  const retryingAt = (at: number) => ({ status: 'waitingToRetry', waiting: 2, retryAt: new Date(t0 + at * 1000).toISOString() });
+  expect(await phone.data.syncListChanges()).toEqual(retryingAt(10));
+  for (const [at, next] of [
+    [10, 40],
+    [40, 100],
+    [100, 400],
+    [400, 1300],
+  ]) {
+    phone.setClock(new Date(t0 + at * 1000));
+    expect(await phone.data.syncListChanges()).toEqual(retryingAt(next));
+  }
+  phone.setClock(new Date(t0 + 1300 * 1000));
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+
+  const expected = [
+    { item: 'Foil', checked: false },
+    { item: 'Paper towels', checked: true },
+  ];
+  expect(view(await other.data.getShoppingList())).toEqual(expected);
+  const screen = watch(phone);
+  await vi.waitFor(() =>
+    expect(screen.last()).toMatchObject({ status: 'loaded', notSaved: [{ kind: 'checkOff', itemName: 'Foil' }] }),
+  );
+  expect(listOf(screen.last())).toEqual(expected);
+  expect(session.states).toEqual([signedIn(phone)]);
+  screen.stop();
+  session.stop();
+});

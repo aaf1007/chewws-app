@@ -226,15 +226,24 @@ function fail(error: AuthError | PostgrestError): never {
 
 /**
  * Whether a response means the server wasn't reached, or can't answer yet, so a queued change
- * should wait and be sent again: no response at all, a session that needs refreshing, a timeout,
- * too many requests, or any server error (5xx: the server, or a gateway in front of it, failed;
- * the change itself may be fine). Only a 4xx refuses the change.
+ * should wait and be sent again: no response at all, a timeout, too many requests, or any server
+ * error (5xx: the server, or a gateway in front of it, failed; the change itself may be fine).
+ * A 401 is handled first by `asSignedIn`. Only a 4xx refuses the change.
  */
-const notReached = (status: number) => status === 0 || [401, 408, 429].includes(status) || status >= 500;
+const notReached = (status: number) => status === 0 || [408, 429].includes(status) || status >= 500;
 
-/** For a queued change, a server error is told apart: one that never passes gives the change up. */
-const serverFailed = (status: number): Extract<Delivery, { status: 'serverFailed' }> | null =>
-  status >= 500 ? { status: 'serverFailed', error: new DataError('server_error', `The server failed (${status}).`) } : null;
+/**
+ * For a queued change, a server error is told apart: one that never passes gives the change up.
+ * So is a 401 that `asSignedIn` got again after refreshing the session: the server keeps refusing
+ * a session it just refreshed, which waiting alone won't fix.
+ */
+const serverFailed = (status: number): Extract<Delivery, { status: 'serverFailed' }> | null => {
+  if (status >= 500) return { status: 'serverFailed', error: new DataError('server_error', `The server failed (${status}).`) };
+  if (status === 401) {
+    return { status: 'serverFailed', error: new DataError('unauthorized', 'The server refused the session (401).') };
+  }
+  return null;
+};
 
 export type DataLayerOptions = {
   /** Where the phone keeps list changes waiting to be sent and the last list it saw. */
@@ -344,9 +353,12 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
    * Why a session ends on this phone. `signedOut`: the user signed out. The auth client asks for
    * the others, at `turn` `seen`: `refused`, it dropped the session because the server refused to
    * refresh it (revoked, or signed out everywhere); `noSession`, the app started and it had no
-   * session it could use, and not for lack of a signal.
+   * session it could use, and not for lack of a signal. `refused` is also asked for by `asSignedIn`,
+   * whose refresh of `refusedSessionId` the server refused while the auth client kept it.
    */
-  type SessionEnd = { reason: 'signedOut' } | { reason: 'refused' | 'noSession'; seen: number };
+  type SessionEnd =
+    | { reason: 'signedOut' }
+    | { reason: 'refused' | 'noSession'; seen: number; refusedSessionId?: string };
 
   /**
    * Ends the session on this phone; the only thing that does. The session the auth client kept is
@@ -362,7 +374,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
         if (turn !== end.seen) return [];
         const kept = (await sessionStorage.saved()).map(parseKeptSession);
         // One that says whose it isn't, no one can be signed in with.
-        if (kept.some((s) => s?.userId && !ended(s.sessionId))) return [];
+        if (kept.some((s) => s?.userId && !ended(s.sessionId) && s.sessionId !== end.refusedSessionId)) return [];
       }
       turn += 1;
       const me = session.status === 'signedIn' ? session.userId : await remembered;
@@ -429,6 +441,28 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   async function hasSessionOf(me: UserId): Promise<boolean> {
     const { data } = await client.auth.getSession();
     return data.session?.user.id === me;
+  }
+
+  /**
+   * Makes a request as the user signed in. A 401 means the server refused the session's access
+   * token: the session is refreshed once and the request made again. With no signal to refresh
+   * it, the request is `unreachable`; a refresh the server refuses ends the session on this phone
+   * (`ended`), even when the auth client keeps it because its access token hasn't run out by the
+   * phone's clock. A 401 after a refresh that worked is returned as the answer.
+   */
+  async function asSignedIn<R extends { status: number }>(
+    request: () => PromiseLike<R>,
+  ): Promise<R | 'unreachable' | 'ended'> {
+    const first = await request();
+    if (first.status !== 401) return first;
+    const seen = turn;
+    const { data } = await client.auth.getSession();
+    const refusedSessionId = data.session ? sessionIdOf(data.session) : undefined;
+    const { error } = await client.auth.refreshSession();
+    if (!error) return request();
+    if (isAuthRetryableFetchError(error)) return 'unreachable';
+    await endSessionOnPhone({ reason: 'refused', seen, refusedSessionId });
+    return 'ended';
   }
 
   /** Signs in, once any sign-out still finishing is done. */
@@ -631,12 +665,12 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     me: UserId,
   ): Promise<{ status: 'reached'; list: ShoppingList } | { status: 'unreachable' } | { status: 'serverFailed'; error: DataError }> {
     if (!(await hasSessionOf(me))) return { status: 'unreachable' };
-    const { data, error, status } = await client
-      .from('shopping_lists')
-      .select(SHOPPING_LIST_WITH_ITEMS)
-      .eq('owner_id', me)
-      .maybeSingle()
-      .retry(false);
+    const answer = await asSignedIn(() =>
+      client.from('shopping_lists').select(SHOPPING_LIST_WITH_ITEMS).eq('owner_id', me).maybeSingle().retry(false),
+    );
+    if (answer === 'unreachable') return { status: 'unreachable' };
+    if (answer === 'ended') throw notSignedIn();
+    const { data, error, status } = answer;
     const failed = serverFailed(status);
     if (failed) return failed;
     if (notReached(status)) return { status: 'unreachable' };
@@ -676,12 +710,17 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     // about 25 seconds), and the change with it, even if they've signed in again since.
     if (discarded()) return { status: 'refused', error: notSignedIn() };
     if (change.kind === 'addManualItem') {
-      const { data: added, error, status } = await client.rpc('add_manual_item', {
-        item_text: change.text,
-        ingredient_name: normaliseIngredientName(change.text),
-        item_id: change.itemId,
-        changed_at: madeAt,
-      });
+      const answer = await asSignedIn(() =>
+        client.rpc('add_manual_item', {
+          item_text: change.text,
+          ingredient_name: normaliseIngredientName(change.text),
+          item_id: change.itemId,
+          changed_at: madeAt,
+        }),
+      );
+      if (answer === 'unreachable') return { status: 'unreachable' };
+      if (answer === 'ended') return { status: 'refused', error: notSignedIn() };
+      const { data: added, error, status } = answer;
       const failed = serverFailed(status);
       if (failed) return failed;
       if (notReached(status)) return { status: 'unreachable' };
@@ -693,8 +732,12 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       return { status: 'refused', error: new DataError('shopping_list_missing', 'You have no Shopping List.') };
     }
     const args = { item_id: change.itemId, changed_at: madeAt };
-    const { data: result, error, status } =
-      change.kind === 'checkOff' ? await client.rpc('check_off', args) : await client.rpc('uncheck', args);
+    const answer = await asSignedIn(() =>
+      change.kind === 'checkOff' ? client.rpc('check_off', args) : client.rpc('uncheck', args),
+    );
+    if (answer === 'unreachable') return { status: 'unreachable' };
+    if (answer === 'ended') return { status: 'refused', error: notSignedIn() };
+    const { data: result, error, status } = answer;
     const failed = serverFailed(status);
     if (failed) return failed;
     if (notReached(status)) return { status: 'unreachable' };
@@ -1022,8 +1065,10 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     const before = lists.queue.state();
     if (before.status === 'offline' || before.queue.length > 0) await lists.queue.sync();
     if (lists.queue.state().status === 'offline') throw needsConnection('Removing');
-    const { error, status } = await client.from('shopping_list_items').delete().eq('id', itemId);
-    if (status >= 500) {
+    const answer = await asSignedIn(() => client.from('shopping_list_items').delete().eq('id', itemId));
+    if (answer === 'ended') throw notSignedIn();
+    const { error, status } = answer === 'unreachable' ? { error: null, status: 0 } : answer;
+    if (serverFailed(status)) {
       throw new DataError('server_error', "Couldn't remove it: the server had a problem. Try again in a moment.");
     }
     if (notReached(status)) {
