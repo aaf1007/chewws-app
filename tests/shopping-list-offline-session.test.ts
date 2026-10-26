@@ -463,33 +463,43 @@ test.each(['kept', 'none'] as const)(
 
 const REFRESH = 'grant_type=refresh_token';
 
-test('the server refuses the session while list changes wait (every request answers 401, its refresh refresh_token_not_found): the user is signed out, never left offline', async () => {
-  const [phone, other] = await signInOnPhones('shopper', 2);
-  const { foil } = await foilAndTowels([phone, other]);
-  const session = watchSession(phone);
-  await vi.waitFor(() => expect(session.last()).toEqual(signedIn(phone)));
-  phone.goOffline();
-  await phone.data.checkOff(foil);
+/**
+ * The auth server refusing a refresh, as it answers one (API version 2024-01-01). Whatever the
+ * code, a JSON answer of 400, 401 or 403 from the auth server ends the session.
+ */
+const REFRESH_REFUSALS = [
+  ['refresh_token_not_found', { code: 'refresh_token_not_found', message: 'Invalid Refresh Token: Refresh Token Not Found' }],
+  ['user_banned', { code: 'user_banned', message: 'Invalid Refresh Token: User Banned' }],
+  ['validation_failed', { code: 'validation_failed', message: 'refresh_token required' }],
+] as const;
 
-  phone.goOnline();
-  phone.serverAnswers(401);
-  // As the auth server refuses a refresh token it no longer has.
-  phone.serverAnswersFor(REFRESH, 400, {
-    code: 'refresh_token_not_found',
-    message: 'Invalid Refresh Token: Refresh Token Not Found',
-  });
-  await phone.data.syncListChanges();
-  await vi.waitFor(() => expect(session.last()).toEqual(signedOut));
-  expect([...phone.savedAuth().keys()]).toEqual([]);
-  await expect(phone.data.getListSync()).rejects.toMatchObject({ code: 'not_signed_in' });
+test.each(REFRESH_REFUSALS)(
+  'the server refuses the session while list changes wait (every request answers 401, its refresh 400 %s): the user is signed out, never left offline',
+  async (_, refusal) => {
+    const [phone, other] = await signInOnPhones('shopper', 2);
+    const { foil } = await foilAndTowels([phone, other]);
+    const session = watchSession(phone);
+    await vi.waitFor(() => expect(session.last()).toEqual(signedIn(phone)));
+    phone.goOffline();
+    await phone.data.checkOff(foil);
 
-  phone.serverAnswers(null);
-  expect(view(await other.data.getShoppingList())).toEqual([
-    { item: 'Foil', checked: false },
-    { item: 'Paper towels', checked: false },
-  ]);
-  session.stop();
-});
+    phone.goOnline();
+    phone.serverAnswers(401);
+    phone.serverAnswersFor(REFRESH, 400, refusal);
+    await phone.data.syncListChanges();
+    await vi.waitFor(() => expect(session.last()).toEqual(signedOut));
+    expect([...phone.saved().keys()]).toEqual([]);
+    expect([...phone.savedAuth().keys()]).toEqual([]);
+    await expect(phone.data.getListSync()).rejects.toMatchObject({ code: 'not_signed_in' });
+
+    phone.serverAnswers(null);
+    expect(view(await other.data.getShoppingList())).toEqual([
+      { item: 'Foil', checked: false },
+      { item: 'Paper towels', checked: false },
+    ]);
+    session.stop();
+  },
+);
 
 test("the server answers an item's changes with 401 even after the session is refreshed: retried with backoff like a server error, then given up and the user told", async () => {
   const [phone, other] = await signInOnPhones('shopper', 2);
@@ -599,29 +609,29 @@ test.each([
   },
 );
 
-test('opened from cold with the access token run out, its refresh refused (400 refresh_token_not_found): signed out, the changes still waiting thrown away', async () => {
-  const [phone, other] = await signInOnPhones('shopper', 2);
-  const { foil } = await foilAndTowels([phone, other]);
-  phone.goOffline();
-  await phone.data.checkOff(foil);
-  phone.expireAccessToken();
+test.each(REFRESH_REFUSALS)(
+  'opened from cold with the access token run out, its refresh refused (400 %s): signed out, the changes still waiting thrown away',
+  async (_, refusal) => {
+    const [phone, other] = await signInOnPhones('shopper', 2);
+    const { foil } = await foilAndTowels([phone, other]);
+    phone.goOffline();
+    await phone.data.checkOff(foil);
+    phone.expireAccessToken();
 
-  const reopened = phone.relaunch();
-  reopened.goOnline();
-  reopened.serverAnswersFor(REFRESH, 400, {
-    code: 'refresh_token_not_found',
-    message: 'Invalid Refresh Token: Refresh Token Not Found',
-  });
-  const session = watchSession(reopened);
-  await vi.waitFor(() => expect(session.last()).toEqual(signedOut));
-  expect([...reopened.saved().keys()]).toEqual([]);
-  expect([...reopened.savedAuth().keys()]).toEqual([]);
-  await expect(reopened.data.getListSync()).rejects.toMatchObject({ code: 'not_signed_in' });
+    const reopened = phone.relaunch();
+    reopened.goOnline();
+    reopened.serverAnswersFor(REFRESH, 400, refusal);
+    const session = watchSession(reopened);
+    await vi.waitFor(() => expect(session.last()).toEqual(signedOut));
+    expect([...reopened.saved().keys()]).toEqual([]);
+    expect([...reopened.savedAuth().keys()]).toEqual([]);
+    await expect(reopened.data.getListSync()).rejects.toMatchObject({ code: 'not_signed_in' });
 
-  reopened.serverAnswersFor(REFRESH, null);
-  expect(view(await other.data.getShoppingList())).toEqual([
-    { item: 'Foil', checked: false },
-    { item: 'Paper towels', checked: false },
-  ]);
-  session.stop();
-});
+    reopened.serverAnswersFor(REFRESH, null);
+    expect(view(await other.data.getShoppingList())).toEqual([
+      { item: 'Foil', checked: false },
+      { item: 'Paper towels', checked: false },
+    ]);
+    session.stop();
+  },
+);

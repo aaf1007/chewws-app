@@ -53,15 +53,6 @@ type RecipeLineRow = Database['public']['Tables']['recipe_lines']['Row'];
 type ShoppingListItemRow = Database['public']['Tables']['shopping_list_items']['Row'];
 type ShoppingListAmountRow = Database['public']['Tables']['shopping_list_amounts']['Row'];
 
-/** The auth server's error codes (auth-js 2.118) for a session or refresh token it won't honour. */
-const SESSION_REFUSED_CODES: ReadonlySet<string> = new Set([
-  'refresh_token_not_found',
-  'refresh_token_already_used',
-  'session_not_found',
-  'session_expired',
-  'bad_jwt',
-]);
-
 const RECIPE_WITH_LINES =
   '*, recipe_lines(position, original_text, amount_text, ingredient:ingredients(id, name))';
 
@@ -480,17 +471,14 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   }
 
   /**
-   * Whether a failed refresh is the auth server refusing the session itself. Anything else (no
-   * signal, a 408 or 429, a 5xx, a body that isn't the auth server's JSON) says nothing about it.
+   * Whether a failed refresh ends the session: there was no session, or the auth server itself
+   * (its JSON answer) refused the refresh with a 400, 401 or 403, whatever its code (a revoked or
+   * reused refresh token, a banned user, a malformed request alike). Anything else (no signal, a
+   * 408 or 429, a 5xx, a body that isn't the auth server's JSON) says nothing about the session.
    */
   function refusesSession(error: AuthError): boolean {
     if (isAuthSessionMissingError(error)) return true;
-    return (
-      isAuthApiError(error) &&
-      [400, 401, 403].includes(error.status) &&
-      error.code !== undefined &&
-      SESSION_REFUSED_CODES.has(error.code)
-    );
+    return isAuthApiError(error) && [400, 401, 403].includes(error.status);
   }
 
   /** Signs in, once any sign-out still finishing is done. */
