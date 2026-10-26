@@ -173,10 +173,28 @@ function parseSavedUserId(raw: string | null): UserId | null {
 }
 
 /**
- * A session the auth client kept on the phone, as much of it as ending it needs, and whose it is
- * (null if that can't be read).
+ * Which session a session the auth client holds is: its access token's `session_id` claim, the
+ * same across refreshes, so a refresh that lands after the session ended is still that session.
+ * The refresh token (new on each refresh) if the claim can't be read.
  */
-type KeptSession = { accessToken: string; refreshToken: string; expiresAt: number | null; userId: UserId | null };
+function sessionIdOf({ access_token, refresh_token }: { access_token: string; refresh_token: string }): string {
+  try {
+    const payload = access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const claims: unknown = JSON.parse(atob(payload.padEnd(Math.ceil(payload.length / 4) * 4, '=')));
+    if (typeof claims === 'object' && claims !== null && 'session_id' in claims && typeof claims.session_id === 'string') {
+      return claims.session_id;
+    }
+  } catch {
+    // Not a token this app can read.
+  }
+  return refresh_token;
+}
+
+/**
+ * A session the auth client kept on the phone, as much of it as ending it needs: which it is
+ * (`sessionIdOf`), and whose (null if that can't be read).
+ */
+type KeptSession = { accessToken: string; sessionId: string; expiresAt: number | null; userId: UserId | null };
 
 /** The id of the user `user` (a kept session's), or null if it has none this app can read. */
 function parseKeptUserId(user: unknown): UserId | null {
@@ -203,7 +221,7 @@ function parseKeptSession(raw: string): KeptSession | null {
   if (typeof accessToken !== 'string' || typeof refreshToken !== 'string') return null;
   return {
     accessToken,
-    refreshToken,
+    sessionId: sessionIdOf({ access_token: accessToken, refresh_token: refreshToken }),
     expiresAt: typeof expiresAt === 'number' ? expiresAt : null,
     userId: parseKeptUserId('user' in value ? value.user : null),
   };
@@ -307,7 +325,10 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     }
   }
 
-  /** The refresh tokens of sessions ended on this phone. The auth client may yet report one it held. */
+  /**
+   * The sessions ended on this phone (`sessionIdOf`). The auth client may yet report one it held,
+   * or refresh one after it ended.
+   */
   const ended = new Set<string>();
 
   function remember(id: UserId | null): Promise<void> {
@@ -359,12 +380,12 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
         if (turn !== end.seen) return [];
         const kept = (await sessionStorage.saved()).map(parseKeptSession);
         // One that says whose it isn't, no one can be signed in with.
-        if (kept.some((s) => s?.userId && !ended.has(s.refreshToken))) return [];
+        if (kept.some((s) => s?.userId && !ended.has(s.sessionId))) return [];
       }
       turn += 1;
       const me = session.status === 'signedIn' ? session.userId : await remembered;
       const cleared = (await sessionStorage.clear()).map(parseKeptSession).filter((s) => s !== null);
-      for (const { refreshToken } of cleared) ended.add(refreshToken);
+      for (const { sessionId } of cleared) ended.add(sessionId);
       await remember(null);
       if (me) {
         const list = shoppingListOf(me);
@@ -384,7 +405,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     const { data, error } = await client.auth.getSession();
     const id = await remembered;
     if (turn !== seen) return; // A sign-in, a sign-out or a session reported since has the say.
-    if (data.session && !ended.has(data.session.refresh_token)) signedInAs(parseUserId(data.session.user.id));
+    if (data.session && !ended.has(sessionIdOf(data.session))) signedInAs(parseUserId(data.session.user.id));
     else if (id && error && isAuthRetryableFetchError(error)) setSession({ status: 'signedIn', userId: id });
     else await endSessionOnPhone({ reason: 'noSession', seen });
   }
@@ -392,7 +413,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   client.auth.onAuthStateChange((event, authSession) => {
     if (authSession) {
       // One ended on this phone, as the auth client held it before then, has no say.
-      if (!ended.has(authSession.refresh_token)) signedInAs(parseUserId(authSession.user.id));
+      if (!ended.has(sessionIdOf(authSession))) signedInAs(parseUserId(authSession.user.id));
     } else if (event === 'INITIAL_SESSION') {
       // Asking the auth client from inside its own callback would wait on itself.
       const seen = turn;
