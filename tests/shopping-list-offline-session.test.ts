@@ -407,7 +407,17 @@ test(
     read.release();
     await syncing;
     expect(session.states).toEqual([signedIn(phone), signedOut]);
+    // The late refresh wasn't saved on the phone: nothing works as the user, now or after a restart.
+    expect([...phone.savedAuth().keys()]).toEqual([]);
+    await expect(phone.data.getShoppingList()).rejects.toMatchObject({ code: 'not_signed_in' });
+    const reopened = phone.relaunch();
+    const reopenedSession = watchSession(reopened);
+    await vi.waitFor(() => expect(reopenedSession.last()).toEqual(signedOut));
+    await expect(reopened.data.getShoppingList()).rejects.toMatchObject({ code: 'not_signed_in' });
+    await expect(reopened.data.getMyProfile()).rejects.toMatchObject({ code: 'not_signed_in' });
+    expect(reopenedSession.states).toEqual([signedOut]);
     session.stop();
+    reopenedSession.stop();
   },
   RUN_OUT_TEST_TIMEOUT_MS,
 );

@@ -17,7 +17,7 @@ import { normaliseIngredientName } from './ingredient-matcher';
 import { sortListItems, toListLines, withListChanges, type ListChange } from './list-engine';
 import { parseListChange, parseSavedShoppingList } from './list-storage';
 import { validateRecipeInput } from './recipe-input';
-import type { SessionStorage } from './session-storage';
+import { sessionIdOf, type SessionStorage } from './session-storage';
 import {
   DataError,
   parseIngredientId,
@@ -173,24 +173,6 @@ function parseSavedUserId(raw: string | null): UserId | null {
 }
 
 /**
- * Which session a session the auth client holds is: its access token's `session_id` claim, the
- * same across refreshes, so a refresh that lands after the session ended is still that session.
- * The refresh token (new on each refresh) if the claim can't be read.
- */
-function sessionIdOf({ access_token, refresh_token }: { access_token: string; refresh_token: string }): string {
-  try {
-    const payload = access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-    const claims: unknown = JSON.parse(atob(payload.padEnd(Math.ceil(payload.length / 4) * 4, '=')));
-    if (typeof claims === 'object' && claims !== null && 'session_id' in claims && typeof claims.session_id === 'string') {
-      return claims.session_id;
-    }
-  } catch {
-    // Not a token this app can read.
-  }
-  return refresh_token;
-}
-
-/**
  * A session the auth client kept on the phone, as much of it as ending it needs: which it is
  * (`sessionIdOf`), and whose (null if that can't be read).
  */
@@ -326,10 +308,10 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   }
 
   /**
-   * The sessions ended on this phone (`sessionIdOf`). The auth client may yet report one it held,
-   * or refresh one after it ended.
+   * Whether a session was ended on this phone (`sessionIdOf`). The auth client may yet report one
+   * it held, or refresh one after it ended (`sessionStorage` never saves that refresh).
    */
-  const ended = new Set<string>();
+  const ended = (sessionId: string) => sessionStorage.hasEnded(sessionId);
 
   function remember(id: UserId | null): Promise<void> {
     remembered = Promise.resolve(id);
@@ -380,12 +362,11 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
         if (turn !== end.seen) return [];
         const kept = (await sessionStorage.saved()).map(parseKeptSession);
         // One that says whose it isn't, no one can be signed in with.
-        if (kept.some((s) => s?.userId && !ended.has(s.sessionId))) return [];
+        if (kept.some((s) => s?.userId && !ended(s.sessionId))) return [];
       }
       turn += 1;
       const me = session.status === 'signedIn' ? session.userId : await remembered;
       const cleared = (await sessionStorage.clear()).map(parseKeptSession).filter((s) => s !== null);
-      for (const { sessionId } of cleared) ended.add(sessionId);
       await remember(null);
       if (me) {
         const list = shoppingListOf(me);
@@ -405,7 +386,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     const { data, error } = await client.auth.getSession();
     const id = await remembered;
     if (turn !== seen) return; // A sign-in, a sign-out or a session reported since has the say.
-    if (data.session && !ended.has(sessionIdOf(data.session))) signedInAs(parseUserId(data.session.user.id));
+    if (data.session && !ended(sessionIdOf(data.session))) signedInAs(parseUserId(data.session.user.id));
     else if (id && error && isAuthRetryableFetchError(error)) setSession({ status: 'signedIn', userId: id });
     else await endSessionOnPhone({ reason: 'noSession', seen });
   }
@@ -413,7 +394,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   client.auth.onAuthStateChange((event, authSession) => {
     if (authSession) {
       // One ended on this phone, as the auth client held it before then, has no say.
-      if (!ended.has(sessionIdOf(authSession))) signedInAs(parseUserId(authSession.user.id));
+      if (!ended(sessionIdOf(authSession))) signedInAs(parseUserId(authSession.user.id));
     } else if (event === 'INITIAL_SESSION') {
       // Asking the auth client from inside its own callback would wait on itself.
       const seen = turn;
