@@ -38,7 +38,9 @@ export type QueueEvent<C> =
   | { type: 'sent'; id: string }
   | { type: 'unreachable' }
   /** The queue is empty and the server was reached. */
-  | { type: 'synced' };
+  | { type: 'synced' }
+  /** The changes are thrown away unsent, as when their user signs out. */
+  | { type: 'discarded' };
 
 export function nextQueueState<C>(state: QueueState<C>, event: QueueEvent<C>): QueueState<C> {
   switch (event.type) {
@@ -58,6 +60,8 @@ export function nextQueueState<C>(state: QueueState<C>, event: QueueEvent<C>): Q
       return { ...state, status: 'offline' };
     case 'synced':
       return { ...state, status: 'idle' };
+    case 'discarded':
+      return { status: 'idle', queue: [] };
   }
 }
 
@@ -123,6 +127,8 @@ export type ChangeQueue<C> = {
   sync(): Promise<void>;
   /** For a request outside the queue that didn't reach the server. */
   markUnreachable(): void;
+  /** Throws away every change waiting, unsent; whoever waits on one hears it's refused with `error`. */
+  discard(error: DataError): Promise<void>;
   state(): QueueState<C>;
   subscribe(listener: (state: QueueState<C>) => void): () => void;
 };
@@ -246,6 +252,12 @@ export function createChangeQueue<C>(options: {
     enqueue,
     sync,
     markUnreachable: () => dispatch({ type: 'unreachable' }),
+    async discard(error) {
+      await ready;
+      dispatch({ type: 'discarded' });
+      await save();
+      for (const id of [...waiting.keys()]) settle(id, { status: 'refused', error });
+    },
     state: () => state,
     subscribe(listener) {
       listeners.add(listener);

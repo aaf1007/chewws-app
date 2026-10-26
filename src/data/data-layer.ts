@@ -2,6 +2,7 @@ import {
   isAuthRetryableFetchError,
   type AuthError,
   type PostgrestError,
+  type Session,
   type SupabaseClient,
 } from '@supabase/supabase-js';
 
@@ -17,6 +18,7 @@ import { normaliseIngredientName } from './ingredient-matcher';
 import { sortListItems, toListLines, withListChanges, type ListChange } from './list-engine';
 import { parseListChange, parseSavedShoppingList } from './list-storage';
 import { validateRecipeInput } from './recipe-input';
+import type { SessionStorage } from './session-storage';
 import {
   DataError,
   parseIngredientId,
@@ -197,6 +199,11 @@ export type DataLayerOptions = {
   now?: () => number;
   /** Makes a fresh UUID, for items added on the phone and its queued changes. */
   newId?: () => string;
+  /**
+   * Where the auth client keeps its session (the same object as its `auth.storage`), so signing
+   * out ends it on the phone at once, signal or not. Without it, signing out waits on the auth client.
+   */
+  sessionStorage?: SessionStorage;
 };
 
 /**
@@ -230,6 +237,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     .catch(() => null);
   let savingSignedIn: Promise<void> = Promise.resolve();
   let authEvents = 0;
+  /** The session the auth client last reported, to end it on the server when signing out. */
+  let heldSession: Session | null = null;
   const sessionWatchers = new Set<(state: SessionState) => void>();
 
   function setSession(next: SessionState) {
@@ -265,6 +274,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
 
   client.auth.onAuthStateChange((event, authSession) => {
     authEvents += 1;
+    heldSession = authSession;
     if (authSession) {
       setSession({ status: 'signedIn', userId: parseUserId(authSession.user.id) });
     } else if (event === 'INITIAL_SESSION') {
@@ -322,10 +332,36 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     return id;
   }
 
+  /**
+   * Signs out on this phone at once, signal or not: the phone forgets the user, the session the
+   * auth client saved, and the user's Shopping List (its changes still waiting are thrown away, so
+   * they're never sent, as them or as whoever signs in next). Then, if the server can be reached,
+   * this phone's session ends there too. The user's other phones stay signed in.
+   */
   async function signOut(): Promise<void> {
-    const { error } = await client.auth.signOut();
-    if (error) fail(error);
+    const me = await listOwner();
+    const held = heldSession;
+    authEvents += 1; // A session the auth client was still settling has no say any more.
+    await options.sessionStorage?.clear();
     setSession({ status: 'signedOut' });
+    if (me) {
+      await shoppingListOf(me).discard();
+      shoppingLists.delete(me);
+    }
+    await endSessionOnServer(held);
+  }
+
+  /** Best effort: with no signal, or a session that ran out, the server keeps it until it expires. */
+  async function endSessionOnServer(held: Session | null) {
+    try {
+      if (held?.expires_at && held.expires_at * 1000 > Date.now()) {
+        await client.auth.admin.signOut(held.access_token, 'local');
+      }
+      // Lets the auth client let go of the session too. It has none saved any more, so it asks no server.
+      await client.auth.signOut({ scope: 'local' });
+    } catch {
+      // Signed out on the phone already.
+    }
   }
 
   /**
@@ -617,6 +653,15 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       return 'reached';
     }
 
+    /** Its user signed out: the changes waiting are thrown away, and the list last seen forgotten. */
+    async function discard() {
+      await ready;
+      await queue.discard(notSignedIn());
+      lastSeen = null;
+      savingList = savingList.then(() => storage.setItem(listKey, 'null')).catch(() => {});
+      await savingList;
+    }
+
     function forget(itemId: ShoppingListItemId) {
       if (lastSeen) keep({ ...lastSeen, items: lastSeen.items.filter((item) => item.id !== itemId) });
       emit();
@@ -628,7 +673,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     }
 
     queue.subscribe(emit);
-    return { queue, watchers, ready, keep, shown, view, emit, sync, refresh, refreshWatched, forget };
+    return { queue, watchers, ready, keep, shown, view, emit, sync, refresh, refreshWatched, forget, discard };
   }
 
   const shoppingLists = new Map<UserId, ReturnType<typeof openShoppingList>>();

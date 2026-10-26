@@ -165,3 +165,106 @@ test('a refresh the server refuses still signs the user out, with the app open',
   await expect(phone.data.checkOff(foil)).rejects.toMatchObject({ code: 'not_signed_in' });
   await expect(phone.data.getShoppingList()).rejects.toMatchObject({ code: 'not_signed_in' });
 });
+
+const signedOut: SessionState = { status: 'signedOut' };
+
+/** How long signing out may take: no waiting on a refresh that can't happen. */
+const SIGN_OUT_MS = 2_000;
+
+test('signing out with no signal and the access token run out signs out at once, and stays signed out after a cold start, offline then online', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const { foil } = await foilAndTowels([phone, other]);
+  const session = watchSession(phone);
+  await vi.waitFor(() => expect(session.last()).toEqual(signedIn(phone)));
+  phone.expireAccessToken();
+  phone.goOffline();
+
+  const started = Date.now();
+  await phone.data.signOut();
+  expect(Date.now() - started).toBeLessThan(SIGN_OUT_MS);
+  expect(session.last()).toEqual(signedOut);
+  await expect(phone.data.checkOff(foil)).rejects.toMatchObject({ code: 'not_signed_in' });
+  await expect(phone.data.getShoppingList()).rejects.toMatchObject({ code: 'not_signed_in' });
+
+  const offline = phone.relaunch();
+  const offlineSession = watchSession(offline);
+  await vi.waitFor(() => expect(offlineSession.last()).toEqual(signedOut));
+  await expect(offline.data.getShoppingList()).rejects.toMatchObject({ code: 'not_signed_in' });
+
+  offline.goOnline();
+  const online = offline.relaunch();
+  const onlineSession = watchSession(online);
+  await vi.waitFor(() => expect(onlineSession.last()).toEqual(signedOut));
+  await expect(online.data.getMyProfile()).rejects.toMatchObject({ code: 'not_signed_in' });
+  await expect(online.data.getShoppingList()).rejects.toMatchObject({ code: 'not_signed_in' });
+  expect([...session.states, ...offlineSession.states, ...onlineSession.states]).toEqual([
+    signedIn(phone),
+    signedOut,
+    signedOut,
+    signedOut,
+  ]);
+  session.stop();
+  offlineSession.stop();
+  onlineSession.stop();
+}, RUN_OUT_TEST_TIMEOUT_MS);
+
+test('list changes still waiting when the user signs out are discarded: never sent, as them or as whoever signs in next', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const [next] = await signInOnPhones('next', 1);
+  const { foil, towels } = await foilAndTowels([phone, other]);
+  phone.goOffline();
+  await phone.data.checkOff(foil);
+  await phone.data.addManualItem('Snacks');
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 2 });
+  await phone.data.signOut();
+
+  // Someone else signs in on this phone, with a signal: only their own (empty) list syncs.
+  phone.goOnline();
+  expect(await phone.data.signInWithPassword(next.account)).toEqual(next.userId);
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  expect((await phone.data.getShoppingList()).items).toEqual([]);
+  await phone.data.signOut();
+
+  // The user again, after a restart: nothing of theirs is waiting, and the server never had it.
+  const reopened = phone.relaunch();
+  await reopened.data.signInWithPassword(phone.account);
+  expect(await reopened.data.getListSync()).toEqual({ status: 'idle', waiting: 0 });
+  expect(await reopened.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  const unchanged = [
+    { item: 'Foil', checked: false },
+    { item: 'Paper towels', checked: false },
+  ];
+  expect(view(await reopened.data.getShoppingList())).toEqual(unchanged);
+  expect(view(await other.data.getShoppingList())).toEqual(unchanged);
+  expect((await next.data.getShoppingList()).items).toEqual([]);
+  await other.data.checkOff(towels);
+  expect(view(await reopened.data.getShoppingList())).toEqual([
+    { item: 'Foil', checked: false },
+    { item: 'Paper towels', checked: true },
+  ]);
+});
+
+test("signing out with a signal ends this phone's session on the server too; the user's other phones stay signed in", async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  await foilAndTowels([phone, other]);
+  const before = phone.savedAuth();
+
+  const started = Date.now();
+  await phone.data.signOut();
+  expect(Date.now() - started).toBeLessThan(SIGN_OUT_MS);
+
+  // The session the phone held can't be refreshed any more, even by a copy of it.
+  const copy = phone.relaunch(undefined, before);
+  copy.expireAccessToken();
+  const copySession = watchSession(copy);
+  await vi.waitFor(() => expect(copySession.last()).toEqual(signedOut));
+
+  // The other phone's session still refreshes.
+  other.expireAccessToken();
+  const reopened = other.relaunch();
+  const otherSession = watchSession(reopened);
+  await vi.waitFor(() => expect(otherSession.last()).toEqual(signedIn(other)));
+  expect((await reopened.data.getMyProfile()).id).toEqual(other.userId);
+  copySession.stop();
+  otherSession.stop();
+});

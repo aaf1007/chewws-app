@@ -2,6 +2,7 @@ export { memoryStorage, type KeyValueStorage } from './change-queue';
 export { createDataLayer, type DataLayer, type DataLayerOptions } from './data-layer';
 export { normaliseIngredientName } from './ingredient-matcher';
 export { validateRecipeInput, type RecipeInputError } from './recipe-input';
+export { createSessionStorage, type AuthStorage, type SessionStorage } from './session-storage';
 export {
   DataError,
   parseRecipeId,

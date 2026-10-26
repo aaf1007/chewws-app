@@ -1,8 +1,15 @@
 import pg from 'pg';
 import { inject } from 'vitest';
 
-import { createDataLayer, type DataLayer, type IngredientId, type KeyValueStorage, type UserId } from '../src/data';
-import { createTestAccount, createTestClient, signInAttacker } from './access-harness';
+import {
+  createDataLayer,
+  createSessionStorage,
+  type DataLayer,
+  type IngredientId,
+  type KeyValueStorage,
+  type UserId,
+} from '../src/data';
+import { createTestAccount, createTestClient, signInAttacker, type TestAccount } from './access-harness';
 
 export type TestUser = { userId: UserId; data: DataLayer };
 
@@ -68,6 +75,8 @@ export async function holdShoppingListLine(user: TestUser, ingredientId: Ingredi
 export type SavedOnPhone = ReadonlyMap<string, string>;
 
 export type TestPhone = TestUser & {
+  /** The user's email and password, to sign them in again (on any phone). */
+  account: TestAccount;
   /** No signal: every request fails as it would in the app. */
   goOffline(): void;
   goOnline(): void;
@@ -80,6 +89,8 @@ export type TestPhone = TestUser & {
   setClock(at: Date): void;
   /** A copy of what the app has saved on this phone. */
   saved(): SavedOnPhone;
+  /** A copy of what the auth client has saved on this phone: its session, if any. */
+  savedAuth(): SavedOnPhone;
   /** Writes into the app's storage, as an older app version or a cut-short write might have. */
   overwriteSaved(key: string, value: string): void;
   /**
@@ -91,9 +102,9 @@ export type TestPhone = TestUser & {
   revokeSessions(): Promise<void>;
   /**
    * The app started again on this phone (a cold start: a new auth client too), from what it saved
-   * (or from `saved`) and the session the auth client saved.
+   * (or from `saved`) and the session the auth client saved (or `savedAuth`).
    */
-  relaunch(saved?: SavedOnPhone): TestPhone;
+  relaunch(saved?: SavedOnPhone, savedAuth?: SavedOnPhone): TestPhone;
 };
 
 /** Storage for the auth client's session on a phone, kept apart from what the app saves. */
@@ -150,15 +161,20 @@ export async function signInOnPhones(label: string, count: number): Promise<Test
         }
       }
 
-      function createPhone(items: Map<string, string>, authItems: Map<string, string>): Omit<TestPhone, 'userId'> {
+      function createPhone(
+        items: Map<string, string>,
+        authItems: Map<string, string>,
+      ): Omit<TestPhone, 'userId' | 'account'> {
         let clock: number | null = null;
         const storage: KeyValueStorage = {
           getItem: async (key) => items.get(key) ?? null,
           setItem: async (key, value) => void items.set(key, value),
         };
-        const client = createTestClient(fetchThroughSignal, authStorageOn(authItems));
+        const sessionStorage = createSessionStorage(authStorageOn(authItems));
+        const client = createTestClient(fetchThroughSignal, sessionStorage);
         const data = createDataLayer(client, {
           storage,
+          sessionStorage,
           now: () => (clock === null ? Date.now() : clock),
         });
         return {
@@ -166,13 +182,18 @@ export async function signInOnPhones(label: string, count: number): Promise<Test
           ...network,
           setClock: (at) => void (clock = at.getTime()),
           saved: () => new Map(items),
+          savedAuth: () => new Map(authItems),
           overwriteSaved: (key, value) => void items.set(key, value),
           expireAccessToken: () => expireSavedSession(authItems),
           revokeSessions,
-          relaunch: (saved) => ({ userId, ...createPhone(new Map(saved ?? items), new Map(authItems)) }),
+          relaunch: (saved, savedAuth) => ({
+            userId,
+            account,
+            ...createPhone(new Map(saved ?? items), new Map(savedAuth ?? authItems)),
+          }),
         };
       }
-      return { userId, ...first };
+      return { userId, account, ...first };
     }),
   );
 }

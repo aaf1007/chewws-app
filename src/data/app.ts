@@ -7,6 +7,7 @@ import { AppState } from 'react-native';
 
 import { createDataLayer } from './data-layer';
 import type { Database } from './database.types';
+import { createSessionStorage } from './session-storage';
 
 export const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
@@ -30,17 +31,20 @@ const fetchWithTimeout: typeof fetch = (input, init) => {
   return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
 };
 
+/** The auth client keeps its session in AsyncStorage, through this, so signing out can clear it. */
+const sessionStorage = createSessionStorage(AsyncStorage);
+
 const client = createClient<Database>(supabaseUrl, anonKey, {
   global: { fetch: fetchWithTimeout },
   auth: {
-    storage: AsyncStorage,
+    storage: sessionStorage,
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: false,
   },
 });
 
-export const data = createDataLayer(client, { storage: AsyncStorage, newId: Crypto.randomUUID });
+export const data = createDataLayer(client, { storage: AsyncStorage, sessionStorage, newId: Crypto.randomUUID });
 
 // Refreshing tokens on a timer only makes sense while the app is in the foreground. Coming back to
 // it is also when list changes made with no signal get another try.
