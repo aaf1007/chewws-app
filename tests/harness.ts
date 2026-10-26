@@ -132,6 +132,12 @@ export type TestPhone = TestUser & {
   /** The server revokes the user's sessions (signed out everywhere): refreshing is refused. */
   revokeSessions(): Promise<void>;
   /**
+   * For race tests only: the auth client's next read of the session it saved is slow, as
+   * AsyncStorage on a phone can be. It reads what is saved then, but gets the answer only once
+   * `release()` is called; `reached` resolves when it has read.
+   */
+  slowNextSessionRead(): { reached: Promise<void>; release(): void };
+  /**
    * The app started again on this phone (a cold start: a new auth client too), from what it saved
    * (or from `saved`) and the session the auth client saved (or `savedAuth`).
    */
@@ -224,7 +230,21 @@ export async function signInOnPhones(
           removeItem: async (key) => void items.delete(key),
         };
         const sessionStorage = createSessionStorage(authStorageOn(authItems));
-        const client = createTestClient(fetchThroughSignal, sessionStorage, { autoRefreshToken });
+        let slowRead: { reached(): void; released: Promise<void> } | null = null;
+        const authClientStorage = {
+          ...sessionStorage,
+          async getItem(key: string) {
+            const value = await sessionStorage.getItem(key);
+            const slow = key.endsWith('-auth-token') ? slowRead : null;
+            if (slow) {
+              slowRead = null;
+              slow.reached();
+              await slow.released;
+            }
+            return value;
+          },
+        };
+        const client = createTestClient(fetchThroughSignal, authClientStorage, { autoRefreshToken });
         const data = createDataLayer(client, {
           storage,
           sessionStorage,
@@ -239,6 +259,12 @@ export async function signInOnPhones(
           overwriteSaved: (key, value) => void items.set(key, value),
           expireAccessToken: () => expireSavedSession(authItems),
           revokeSessions,
+          slowNextSessionRead() {
+            const reached = Promise.withResolvers<void>();
+            const released = Promise.withResolvers<void>();
+            slowRead = { reached: reached.resolve, released: released.promise };
+            return { reached: reached.promise, release: released.resolve };
+          },
           relaunch: (saved, savedAuth) => ({
             userId,
             account,

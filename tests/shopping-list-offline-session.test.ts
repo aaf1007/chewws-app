@@ -383,6 +383,35 @@ test(
   RUN_OUT_TEST_TIMEOUT_MS,
 );
 
+test(
+  'signed out while a refresh retries with no signal, and the signal comes back just then: the late refresh never signs the user back in',
+  async () => {
+    const [phone, other] = await signInOnPhones('shopper', 2);
+    const { foil } = await foilAndTowels([phone, other]);
+    phone.goOffline();
+    await phone.data.checkOff(foil);
+    phone.expireAccessToken();
+    const session = watchSession(phone);
+    await vi.waitFor(() => expect(session.last()).toEqual(signedIn(phone)));
+
+    // Sending it first refreshes the session, which with no signal retries for about 25 seconds.
+    const syncing = phone.data.syncListChanges();
+    await wait(300);
+    // With a signal again the refresh gets through, and a new refresh token with it. The user
+    // signs out while the auth client is still reading what it saved, so it saves that refresh
+    // after the sign-out and reports it as the same session, refreshed.
+    const read = phone.slowNextSessionRead();
+    phone.goOnline();
+    await read.reached;
+    await phone.data.signOut();
+    read.release();
+    await syncing;
+    expect(session.states).toEqual([signedIn(phone), signedOut]);
+    session.stop();
+  },
+  RUN_OUT_TEST_TIMEOUT_MS,
+);
+
 /** How long the app takes to settle who is signed in after a cold start with no signal, at most. */
 const COLD_START_SETTLED_MS = 40_000;
 
