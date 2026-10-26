@@ -19,6 +19,7 @@
  *   they outlive restarts. When its last retry fails too (about 21 minutes of errors), it's given
  *   up: it leaves the queue, so the changes behind it are sent, and waits in `gaveUp` (saved too)
  *   until whoever shows the list has told the user. No answer at all never counts.
+ * - A send that throws (a bug, not an answer) gives its change up at once, logged, the same way.
  *
  * `nextQueueState` is the state machine, pure; `createChangeQueue` runs it.
  */
@@ -97,6 +98,8 @@ export type QueueEvent<C> =
    * changed, kept if it's given up.
    */
   | { type: 'serverFailed'; id: string; at: number; name: string }
+  /** Sending the change failed in a way nobody expected (a bug): it's given up at once. */
+  | { type: 'gaveUp'; id: string; name: string }
   /** The user has been told about the changes given up. */
   | { type: 'dismissed' }
   /** Taken off the queue unsent: what they change is gone. */
@@ -108,6 +111,18 @@ export type QueueEvent<C> =
   | { type: 'synced' }
   /** The changes are thrown away unsent, as when their user signs out. */
   | { type: 'discarded' };
+
+/** Takes the change off the queue and keeps it, named `name`, until the user has been told. */
+function giveUp<C>(state: QueueState<C>, id: string, name: string): QueueState<C> {
+  const failed = state.queue.find((c) => c.id === id);
+  if (!failed) return state;
+  const { madeAt, change } = failed;
+  return {
+    ...state,
+    queue: state.queue.filter((c) => c.id !== id),
+    gaveUp: [...state.gaveUp, { id, madeAt, change, name }],
+  };
+}
 
 const withStatus = <C>(state: QueueState<C>, status: 'idle' | 'syncing' | 'offline'): QueueState<C> => ({
   status,
@@ -149,13 +164,10 @@ export function nextQueueState<C>(state: QueueState<C>, event: QueueEvent<C>): Q
           queue: state.queue.map((c) => (c.id === event.id ? counted : c)),
         };
       }
-      const { id, madeAt, change } = failed;
-      return {
-        ...state,
-        queue: state.queue.filter((c) => c.id !== event.id),
-        gaveUp: [...state.gaveUp, { id, madeAt, change, name: event.name }],
-      };
+      return giveUp(state, event.id, event.name);
     }
+    case 'gaveUp':
+      return giveUp(state, event.id, event.name);
     case 'dismissed':
       return { ...state, gaveUp: [] };
     case 'withdrawn': {
@@ -374,10 +386,16 @@ export function createChangeQueue<C>(options: {
       try {
         delivery = await send(head, () => discardedWith !== null);
       } catch (e) {
-        delivery = {
+        // A bug, not an answer: retrying won't help, so the change is given up and the user told.
+        const name = nameOf(head);
+        console.error(`Sending a list change to ${name} failed unexpectedly; it was given up.`, e);
+        dispatch({ type: 'gaveUp', id: head.id, name });
+        await save();
+        settle(head.id, {
           status: 'refused',
           error: e instanceof DataError ? e : new DataError('unknown', String(e), { cause: e }),
-        };
+        });
+        continue;
       }
       if (delivery.status === 'unreachable') {
         wentOffline();
