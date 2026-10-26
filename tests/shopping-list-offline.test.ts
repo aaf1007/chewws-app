@@ -5,7 +5,7 @@
 import { expect, test, vi } from 'vitest';
 
 import type { ShoppingList, ShoppingListView } from '../src/data';
-import { signInOnPhones, type TestPhone, type TestUser } from './harness';
+import { holdShoppingListRemoval, signInOnPhones, type TestPhone, type TestUser } from './harness';
 
 /** The list as the user reads it: each line's name, its Recipes' amounts, and whether it's checked. */
 const view = (list: ShoppingList) =>
@@ -275,6 +275,30 @@ test('an add sent again after its item was removed elsewhere (its answer lost) l
     code: 'shopping_list_item_not_found',
   });
   expect(view(await other.data.getShoppingList())).toEqual([butterLine(true), garlicBread(false)]);
+});
+
+test('an add sent again while its item is being removed elsewhere waits for the removal, and leaves the item removed', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  await listWithGarlicAndButter([phone, other]);
+  phone.goOffline();
+  const foil = await phone.data.addManualItem('Foil');
+  const queued = phone.saved();
+
+  // The add reaches the server, but its answer never reaches the phone: it's still queued there.
+  phone.goOnline();
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  const lost = phone.relaunch(queued);
+  expect(await lost.data.getListSync()).toEqual({ status: 'idle', waiting: 1 });
+
+  // Another phone's removal is under way, not yet committed, when the add is sent again.
+  const removal = await holdShoppingListRemoval(foil);
+  const resent = lost.data.syncListChanges();
+  await removal.waitForWaiting(1);
+  await removal.commit();
+  expect(await resent).toEqual({ status: 'idle', waiting: 0 });
+
+  expect(view(await other.data.getShoppingList())).toEqual([butterLine(true), garlicBread(false)]);
+  expect(view(await lost.data.getShoppingList())).toEqual([butterLine(true), garlicBread(false)]);
 });
 
 test.each([500, 520, 524])(

@@ -7,6 +7,7 @@ import {
   type DataLayer,
   type IngredientId,
   type KeyValueStorage,
+  type ShoppingListItemId,
   type UserId,
 } from '../src/data';
 import { createTestAccount, createTestClient, signInAttacker, type TestAccount } from './access-harness';
@@ -35,40 +36,65 @@ export type HeldLine = {
   release(): Promise<void>;
 };
 
+export type HeldRemoval = Omit<HeldLine, 'release'> & {
+  /** Commits the removal, so whoever waited on it carries on with the item gone. */
+  commit(): Promise<void>;
+};
+
+/** A second database session that runs `sql` in a transaction it doesn't end until told to. */
+async function holdInTransaction(sql: string, params: unknown[]) {
+  const session = new pg.Client({ connectionString: inject('supabase').dbUrl });
+  await session.connect();
+  await session.query('begin');
+  await session.query(sql, params);
+  const { rows } = await session.query<{ pid: number }>('select pg_backend_pid() as pid');
+  const pid = rows[0].pid;
+  let ended = false;
+
+  async function end(how: 'commit' | 'rollback') {
+    ended = true;
+    await session.query(how);
+    await session.end();
+  }
+  return {
+    async waitForWaiting(count: number) {
+      const deadline = Date.now() + 10_000;
+      while (!ended) {
+        const waiting = await session.query<{ count: number }>(WAITING_ON, [pid]);
+        if (waiting.rows[0].count >= count) return;
+        if (Date.now() > deadline) throw new Error(`Fewer than ${count} sessions waited on the held transaction.`);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    },
+    commit: () => end('commit'),
+    release: () => end('rollback'),
+  };
+}
+
 /**
  * For race tests only: a second database session that starts making the user's Shopping List line
  * for an Ingredient and doesn't commit. Until `release()`, anything of theirs that writes that line
  * waits at it, so a test can run another action while the first is stopped there.
  */
 export async function holdShoppingListLine(user: TestUser, ingredientId: IngredientId): Promise<HeldLine> {
-  const session = new pg.Client({ connectionString: inject('supabase').dbUrl });
-  await session.connect();
-  await session.query('begin');
-  await session.query(
+  const { waitForWaiting, release } = await holdInTransaction(
     `insert into public.shopping_list_items (list_id, ingredient_id)
      select l.id, $2 from public.shopping_lists l where l.owner_id = $1`,
     [user.userId, ingredientId],
   );
-  const { rows } = await session.query<{ pid: number }>('select pg_backend_pid() as pid');
-  const pid = rows[0].pid;
-  let released = false;
+  return { waitForWaiting, release };
+}
 
-  return {
-    async waitForWaiting(count) {
-      const deadline = Date.now() + 10_000;
-      while (!released) {
-        const waiting = await session.query<{ count: number }>(WAITING_ON, [pid]);
-        if (waiting.rows[0].count >= count) return;
-        if (Date.now() > deadline) throw new Error(`Fewer than ${count} sessions waited on the held line.`);
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-    },
-    async release() {
-      released = true;
-      await session.query('rollback');
-      await session.end();
-    },
-  };
+/**
+ * For race tests only: a second database session that removes a Shopping List item, as another
+ * phone does, and doesn't commit yet. Until `commit()`, anything that writes that item waits at it.
+ */
+export async function holdShoppingListRemoval(itemId: ShoppingListItemId): Promise<HeldRemoval> {
+  const { waitForWaiting, commit } = await holdInTransaction(
+    'delete from public.shopping_list_items where id = $1',
+    [itemId],
+  );
+  return { waitForWaiting, commit };
 }
 
 /** What a phone's app has saved: its storage's keys and values. */

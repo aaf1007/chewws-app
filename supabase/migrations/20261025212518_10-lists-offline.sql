@@ -145,6 +145,9 @@ begin
   if list is null then
     return null;
   end if;
+  -- A removal of this item still under way would record it only once it commits, after the check
+  -- below has looked: wait for it, so the check sees it.
+  perform 1 from public.shopping_list_items i where i.id = new_id and i.list_id = list for update;
   if exists (
     select 1 from private.removed_shopping_list_items r where r.item_id = new_id and r.list_id = list
   ) then
