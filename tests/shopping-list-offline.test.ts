@@ -26,6 +26,13 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 
+/** The server failed on the oldest of `waiting` changes: they're tried again at `at` (ms). */
+const retryingAt = (at: number, waiting: number) => ({
+  status: 'waitingToRetry',
+  waiting,
+  retryAt: new Date(at).toISOString(),
+});
+
 /** An item on the list, by its Ingredient's name or its hand-added text. */
 async function itemNamed(user: TestUser, name: string) {
   const found = (await user.data.getShoppingList()).items.find((i) =>
@@ -317,10 +324,10 @@ test.each([500, 520, 524])(
     phone.serverAnswers(status);
     const t0 = Date.now();
     phone.setClock(new Date(t0));
-    expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 2 });
+    expect(await phone.data.syncListChanges()).toEqual(retryingAt(t0 + 10 * SECOND, 2));
     // Made while it fails, a change waits too.
     await phone.data.checkOff(foil);
-    expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 3 });
+    expect(await phone.data.syncListChanges()).toEqual(retryingAt(t0 + 10 * SECOND, 3));
 
     phone.serverAnswers(null);
     phone.setClock(new Date(t0 + 10 * SECOND));
@@ -347,15 +354,19 @@ test('a change the server fails on for about 21 minutes, its first try and 5 mor
   phone.serverAnswersFor(foil, 500);
   const t0 = Date.now();
   phone.setClock(new Date(t0));
-  expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 2 });
+  expect(await phone.data.syncListChanges()).toEqual(retryingAt(t0 + 10 * SECOND, 2));
   // Tried again 10 s, 30 s, 1 min, 5 min and 15 min after each failure.
-  for (const at of [10 * SECOND, 40 * SECOND, 100 * SECOND]) {
-    phone.setClock(new Date(t0 + at));
-    expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 2 });
+  for (const [at, next] of [
+    [10, 40],
+    [40, 100],
+    [100, 400],
+  ]) {
+    phone.setClock(new Date(t0 + at * SECOND));
+    expect(await phone.data.syncListChanges()).toEqual(retryingAt(t0 + next * SECOND, 2));
   }
   const reopened = phone.relaunch();
   reopened.setClock(new Date(t0 + 400 * SECOND));
-  expect(await reopened.data.syncListChanges()).toEqual({ status: 'offline', waiting: 2 });
+  expect(await reopened.data.syncListChanges()).toEqual(retryingAt(t0 + 1300 * SECOND, 2));
   // The fifth try after the first fails too: Foil's change is given up, and Paper towels' is sent.
   reopened.setClock(new Date(t0 + 1300 * SECOND));
   expect(await reopened.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
@@ -415,16 +426,16 @@ test("a change the server failed on isn't tried again before its next try, whoev
   const t0 = Date.now();
   phone.setClock(new Date(t0));
   await phone.data.checkOff(foil);
-  expect(await phone.data.getListSync()).toEqual({ status: 'offline', waiting: 1 });
+  expect(await phone.data.getListSync()).toEqual(retryingAt(t0 + 10 * SECOND, 1));
 
   // The server would take it now, but its next try is 10 s after it failed.
   phone.serverAnswersFor(foil, null);
   phone.setClock(new Date(t0 + 5 * SECOND));
-  expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 1 });
+  expect(await phone.data.syncListChanges()).toEqual(retryingAt(t0 + 10 * SECOND, 1));
   await phone.data.checkOff(towels);
   const reopened = phone.relaunch();
   reopened.setClock(new Date(t0 + 9 * SECOND));
-  expect(await reopened.data.syncListChanges()).toEqual({ status: 'offline', waiting: 2 });
+  expect(await reopened.data.syncListChanges()).toEqual(retryingAt(t0 + 10 * SECOND, 2));
   const neither = [
     { handAdded: 'Foil', ingredient: null, checked: false },
     { handAdded: 'Paper towels', ingredient: null, checked: false },
@@ -453,7 +464,7 @@ test('after a 2-minute server outage, tried every 10 s, every change lands once 
   const t0 = Date.now();
   for (let at = 0; at <= 2 * MINUTE; at += 10 * SECOND) {
     phone.setClock(new Date(t0 + at));
-    expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 2 });
+    expect(await phone.data.syncListChanges()).toMatchObject({ status: 'waitingToRetry', waiting: 2 });
   }
   phone.serverAnswers(null);
   for (let at = 2 * MINUTE + 10 * SECOND; at <= 7 * MINUTE; at += 10 * SECOND) {
@@ -511,12 +522,68 @@ test("the phone's clock going back a second as a change's last pause starts does
   // Five server errors: its last pause, 15 minutes, starts now. The server would take it.
   phone.serverAnswersFor(foil, null);
   phone.setClock(new Date(t0 + 399 * SECOND));
-  expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 1 });
+  expect(await phone.data.syncListChanges()).toEqual(retryingAt(t0 + 1300 * SECOND, 1));
   expect(view(await other.data.getShoppingList())).toEqual([{ handAdded: 'Foil', ingredient: null, checked: false }]);
 
   phone.setClock(new Date(t0 + 400 * SECOND - 16 * MINUTE));
   expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
   expect(view(await other.data.getShoppingList())).toEqual([{ handAdded: 'Foil', ingredient: null, checked: true }]);
+});
+
+test("while a change waits out a server error, the list says it will be tried again, not that the phone is offline, and removing another item works", async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const foil = await other.data.addManualItem('Foil');
+  const towels = await other.data.addManualItem('Paper towels');
+  await phone.data.getShoppingList();
+  phone.serverAnswersFor('check_off', 500);
+  const t0 = Date.now();
+  phone.setClock(new Date(t0));
+  await phone.data.checkOff(foil);
+
+  const waiting = retryingAt(t0 + 10 * SECOND, 1);
+  expect(await phone.data.getListSync()).toEqual(waiting);
+  const screen = watch(phone);
+  await vi.waitFor(() => expect(screen.last()).toMatchObject({ status: 'loaded', sync: waiting }));
+  await phone.data.removeFromShoppingList(towels);
+  expect(await phone.data.getListSync()).toEqual(waiting);
+  expect(view(await other.data.getShoppingList())).toEqual([{ handAdded: 'Foil', ingredient: null, checked: false }]);
+
+  // At its next try the server takes it.
+  phone.serverAnswersFor('check_off', null);
+  phone.setClock(new Date(t0 + 10 * SECOND));
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  expect(view(await other.data.getShoppingList())).toEqual([{ handAdded: 'Foil', ingredient: null, checked: true }]);
+  screen.stop();
+});
+
+test('removing an item whose change waits out a server error removes it, and the change waiting goes with it', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const foil = await other.data.addManualItem('Foil');
+  await phone.data.getShoppingList();
+  phone.serverAnswersFor('check_off', 500);
+  phone.serverAnswersFor('add_manual_item', 500);
+  const t0 = Date.now();
+  phone.setClock(new Date(t0));
+  await phone.data.checkOff(foil);
+  const snacks = await phone.data.addManualItem('Snacks');
+  expect(await phone.data.getListSync()).toMatchObject({ status: 'waitingToRetry', waiting: 2 });
+
+  await phone.data.removeFromShoppingList(snacks);
+  expect(await phone.data.getListSync()).toMatchObject({ status: 'waitingToRetry', waiting: 1 });
+  await phone.data.removeFromShoppingList(foil);
+  expect(await phone.data.getListSync()).toEqual({ status: 'idle', waiting: 0 });
+  expect((await phone.data.getShoppingList()).items).toEqual([]);
+  expect((await other.data.getShoppingList()).items).toEqual([]);
+
+  // Nothing is sent at their next try, and nothing is given up.
+  phone.serverAnswersFor('check_off', null);
+  phone.serverAnswersFor('add_manual_item', null);
+  phone.setClock(new Date(t0 + 10 * SECOND));
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  expect((await other.data.getShoppingList()).items).toEqual([]);
+  const screen = watch(phone);
+  await vi.waitFor(() => expect(screen.last()).toMatchObject({ status: 'loaded', list: { items: [] }, notSaved: [] }));
+  screen.stop();
 });
 
 test('a change the server fails on twice, then takes, lands as usual', async () => {
@@ -530,9 +597,9 @@ test('a change the server fails on twice, then takes, lands as usual', async () 
   phone.serverAnswersFor(foil, 503);
   const t0 = Date.now();
   phone.setClock(new Date(t0));
-  expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 1 });
+  expect(await phone.data.syncListChanges()).toEqual(retryingAt(t0 + 10 * SECOND, 1));
   phone.setClock(new Date(t0 + 10 * SECOND));
-  expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 1 });
+  expect(await phone.data.syncListChanges()).toEqual(retryingAt(t0 + 40 * SECOND, 1));
   phone.serverAnswersFor(foil, null);
   phone.setClock(new Date(t0 + 40 * SECOND));
   expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });

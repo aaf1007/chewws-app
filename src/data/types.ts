@@ -108,9 +108,12 @@ export type ShoppingList = {
 /**
  * Whether list changes made on this phone are waiting to reach the server. `idle`: none are, as far
  * as the phone knows. `syncing`: sending them. `offline`: the last request didn't get through;
- * `waiting` changes will be sent on reconnect.
+ * `waiting` changes will be sent on reconnect. `waitingToRetry`: the server was reached but failed
+ * on the oldest change waiting; it and the rest are tried again at `retryAt` (ISO time).
  */
-export type ListSync = { status: 'idle' | 'syncing' | 'offline'; waiting: number };
+export type ListSync =
+  | { status: 'idle' | 'syncing' | 'offline'; waiting: number }
+  | { status: 'waitingToRetry'; waiting: number; retryAt: string };
 
 /**
  * A list change made on this phone that the server failed on too many times in a row, so it was

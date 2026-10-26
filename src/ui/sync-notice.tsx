@@ -4,17 +4,19 @@ import { Icon, type IconName } from './icon';
 import { Text } from './text';
 import { colors, radii, spacing, type ColorRole } from './theme';
 
-export type SyncNoticeStatus = 'offline' | 'syncing' | 'notSaved';
+export type SyncNoticeStatus = 'offline' | 'syncing' | 'retrying' | 'notSaved';
 
 const ICON: Record<SyncNoticeStatus, { name: IconName; tone: ColorRole }> = {
   offline: { name: 'cloud-offline-outline', tone: 'textMuted' },
   syncing: { name: 'sync-outline', tone: 'textMuted' },
+  retrying: { name: 'time-outline', tone: 'textMuted' },
   notSaved: { name: 'alert-circle-outline', tone: 'danger' },
 };
 
 /**
  * A gray rounded notice about list changes and the server: a cloud with a slash while they wait
- * offline, arrows while they're being sent, a warning when one couldn't be saved. The message says
+ * offline, arrows while they're being sent, a clock while they wait to be tried again after a
+ * server error, a warning when one couldn't be saved. The message says
  * which. `action` adds a small button, such as "OK" to dismiss it.
  */
 export function SyncNotice({

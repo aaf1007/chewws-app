@@ -20,7 +20,7 @@ const nameOf = (item: ShoppingListItem) => (item.kind === 'ingredient' ? item.in
 const changes = (count: number) => (count === 1 ? '1 change' : `${count} changes`);
 
 /** What to tell the user about changes made on this phone that the server doesn't have yet. */
-function syncNoticeOf(sync: ListSync): { status: 'offline' | 'syncing'; message: string } | null {
+function syncNoticeOf(sync: ListSync): { status: 'offline' | 'syncing' | 'retrying'; message: string } | null {
   if (sync.status === 'offline') {
     return {
       status: 'offline',
@@ -29,6 +29,9 @@ function syncNoticeOf(sync: ListSync): { status: 'offline' | 'syncing'; message:
           ? `You're offline. ${changes(sync.waiting)} will sync when you're back online.`
           : "You're offline. This is your list as it was last loaded.",
     };
+  }
+  if (sync.status === 'waitingToRetry') {
+    return { status: 'retrying', message: `The server had a problem. ${changes(sync.waiting)} will retry shortly.` };
   }
   if (sync.status === 'syncing' && sync.waiting > 0) {
     return { status: 'syncing', message: `Syncing ${changes(sync.waiting)}…` };

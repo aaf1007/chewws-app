@@ -215,7 +215,7 @@ function fail(error: AuthError | PostgrestError): never {
 const notReached = (status: number) => status === 0 || [401, 408, 429].includes(status) || status >= 500;
 
 /** For a queued change, a server error is told apart: one that never passes gives the change up. */
-const serverFailed = (status: number): Delivery | null =>
+const serverFailed = (status: number): Extract<Delivery, { status: 'serverFailed' }> | null =>
   status >= 500 ? { status: 'serverFailed', error: new DataError('server_error', `The server failed (${status}).`) } : null;
 
 export type DataLayerOptions = {
@@ -588,8 +588,14 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     return data.map(parseIngredientId);
   }
 
-  /** The user's Shopping List as the server has it, or `unreachable` with no signal. */
-  async function fetchShoppingList(me: UserId): Promise<{ status: 'reached'; list: ShoppingList } | { status: 'unreachable' }> {
+  /**
+   * The user's Shopping List as the server has it; `unreachable` with no signal; `serverFailed`
+   * when the server answers with an error of its own (5xx): it was reached, so the phone isn't
+   * offline.
+   */
+  async function fetchShoppingList(
+    me: UserId,
+  ): Promise<{ status: 'reached'; list: ShoppingList } | { status: 'unreachable' } | { status: 'serverFailed'; error: DataError }> {
     if (!(await hasSessionOf(me))) return { status: 'unreachable' };
     const { data, error, status } = await client
       .from('shopping_lists')
@@ -597,6 +603,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       .eq('owner_id', me)
       .maybeSingle()
       .retry(false);
+    const failed = serverFailed(status);
+    if (failed) return failed;
     if (notReached(status)) return { status: 'unreachable' };
     if (error) fail(error);
     if (!data) throw new DataError('shopping_list_missing', `No Shopping List for user ${me}.`);
@@ -709,7 +717,10 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
 
     function sync(): ListSync {
       const state = queue.state();
-      return { status: state.status, waiting: state.queue.length };
+      const waiting = state.queue.length;
+      return state.status === 'waitingToRetry'
+        ? { status: state.status, waiting, retryAt: new Date(state.retryAt).toISOString() }
+        : { status: state.status, waiting };
     }
 
     /** The list as the phone shows it: the last one seen, with the changes not yet sent on top. */
@@ -741,7 +752,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
           lastError ??= needsConnection('Loading your Shopping List the first time');
           return 'unreachable';
         }
-        keep(fetched.list);
+        if (fetched.status === 'serverFailed') lastError ??= fetched.error;
+        else keep(fetched.list);
       } catch (e) {
         lastError = e instanceof DataError ? e : new DataError('unknown', String(e), { cause: e });
       }
@@ -800,11 +812,11 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       lists.keep(fetched.list);
       if (lists.queue.state().status === 'offline') void lists.queue.sync();
       lists.emit();
-    } else {
+    } else if (fetched.status === 'unreachable') {
       lists.queue.markUnreachable();
     }
     const shown = lists.shown();
-    if (!shown) throw needsConnection('Loading your Shopping List the first time');
+    if (!shown) throw fetched.status === 'serverFailed' ? fetched.error : needsConnection('Loading your Shopping List the first time');
     return shown;
   }
 
@@ -943,7 +955,9 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
 
   /**
    * Takes one item off the Shopping List. Already gone is fine. Needs a connection: the changes
-   * waiting on the phone are sent first, so an item added with no signal is there to remove.
+   * waiting on the phone are sent first, so an item added with no signal is there to remove. A
+   * change waiting for its next try after a server error doesn't hold it up: the item is removed,
+   * and the changes to it still waiting are dropped (one adding it would put it back).
    */
   async function removeFromShoppingList(itemId: ShoppingListItemId): Promise<void> {
     const me = await requireListOwner();
@@ -953,12 +967,18 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     if (before.status === 'offline' || before.queue.length > 0) await lists.queue.sync();
     if (lists.queue.state().status === 'offline') throw needsConnection('Removing');
     const { error, status } = await client.from('shopping_list_items').delete().eq('id', itemId);
+    if (status >= 500) {
+      throw new DataError('server_error', "Couldn't remove it: the server had a problem. Try again in a moment.");
+    }
     if (notReached(status)) {
       lists.queue.markUnreachable();
       throw needsConnection('Removing');
     }
     if (error) fail(error);
+    await lists.queue.withdraw(({ change }) => change.itemId === itemId);
     lists.forget(itemId);
+    // The change that was waiting may have been one of them: what's left is due now, or not.
+    if (lists.queue.state().status === 'waitingToRetry') await lists.queue.sync();
   }
 
   /**

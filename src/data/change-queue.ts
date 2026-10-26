@@ -12,8 +12,9 @@
  *   a change is made, and when the app calls it on coming to the foreground or on a timer.
  * - Changes are sent one at a time, oldest first. Sending is safe to repeat: if the answer to a
  *   change is lost, it's sent again and the server ends up the same.
- * - A server error (5xx) may pass, so the change waits too, and is tried again after a pause that
- *   grows with each error in a row (`RETRY_DELAYS_MS`): it isn't sent before its `nextTryAt`,
+ * - A server error (5xx) may pass, so the change waits too (`waitingToRetry`, not `offline`: the
+ *   server was reached), and is tried again after a pause that grows with each error in a row
+ *   (`RETRY_DELAYS_MS`): it isn't sent before its `nextTryAt`,
  *   whoever calls `sync`, and the changes behind it wait for it. Both are saved with the change, so
  *   they outlive restarts. When its last retry fails too (about 21 minutes of errors), it's given
  *   up: it leaves the queue, so the changes behind it are sent, and waits in `gaveUp` (saved too)
@@ -64,16 +65,21 @@ export function isDue({ nextTryAt, serverFailures }: QueuedChange<unknown>, now:
   return nextTryAt - now > pause + CLOCK_BACK_MARGIN_MS;
 }
 
-/**
- * `idle`: not sending, and the last request reached the server. `syncing`: sending the queue.
- * `offline`: the last request didn't reach the server; changes wait for the next try.
- */
-export type QueueState<C> = {
-  status: 'idle' | 'syncing' | 'offline';
+type Queued<C> = {
   queue: readonly QueuedChange<C>[];
   /** Changes given up after their last retry failed, until `dismissed`. */
   gaveUp: readonly GaveUpChange<C>[];
 };
+
+/**
+ * `idle`: not sending, and the last request reached the server. `syncing`: sending the queue.
+ * `offline`: the last request didn't reach the server; changes wait for the next try.
+ * `waitingToRetry`: the server was reached but failed on the change at the head of the queue (5xx);
+ * it, and the changes behind it, wait for its next try, at `retryAt` (ms, from the phone's clock).
+ */
+export type QueueState<C> =
+  | ({ status: 'idle' | 'syncing' | 'offline' } & Queued<C>)
+  | ({ status: 'waitingToRetry'; retryAt: number } & Queued<C>);
 
 export type QueueEvent<C> =
   /** The changes saved on the phone, read back when the app starts. */
@@ -93,11 +99,21 @@ export type QueueEvent<C> =
   | { type: 'serverFailed'; id: string; at: number; name: string }
   /** The user has been told about the changes given up. */
   | { type: 'dismissed' }
+  /** Taken off the queue unsent: what they change is gone. */
+  | { type: 'withdrawn'; ids: readonly string[] }
   | { type: 'unreachable' }
+  /** The change at the head of the queue isn't due until `until`, after a server error. */
+  | { type: 'waitingToRetry'; until: number }
   /** The queue is empty and the server was reached. */
   | { type: 'synced' }
   /** The changes are thrown away unsent, as when their user signs out. */
   | { type: 'discarded' };
+
+const withStatus = <C>(state: QueueState<C>, status: 'idle' | 'syncing' | 'offline'): QueueState<C> => ({
+  status,
+  queue: state.queue,
+  gaveUp: state.gaveUp,
+});
 
 export function nextQueueState<C>(state: QueueState<C>, event: QueueEvent<C>): QueueState<C> {
   switch (event.type) {
@@ -114,7 +130,7 @@ export function nextQueueState<C>(state: QueueState<C>, event: QueueEvent<C>): Q
         ? state
         : { ...state, queue: [...state.queue, event.change] };
     case 'syncStarted':
-      return { ...state, status: 'syncing' };
+      return withStatus(state, 'syncing');
     case 'sent':
       return { ...state, queue: state.queue.filter((c) => c.id !== event.id) };
     case 'serverFailed': {
@@ -142,10 +158,16 @@ export function nextQueueState<C>(state: QueueState<C>, event: QueueEvent<C>): Q
     }
     case 'dismissed':
       return { ...state, gaveUp: [] };
+    case 'withdrawn': {
+      const withdrawn = new Set(event.ids);
+      return { ...state, queue: state.queue.filter((c) => !withdrawn.has(c.id)) };
+    }
     case 'unreachable':
-      return { ...state, status: 'offline' };
+      return withStatus(state, 'offline');
+    case 'waitingToRetry':
+      return { status: 'waitingToRetry', retryAt: event.until, queue: state.queue, gaveUp: state.gaveUp };
     case 'synced':
-      return { ...state, status: 'idle' };
+      return withStatus(state, 'idle');
     case 'discarded':
       return { status: 'idle', queue: [], gaveUp: [] };
   }
@@ -252,6 +274,11 @@ export type ChangeQueue<C> = {
   /** For a request outside the queue that didn't reach the server. */
   markUnreachable(): void;
   /**
+   * Takes the changes `matches` picks off the queue unsent, as when what they change is gone.
+   * Whoever waits on one hears it's dropped. Resolves once saved.
+   */
+  withdraw(matches: (change: QueuedChange<C>) => boolean): Promise<void>;
+  /**
    * Throws away every change waiting, unsent, and what's saved of them: whoever waits on one, or
    * makes one from now on, hears it's refused with `error`. Nothing is sent or saved after.
    */
@@ -315,11 +342,17 @@ export function createChangeQueue<C>(options: {
       dispatch({ type: 'restored', queue, gaveUp });
     });
 
-  /** The server wasn't reached: whoever is waiting on a change hears it's queued. */
-  function wentOffline() {
-    dispatch({ type: 'unreachable' });
+  /**
+   * The queue stops for now: the server wasn't reached (`unreachable`), or the change at its head
+   * waits for its next try (`waitingToRetry`). Whoever is waiting on a change hears it's queued.
+   */
+  function pause(event: Extract<QueueEvent<C>, { type: 'unreachable' | 'waitingToRetry' }>) {
+    dispatch(event);
     for (const id of [...waiting.keys()]) settle(id, { status: 'queued' });
   }
+  const wentOffline = () => pause({ type: 'unreachable' });
+  const waitForRetry = (change: QueuedChange<C>) =>
+    pause({ type: 'waitingToRetry', until: change.nextTryAt ?? now() });
 
   async function flush() {
     const wasOffline = state.status === 'offline';
@@ -327,7 +360,7 @@ export function createChangeQueue<C>(options: {
     for (let head = state.queue[0]; head; head = state.queue[0]) {
       // The server failed on it a moment ago: it, and the changes behind it, wait for its next try.
       if (!isDue(head, now())) {
-        wentOffline();
+        waitForRetry(head);
         return;
       }
       let delivery: Delivery;
@@ -351,8 +384,9 @@ export function createChangeQueue<C>(options: {
           name: nameOf(head),
         });
         await save();
-        if (state.queue.some((c) => c.id === head.id)) {
-          wentOffline();
+        const failed = state.queue.find((c) => c.id === head.id);
+        if (failed) {
+          waitForRetry(failed);
           return;
         }
         // Given up: the changes behind it are sent.
@@ -386,7 +420,7 @@ export function createChangeQueue<C>(options: {
       do {
         again = false;
         await flush();
-      } while ((again || state.queue.length > 0) && state.status !== 'offline');
+      } while ((again || state.queue.length > 0) && state.status !== 'offline' && state.status !== 'waitingToRetry');
     })().finally(() => {
       running = null;
     });
@@ -407,8 +441,9 @@ export function createChangeQueue<C>(options: {
     dispatch({ type: 'queued', change: queued });
     await save();
     const outcome = new Promise<ChangeOutcome>((resolve) => waiting.set(queued.id, resolve));
-    // Offline already: say so now rather than after another request times out. It's still tried.
-    if (state.status === 'offline') settle(queued.id, { status: 'queued' });
+    // Offline, or behind a change waiting for its next try, already: say so now rather than after
+    // another request times out. It's still tried.
+    if (state.status === 'offline' || state.status === 'waitingToRetry') settle(queued.id, { status: 'queued' });
     void sync();
     return outcome;
   }
@@ -418,6 +453,14 @@ export function createChangeQueue<C>(options: {
     enqueue,
     sync,
     markUnreachable: () => dispatch({ type: 'unreachable' }),
+    async withdraw(matches) {
+      await ready;
+      const ids = state.queue.filter(matches).map((c) => c.id);
+      if (ids.length === 0) return;
+      dispatch({ type: 'withdrawn', ids });
+      await save();
+      for (const id of ids) settle(id, { status: 'dropped' });
+    },
     async discard(error) {
       await ready;
       discardedWith = error;
