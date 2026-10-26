@@ -13,9 +13,40 @@ fi
 
 # Flows that take the app offline (.maestro/scripts/go-offline.js) ask this to pause the local API
 # gateway. Whatever happens, the gateway is running again when this script ends.
+# The flows call it on this port; whatever else holds the port would answer them instead.
+port="${NET_CONTROL_PORT:-54491}"
+listening_on_port() { lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true; }
+here="$(pwd -P)"
+for pid in $(listening_on_port); do
+  # One left from an earlier run in this worktree (cut short) is stopped; anything else is an error.
+  command="$(ps -o command= -p "$pid" 2>/dev/null || true)"
+  cwd="$(lsof -a -nP -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')"
+  if [[ "$command" == *net-control.mjs* && "$cwd" == "$here" ]]; then
+    echo "== stopping net-control.mjs left running from an earlier run (pid $pid)"
+    kill "$pid"
+    for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+  else
+    echo "Port $port, which the flows use to go offline and online, is taken by pid $pid: $command" >&2
+    echo "Stop it (or end the other e2e run) and try again." >&2
+    exit 1
+  fi
+done
+
 node scripts/net-control.mjs &
 net_control=$!
 trap 'kill "$net_control" 2>/dev/null || true; scripts/net.sh online >/dev/null' EXIT
+for _ in $(seq 50); do
+  if ! kill -0 "$net_control" 2>/dev/null; then
+    echo "scripts/net-control.mjs didn't start (see above), so flows can't go offline." >&2
+    exit 1
+  fi
+  [[ " $(listening_on_port | tr '\n' ' ') " == *" $net_control "* ]] && break
+  sleep 0.1
+done
+if [[ " $(listening_on_port | tr '\n' ' ') " != *" $net_control "* ]]; then
+  echo "scripts/net-control.mjs isn't listening on port $port, so flows can't go offline." >&2
+  exit 1
+fi
 
 failed=()
 for flow in "${flows[@]}"; do

@@ -23,4 +23,10 @@ createServer((req, res) => {
   execFile(...command, (error, stdout, stderr) => {
     res.writeHead(error ? 500 : 200, { 'content-type': 'text/plain' }).end(error ? stderr || String(error) : stdout);
   });
-}).listen(port, '127.0.0.1');
+})
+  .on('error', (error) => {
+    const why = error.code === 'EADDRINUSE' ? `port ${port} is taken by another process` : String(error);
+    console.error(`net-control.mjs can't listen: ${why}.`);
+    process.exit(1);
+  })
+  .listen(port, '127.0.0.1');
