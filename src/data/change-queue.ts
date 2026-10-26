@@ -245,7 +245,10 @@ export type ChangeQueue<C> = {
   sync(): Promise<void>;
   /** For a request outside the queue that didn't reach the server. */
   markUnreachable(): void;
-  /** Throws away every change waiting, unsent; whoever waits on one hears it's refused with `error`. */
+  /**
+   * Throws away every change waiting, unsent, and what's saved of them: whoever waits on one, or
+   * makes one from now on, hears it's refused with `error`. Nothing is sent or saved after.
+   */
   discard(error: DataError): Promise<void>;
   /** The user has been told about the changes given up: forgets them. Resolves once saved. */
   dismissGaveUp(): Promise<void>;
@@ -283,9 +286,12 @@ export function createChangeQueue<C>(options: {
     waiting.delete(id);
   }
 
-  // Saves run one after another, each writing the queue as it was when it was asked for.
+  // Saves run one after another, each writing the queue as it was when it was asked for. Once
+  // discarded, nothing is saved again: the queue is gone from the phone.
   let saving: Promise<void> = Promise.resolve();
+  let discardedWith: DataError | null = null;
   function save(): Promise<void> {
+    if (discardedWith) return saving;
     const snapshot = JSON.stringify({
       queue: state.queue,
       gaveUp: state.gaveUp,
@@ -364,6 +370,7 @@ export function createChangeQueue<C>(options: {
   let running: Promise<void> | null = null;
   let again = false;
   function sync(): Promise<void> {
+    if (discardedWith) return Promise.resolve();
     if (running) {
       again = true;
       return running;
@@ -382,6 +389,7 @@ export function createChangeQueue<C>(options: {
 
   async function enqueue(change: C): Promise<ChangeOutcome> {
     await ready;
+    if (discardedWith) return { status: 'refused', error: discardedWith };
     lastMadeAt = Math.max(now(), lastMadeAt + 1);
     const queued: QueuedChange<C> = {
       id: newId(),
@@ -406,8 +414,10 @@ export function createChangeQueue<C>(options: {
     markUnreachable: () => dispatch({ type: 'unreachable' }),
     async discard(error) {
       await ready;
+      discardedWith = error;
       dispatch({ type: 'discarded' });
-      await save();
+      saving = saving.then(() => storage.removeItem(key)).catch(() => {});
+      await saving;
       for (const id of [...waiting.keys()]) settle(id, { status: 'refused', error });
     },
     async dismissGaveUp() {

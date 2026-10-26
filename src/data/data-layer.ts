@@ -662,8 +662,10 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     let lastSeen: ShoppingList | null = null;
     let lastError: DataError | null = null;
     let savingList: Promise<void> = Promise.resolve();
+    let discarded = false;
 
     function keep(list: ShoppingList) {
+      if (discarded) return; // A read or change that finishes after its user signed out.
       lastSeen = list;
       lastError = null;
       const snapshot = JSON.stringify(list);
@@ -747,12 +749,16 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       return 'reached';
     }
 
-    /** Its user signed out: the changes waiting are thrown away, and the list last seen forgotten. */
+    /**
+     * Its user's session ended on this phone: the changes waiting are thrown away, and the list
+     * last seen forgotten, both gone from storage too. Nothing is kept again.
+     */
     async function discard() {
       await ready;
+      discarded = true;
       await queue.discard(notSignedIn());
       lastSeen = null;
-      savingList = savingList.then(() => storage.setItem(listKey, 'null')).catch(() => {});
+      savingList = savingList.then(() => storage.removeItem(listKey)).catch(() => {});
       await savingList;
     }
 

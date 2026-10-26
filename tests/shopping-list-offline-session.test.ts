@@ -138,17 +138,57 @@ test(
   RUN_OUT_TEST_TIMEOUT_MS,
 );
 
-test('a refresh the server refuses (the session was revoked) still signs the user out, on a cold start', async () => {
-  const [phone] = await signInOnPhones('shopper', 1);
-  const { foil } = await foilAndTowels([phone]);
+test('a refresh the server refuses (the session was revoked) still signs the user out, on a cold start, and throws away what the phone kept of theirs', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const { foil, towels } = await foilAndTowels([phone, other]);
+  phone.goOffline();
+  await phone.data.checkOff(towels);
   phone.expireAccessToken();
   await phone.revokeSessions();
 
+  phone.goOnline();
   const reopened = phone.relaunch();
   const session = watchSession(reopened);
   await vi.waitFor(() => expect(session.last()).toEqual({ status: 'signedOut' }));
+  expect([...reopened.saved().keys()]).toEqual([]);
   await expect(reopened.data.checkOff(foil)).rejects.toMatchObject({ code: 'not_signed_in' });
   await expect(reopened.data.getShoppingList()).rejects.toMatchObject({ code: 'not_signed_in' });
+
+  await reopened.data.signInWithPassword(phone.account);
+  expect(await reopened.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  expect(view(await other.data.getShoppingList())).toEqual([
+    { item: 'Foil', checked: false },
+    { item: 'Paper towels', checked: false },
+  ]);
+});
+
+test('a refresh the server refuses signs the user out and throws away their list changes still waiting and the list last seen: signed in again, nothing old is sent', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const { foil } = await foilAndTowels([phone, other]);
+  phone.goOffline();
+  await phone.data.checkOff(foil);
+  const session = watchSession(phone);
+  await vi.waitFor(() => expect(session.last()).toEqual(signedIn(phone)));
+  phone.expireAccessToken();
+  await phone.revokeSessions();
+
+  phone.goOnline();
+  await phone.data.syncListChanges();
+  await vi.waitFor(() => expect(session.last()).toEqual({ status: 'signedOut' }));
+  expect([...phone.saved().keys()]).toEqual([]);
+
+  // Days later, after a restart, the user signs in again.
+  const reopened = phone.relaunch();
+  await reopened.data.signInWithPassword(phone.account);
+  expect(await reopened.data.getListSync()).toEqual({ status: 'idle', waiting: 0 });
+  expect(await reopened.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  const unchanged = [
+    { item: 'Foil', checked: false },
+    { item: 'Paper towels', checked: false },
+  ];
+  expect(view(await reopened.data.getShoppingList())).toEqual(unchanged);
+  expect(view(await other.data.getShoppingList())).toEqual(unchanged);
+  session.stop();
 });
 
 test('a refresh the server refuses still signs the user out, with the app open', async () => {
