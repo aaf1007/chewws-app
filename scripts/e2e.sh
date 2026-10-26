@@ -18,10 +18,12 @@ port="${NET_CONTROL_PORT:-54491}"
 listening_on_port() { lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true; }
 here="$(pwd -P)"
 for pid in $(listening_on_port); do
-  # One left from an earlier run in this worktree (cut short) is stopped; anything else is an error.
+  # One left from an earlier run in this worktree (cut short, so orphaned) is stopped; anything
+  # else, another run's still live, is an error.
   command="$(ps -o command= -p "$pid" 2>/dev/null || true)"
-  cwd="$(lsof -a -nP -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')"
-  if [[ "$command" == *net-control.mjs* && "$cwd" == "$here" ]]; then
+  cwd="$(lsof -a -nP -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' || true)"
+  parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+  if [[ "$command" == *net-control.mjs* && "$cwd" == "$here" && "$parent" == 1 ]]; then
     echo "== stopping net-control.mjs left running from an earlier run (pid $pid)"
     kill "$pid"
     for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
