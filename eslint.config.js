@@ -43,6 +43,26 @@ module.exports = defineConfig([
     },
   },
   {
+    // A link from a user or a caption is fetched only through the guarded fetch (decisions 04):
+    // the adapters take a SafeFetch, and nothing else in _shared may reach the network itself.
+    files: ['supabase/functions/_shared/**/*.ts'],
+    ignores: ['supabase/functions/_shared/safe-fetch.ts'],
+    rules: {
+      'no-restricted-globals': [
+        'error',
+        { name: 'fetch', message: 'Fetch through the SafeFetch an adapter is given (safe-fetch.ts), never bare fetch.' },
+      ],
+      'no-restricted-properties': [
+        'error',
+        ...['globalThis', 'window', 'self'].map((object) => ({
+          object,
+          property: 'fetch',
+          message: 'Fetch through the SafeFetch an adapter is given (safe-fetch.ts), never bare fetch.',
+        })),
+      ],
+    },
+  },
+  {
     // Screens and components draw with src/ui: colour roles and Text variants, never raw values.
     files: ['src/app/**/*.{ts,tsx}', 'src/components/**/*.{ts,tsx}'],
     rules: {
