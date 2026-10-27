@@ -161,3 +161,23 @@ test('saving something that is not a web link is refused', async () => {
   expect(error).toMatchObject({ code: '22023' });
   expect(await owner.data.listDrafts()).toEqual([]);
 });
+
+test('review_draft refuses a Recipe that is not a Draft, and changes nothing', async () => {
+  const owner = await signInAttacker('owner');
+  const id = await owner.data.createRecipe({
+    title: 'Garlic bread',
+    lines: [{ originalText: '2 cloves garlic', amountText: '2 cloves', ingredientName: 'garlic' }],
+    steps: ['Mash the garlic into the butter.'],
+  });
+  const before = await owner.data.getRecipe(id);
+
+  const review = await owner.client.rpc('review_draft', {
+    recipe_id: id,
+    title: 'Not a Draft',
+    steps: [],
+    lines: [],
+  });
+
+  expect(review).toMatchObject({ data: 'notDraft', error: null });
+  expect(await owner.data.getRecipe(id)).toEqual(before);
+});

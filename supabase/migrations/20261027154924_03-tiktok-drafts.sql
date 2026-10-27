@@ -304,8 +304,9 @@ end;
 $$;
 
 -- The user's reviewed version of a Draft: replaces its title, steps and lines, as edit_recipe does,
--- and makes it a Recipe. A Draft still building is refused; a failed one is filled in by hand.
--- Returns 'reviewed', 'building' or 'gone'.
+-- and makes it a Recipe. A Draft still building is refused; a failed one is filled in by hand. A
+-- Recipe that isn't a Draft (written by hand, or reviewed already) is refused and left as it is.
+-- Returns 'reviewed', 'building', 'notDraft' or 'gone'.
 create function public.review_draft(recipe_id uuid, title text, steps text[], lines jsonb)
 returns text
 language plpgsql
@@ -321,6 +322,9 @@ begin
 
   if not found then
     return 'gone';
+  end if;
+  if draft.status <> 'draft' then
+    return 'notDraft';
   end if;
   if draft.build_status = 'building' and not private.build_timed_out(draft.build_started_at) then
     return 'building';

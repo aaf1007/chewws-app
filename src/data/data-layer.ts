@@ -808,7 +808,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   /**
    * Saves the user's reviewed version of a Draft (its title, lines and steps, as `editRecipe`
    * does) and makes it a Recipe in the library. A failed Draft can be filled in by hand; one still
-   * building can't be reviewed yet.
+   * building can't be reviewed yet. A Recipe that is no longer a Draft is left as it is.
    */
   async function reviewDraft(id: RecipeId, input: RecipeInput): Promise<void> {
     const { data, error } = await client.rpc('review_draft', { recipe_id: id, ...toRecipeArgs(input) });
@@ -817,6 +817,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     if (data === 'building') {
       throw new DataError('draft_building', 'This Draft is still being built. Review it once it’s ready.');
     }
+    // 'notDraft': it was reviewed already (a review sent twice, as on a double tap), or never was
+    // a Draft. The server changed nothing; the Recipe stays as it is.
   }
 
   /** The Ingredients in the signed-in user's Pantry, and their Staples. */
