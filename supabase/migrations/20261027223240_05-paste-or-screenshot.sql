@@ -151,7 +151,7 @@ revoke execute on function public.save_from_link(uuid, text, public.source_platf
 grant execute on function public.save_from_link(uuid, text, public.source_platform, text, boolean) to authenticated;
 
 -- A caption the user pasted, a screenshot they uploaded, or both, for one of their failed Drafts
--- (most often one whose source couldn't be read): stores them in place of any added before and
+-- (most often one whose source couldn't be read): each replaces one of its kind added before, and
 -- puts the Draft back to building, for the phone to kick. It counts as a Retry. Returns
 -- 'retrying'; 'building' when it already is; 'noAttemptsLeft' (3 builds tried); 'built'; or 'gone'.
 create function public.add_caption_to_draft(recipe_id uuid, pasted_text text default null, with_screenshot boolean default false)
@@ -188,8 +188,10 @@ begin
     new_screenshot := private.uploaded_screenshot_path(add_caption_to_draft.recipe_id);
   end if;
 
+  -- What's added replaces its own kind; the other stays (a caption added to a screenshot, say).
   update public.source_videos s
-  set pasted_text = new_caption, screenshot_path = new_screenshot
+  set pasted_text = coalesce(new_caption, s.pasted_text),
+      screenshot_path = coalesce(new_screenshot, s.screenshot_path)
   where s.recipe_id = add_caption_to_draft.recipe_id;
 
   update public.recipes r

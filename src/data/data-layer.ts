@@ -721,17 +721,36 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
 
   /** Deletes the Recipe, and the screenshot the user added to it, if any. */
   async function deleteRecipe(id: RecipeId): Promise<void> {
-    const { data, error } = await client
-      .from('recipes')
-      .delete()
-      .eq('id', id)
-      .select(`owner_id, ${SOURCE_VIDEO}`);
+    const { data, error } = await client.from('recipes').delete().eq('id', id).select('owner_id');
     if (error) fail(error);
     const deleted = data[0];
     if (!deleted) throw new DataError('recipe_not_found', 'That Recipe no longer exists.');
-    const screenshot = deleted.source_video?.screenshot_path;
-    // Best effort: the Recipe is gone either way, and an image left behind is only ever the user's.
-    if (screenshot) await client.storage.from(RECIPE_IMAGES).remove([screenshot]).catch(() => {});
+    // A Recipe's screenshot, if it has one, is at its one path. Best effort: the Recipe is gone
+    // either way, and an image left behind is only ever its owner's, at a path no Recipe has now.
+    await removeScreenshot(parseUserId(deleted.owner_id), id);
+  }
+
+  /** The path of a Recipe's screenshot: `{owner id}/{recipe id}.jpg`, the only one it can have. */
+  const screenshotPath = (owner: UserId, recipeId: RecipeId) => `${owner}/${recipeId}.jpg`;
+
+  /** Removes a Recipe's screenshot from Storage, if it's there. Never fails. */
+  async function removeScreenshot(owner: UserId, recipeId: RecipeId): Promise<void> {
+    await client.storage
+      .from(RECIPE_IMAGES)
+      .remove([screenshotPath(owner, recipeId)])
+      .catch(() => {});
+  }
+
+  /**
+   * After a screenshot was uploaded for a write the server then refused: removes it unless a Draft
+   * uses it. A write that got no answer may have gone through, so its upload stays; sent again
+   * (the same Recipe id), it lands on the same path, and nothing else ever points there.
+   */
+  async function cleanUpRefusedUpload(recipeId: RecipeId, error: DataError): Promise<void> {
+    if (error.code === 'offline') return;
+    const me = await currentUserId();
+    const { data } = await client.from('source_videos').select('screenshot_path').eq('recipe_id', recipeId).maybeSingle();
+    if (data?.screenshot_path !== screenshotPath(me, recipeId)) await removeScreenshot(me, recipeId);
   }
 
   /**
@@ -755,7 +774,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     const me = await currentUserId();
     const { error } = await client.storage
       .from(RECIPE_IMAGES)
-      .upload(`${me}/${recipeId}.jpg`, jpeg, { contentType: 'image/jpeg', upsert: true });
+      .upload(screenshotPath(me, recipeId), jpeg, { contentType: 'image/jpeg', upsert: true });
     if (!error) return;
     const status: unknown = Reflect.get(error, 'status');
     if (typeof status === 'number' && status > 0) {
@@ -882,7 +901,11 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       pasted_text: caption ?? undefined,
       with_screenshot: Boolean(shared.screenshot),
     });
-    if (error) fail(error);
+    if (error) {
+      const refused = toDataError(error);
+      if (shared.screenshot) await cleanUpRefusedUpload(recipeId, refused);
+      throw refused;
+    }
     await kick(recipeId);
     return { status: 'saved', recipeId };
   }
@@ -903,12 +926,19 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       pasted_text: caption ?? undefined,
       with_screenshot: Boolean(input.screenshot),
     });
-    if (error) fail(error);
-    if (data === 'gone') throw new DataError('recipe_not_found', 'That Draft no longer exists.');
-    if (data === 'noAttemptsLeft') {
-      throw new DataError('no_attempts_left', 'This Draft can’t be built again. Fill it in by hand.');
+    const refused = error
+      ? toDataError(error)
+      : data === 'gone'
+        ? new DataError('recipe_not_found', 'That Draft no longer exists.')
+        : data === 'noAttemptsLeft'
+          ? new DataError('no_attempts_left', 'This Draft can’t be built again. Fill it in by hand.')
+          : data === 'built'
+            ? new DataError('draft_built', 'This Draft is already built.')
+            : null;
+    if (refused) {
+      if (input.screenshot) await cleanUpRefusedUpload(id, refused);
+      throw refused;
     }
-    if (data === 'built') throw new DataError('draft_built', 'This Draft is already built.');
     await kick(id);
   }
 

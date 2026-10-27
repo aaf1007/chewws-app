@@ -6,7 +6,7 @@
 import { expect, test } from 'vitest';
 
 import type { RecipeId } from '../src/data';
-import { NO_CAPTION } from '../supabase/functions/_shared/draft-fixtures';
+import { NO_CAPTION, PASTED_CAPTION, UNREADABLE } from '../supabase/functions/_shared/draft-fixtures';
 import { createTestClient, signInAttacker, type Attacker } from './access-harness';
 import { SCREENSHOT_BASE64, screenshotBytes } from './screenshot-fixture';
 
@@ -160,4 +160,70 @@ test('a user can upload only {their id}/{a uuid}.jpg, nothing else in their fold
   expect((await upload(`${id}.jpg`)).error).toBeNull();
   const files = await owner.client.storage.from(BUCKET).list(owner.userId);
   expect(files.data?.map((file) => file.name)).toEqual([`${id}.jpg`]);
+});
+
+/** The files in a user's folder, by name, with their bytes (base64). */
+async function folderOf(who: Attacker): Promise<Record<string, string | null>> {
+  const { data } = await who.client.storage.from(BUCKET).list(who.userId);
+  const files: Record<string, string | null> = {};
+  for (const file of data ?? []) files[file.name] = await downloaded(who, `${who.userId}/${file.name}`);
+  return files;
+}
+
+const base64 = (bytes: ArrayBuffer) => Buffer.from(bytes).toString('base64');
+
+test('replacing a screenshot, then adding a caption only, leaves the one image the Draft uses', async () => {
+  const owner = await signInAttacker('owner');
+  const { recipeId: id } = await owner.data.saveFromLink({ url: NO_CAPTION.url });
+  await owner.drafts.settled();
+
+  // A first screenshot, with a caption that has no recipe Claude can read: it fails again.
+  await owner.data.addCaptionToDraft(id, { caption: UNREADABLE.video.caption, screenshot: screenshotBytes() });
+  await owner.drafts.settled();
+  expect(await folderOf(owner)).toEqual({ [`${id}.jpg`]: SCREENSHOT_BASE64 });
+
+  // A caption only: the screenshot added before stays the Draft's, and in Storage.
+  await owner.data.addCaptionToDraft(id, { caption: PASTED_CAPTION.text });
+  await owner.drafts.settled();
+  const draft = await owner.data.getRecipe(id);
+  expect(draft).toMatchObject({ title: 'Honey garlic chicken', build: { status: 'built' } });
+  expect(draft?.sourceVideo?.screenshotUrl).toEqual(expect.stringContaining(`${owner.userId}/${id}.jpg`));
+  expect(await folderOf(owner)).toEqual({ [`${id}.jpg`]: SCREENSHOT_BASE64 });
+});
+
+test('a screenshot added again replaces the first: one image per Draft', async () => {
+  const owner = await signInAttacker('owner');
+  const { recipeId: id } = await owner.data.saveFromLink({ url: NO_CAPTION.url });
+  await owner.drafts.settled();
+
+  await owner.data.addCaptionToDraft(id, { caption: UNREADABLE.video.caption, screenshot: screenshotBytes() });
+  await owner.drafts.settled();
+  await owner.data.addCaptionToDraft(id, { caption: UNREADABLE.video.caption, screenshot: otherJpeg() });
+  await owner.drafts.settled();
+
+  expect(await folderOf(owner)).toEqual({ [`${id}.jpg`]: base64(otherJpeg()) });
+});
+
+test('deleting a Recipe deletes its screenshot from Storage', async () => {
+  const owner = await signInAttacker('owner');
+  const { id } = await draftWithScreenshot(owner);
+  expect(Object.keys(await folderOf(owner))).toEqual([`${id}.jpg`]);
+
+  await owner.data.deleteRecipe(id);
+
+  expect(await folderOf(owner)).toEqual({});
+});
+
+test('a screenshot uploaded for a save the server then refuses is removed', async () => {
+  const owner = await signInAttacker('owner');
+  const stranger = await signInAttacker('stranger');
+  const { id } = await draftWithScreenshot(owner);
+
+  // The Recipe id is taken (someone else's): the save fails after the upload.
+  await expect(stranger.data.saveFromLink({ url: REEL, screenshot: screenshotBytes(), draftId: id })).rejects.toMatchObject({
+    code: '23505',
+  });
+
+  expect(await folderOf(stranger)).toEqual({});
+  expect(await stranger.data.listDrafts()).toEqual([]);
 });
