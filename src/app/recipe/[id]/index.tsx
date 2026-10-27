@@ -65,7 +65,7 @@ export default function RecipeDetail() {
 
   return (
     <Screen title={recipe.title} scroll>
-      {recipe.sourceVideo ? <SourceVideoLink video={recipe.sourceVideo} /> : null}
+      {recipe.sourceVideo ? <SourceVideoLink recipeId={id} video={recipe.sourceVideo} recipeTitle={recipe.title} /> : null}
       <View>
         <SectionHeader title="Ingredients" />
         {recipe.lines.length === 0 ? (

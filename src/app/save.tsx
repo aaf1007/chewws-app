@@ -3,8 +3,8 @@ import { useState } from 'react';
 import { View } from 'react-native';
 
 import { messageOf } from '@/auth/errors';
-import { platformName } from '@/components/draft-copy';
-import { detectSource, type RecipeId } from '@/data';
+import { platformName, sourceText } from '@/components/draft-copy';
+import { checkSharedLink, type RecipeId } from '@/data';
 import { data } from '@/data/app';
 import { Button, EmptyState, Screen, SourceVideoCard, Text, spacing } from '@/ui';
 
@@ -23,7 +23,9 @@ const param = (value: string | string[] | undefined) => (Array.isArray(value) ? 
 export default function SaveLink() {
   const params = useLocalSearchParams<{ url?: string; text?: string }>();
   const shared = { url: param(params.url), text: param(params.text) };
-  const link = detectSource([shared.url, shared.text].filter(Boolean).join(' '));
+  const checked = checkSharedLink([shared.url, shared.text].filter(Boolean).join(' '));
+  const link = checked.status === 'noLink' ? null : checked.link;
+  const readFrom = link ? sourceText(link.platform) : 'caption';
   const [state, setState] = useState<SaveState>({ status: 'ready' });
   // One id for this save, however many times Save is tapped: a save whose answer was lost, tried
   // again, finds the Draft it made instead of making a second.
@@ -35,7 +37,7 @@ export default function SaveLink() {
         <EmptyState
           icon="checkmark-circle-outline"
           title="Saved as a Draft"
-          message="It’s being filled in from the caption. Review it in Drafts when it’s ready."
+          message={`It’s being filled in from the ${readFrom}. Review it in Drafts when it’s ready.`}
           action={{ label: 'View Drafts', onPress: () => router.replace('/drafts') }}
         />
         <Button label="Done" variant="outlined" onPress={() => router.dismissTo('/')} />
@@ -44,10 +46,10 @@ export default function SaveLink() {
   }
 
   const unsupported =
-    link === null
+    checked.status === 'noLink'
       ? 'There’s no link in what was shared.'
-      : link.platform !== 'tiktok'
-        ? 'Only TikTok links can be saved for now.'
+      : checked.status === 'unsupported'
+        ? checked.message
         : null;
 
   const save = () => {
@@ -63,6 +65,7 @@ export default function SaveLink() {
       {link ? (
         <SourceVideoCard
           platform={link.platform === 'web' ? 'Link' : platformName(link.platform)}
+          kind={link.platform === 'web' ? 'page' : 'video'}
           title={link.platform === 'web' ? platformName('web', link.url) : `${platformName(link.platform)} video`}
           detail={link.url}
         />
@@ -79,7 +82,9 @@ export default function SaveLink() {
         />
         <Button label="Cancel" variant="plain" onPress={() => router.back()} />
         <Text variant="caption" tone="textMuted">
-          The app reads the recipe from the video’s caption and saves it as a Draft for you to review.
+          {link?.platform === 'web'
+            ? 'The app reads the recipe from the page and saves it as a Draft for you to review.'
+            : `The app reads the recipe from the video’s ${readFrom} and saves it as a Draft for you to review.`}
         </Text>
       </View>
     </Screen>

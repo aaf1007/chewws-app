@@ -3,6 +3,7 @@ import { Alert, View } from 'react-native';
 
 import { messageOf } from '@/auth/errors';
 import { draftStatusLine, failureMessage, platformName } from '@/components/draft-copy';
+import { useSourceThumbnail } from '@/components/use-source-thumbnail';
 import { useWhileFocused } from '@/components/use-while-focused';
 import type { DraftSummary } from '@/data';
 import { data } from '@/data/app';
@@ -17,6 +18,39 @@ async function loadDrafts(): Promise<DraftSummary[]> {
 }
 
 const openDraft = (id: string) => router.push({ pathname: '/draft/[id]', params: { id } });
+
+/** One Draft in the list; a thumbnail that stops loading is read from the platform again. */
+function DraftRow({ draft, onRetry }: { draft: DraftSummary; onRetry: () => void }) {
+  const video = draft.sourceVideo;
+  const thumbnail = useSourceThumbnail(draft.id, video);
+  const from = video
+    ? [platformName(video.platform, video.originalUrl), video.creatorName].filter(Boolean).join(' · ')
+    : undefined;
+  const { build } = draft;
+  return (
+    <View style={{ paddingBottom: build.status === 'failed' ? spacing.md : 0 }}>
+      <ListRow
+        title={draft.title}
+        // A page not read yet is titled with its site; don't say the site twice.
+        meta={[draftStatusLine(draft), ...(from && from !== draft.title ? [from] : [])]}
+        photo={thumbnail.uri ? { uri: thumbnail.uri } : undefined}
+        onPhotoError={thumbnail.onError}
+        onPress={() => openDraft(draft.id)}
+      />
+      {build.status === 'failed' ? (
+        <DraftBanner
+          kind="failed"
+          title="Couldn't build this Draft"
+          message={failureMessage(build.reason, video ?? undefined)}
+          actions={[
+            ...(build.canRetry ? [{ label: 'Try again', onPress: onRetry }] : []),
+            { label: 'Fill in by hand', onPress: () => openDraft(draft.id) },
+          ]}
+        />
+      ) : null}
+    </View>
+  );
+}
 
 /** Every Draft the user hasn't reviewed, newest first, in whatever build state. */
 export default function Drafts() {
@@ -35,39 +69,14 @@ export default function Drafts() {
         <EmptyState
           icon="document-text-outline"
           title="No Drafts"
-          message="Share a TikTok to the app and it shows up here while it’s filled in, ready for you to review."
+          message="Share a TikTok, a YouTube Short or a recipe page to the app and it shows up here while it’s filled in, ready for you to review."
         />
       ) : null}
       {state.status === 'loaded' && state.value.length > 0 ? (
         <View>
-          {state.value.map((item) => {
-            const video = item.sourceVideo;
-            const from = video
-              ? [platformName(video.platform, video.originalUrl), video.creatorName].filter(Boolean).join(' · ')
-              : undefined;
-            const { build } = item;
-            return (
-              <View key={item.id} style={{ paddingBottom: build.status === 'failed' ? spacing.md : 0 }}>
-                <ListRow
-                  title={item.title}
-                  meta={[draftStatusLine(item), ...(from ? [from] : [])]}
-                  photo={video?.thumbnailUrl ? { uri: video.thumbnailUrl } : undefined}
-                  onPress={() => openDraft(item.id)}
-                />
-                {build.status === 'failed' ? (
-                  <DraftBanner
-                    kind="failed"
-                    title="Couldn't build this Draft"
-                    message={failureMessage(build.reason, video ?? undefined)}
-                    actions={[
-                      ...(build.canRetry ? [{ label: 'Try again', onPress: () => void retry(item) }] : []),
-                      { label: 'Fill in by hand', onPress: () => openDraft(item.id) },
-                    ]}
-                  />
-                ) : null}
-              </View>
-            );
-          })}
+          {state.value.map((item) => (
+            <DraftRow key={item.id} draft={item} onRetry={() => void retry(item)} />
+          ))}
         </View>
       ) : null}
     </Screen>
