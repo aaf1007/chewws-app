@@ -36,11 +36,15 @@ export type SourceMaterial = {
 /**
  * Why a source couldn't be read. `unavailable`: the platform answered that it has no such video
  * (private, deleted, not a video). `unreachable`: no usable answer (network error, 5xx).
+ * `unreadable`: the link leads somewhere the reader won't go (a short link redirecting off the
+ * platform).
  */
-export class SourceError extends Error {
-  readonly reason: 'unavailable' | 'unreachable';
+export type SourceFailure = 'unavailable' | 'unreachable' | 'unreadable';
 
-  constructor(reason: 'unavailable' | 'unreachable', message: string, options?: { cause?: unknown }) {
+export class SourceError extends Error {
+  readonly reason: SourceFailure;
+
+  constructor(reason: SourceFailure, message: string, options?: { cause?: unknown }) {
     super(message, options);
     this.name = 'SourceError';
     this.reason = reason;
@@ -110,11 +114,18 @@ function stringField(json: unknown, key: string): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value : null;
 }
 
+/** tiktok.com or a host under it (www., vm., vt.…), never one that only starts like it. */
+function isTikTokHost(host: string): boolean {
+  const name = host.toLowerCase();
+  return name === 'tiktok.com' || name.endsWith('.tiktok.com');
+}
+
 /**
  * The TikTok adapter: TikTok's oEmbed endpoint, with no auth (ADR-0004). `title` is the caption.
  * A short link (vm./vt.tiktok.com) is passed as shared; if oEmbed refuses it (400), the adapter
- * follows its redirects, reading statuses only, never a page, and asks once more with the full URL.
- * Not unit-tested (spec): checked by hand against real links.
+ * follows its redirects, reading statuses only, never a page, and asks once more with the full
+ * URL. It follows only https redirects to TikTok's hosts; any other makes the link unreadable.
+ * That redirect check is unit-tested with a fake fetch; the real oEmbed call is checked by hand.
  */
 export function tiktokOEmbedAdapter(fetchFn: typeof fetch): SourceAdapters['tiktok'] {
   async function oEmbed(url: string, signal: AbortSignal): Promise<Response> {
@@ -139,8 +150,13 @@ export function tiktokOEmbedAdapter(fetchFn: typeof fetch): SourceAdapters['tikt
       }
       const next = response.headers.get('location');
       if (response.status < 300 || response.status >= 400 || next === null) return null;
-      url = new URL(next, url).href;
-      if (/\/video\/\d+/u.test(new URL(url).pathname)) return url;
+      const target = new URL(next, url);
+      // Only TikTok's own hosts: a short link must not walk the server to any other address.
+      if (target.protocol !== 'https:' || !isTikTokHost(target.hostname)) {
+        throw new SourceError('unreadable', `The TikTok link redirects off TikTok, to ${target.host}.`);
+      }
+      url = target.href;
+      if (/\/video\/\d+/u.test(target.pathname)) return url;
     }
     return null;
   }

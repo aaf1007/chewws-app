@@ -5,6 +5,7 @@ import { describe, expect, test } from 'vitest';
 
 import { parseExtraction } from '../supabase/functions/_shared/claude-extractor';
 import { detectSource } from '../supabase/functions/_shared/detect-source';
+import { tiktokOEmbedAdapter } from '../supabase/functions/_shared/source-reader';
 
 describe('detectSource', () => {
   test.each([
@@ -75,5 +76,60 @@ describe('parseExtraction', () => {
     ['recipeFound as a string', answer('{"title": "P", "recipeFound": "false", "lines": [], "steps": []}')],
   ])('%s is unreadable', (_, message) => {
     expect(() => parseExtraction(message)).toThrow(expect.objectContaining({ name: 'ExtractError', reason: 'unreadable' }));
+  });
+});
+
+/**
+ * TikTok as a fake `fetch`: oEmbed answers for a full /video/ link and refuses a short one (400),
+ * and each link in `redirects` answers 302 to the next. Records every request it gets.
+ */
+function fakeTikTok(redirects: Record<string, string>) {
+  const requested: string[] = [];
+  const fetchFn: typeof fetch = async (input, init) => {
+    const url = String(input);
+    requested.push(url);
+    if (url.startsWith('https://www.tiktok.com/oembed?')) {
+      const video = new URL(url).searchParams.get('url') ?? '';
+      if (!/\/video\/\d+/u.test(video)) return new Response('', { status: 400 });
+      return Response.json({ title: 'Pasta! 200g spaghetti…', author_name: 'Pasta Queen' });
+    }
+    const next = redirects[url];
+    if (init?.method !== 'HEAD' || next === undefined) return new Response(null, { status: 200 });
+    return new Response(null, { status: 302, headers: { Location: next } });
+  };
+  return { fetchFn, requested };
+}
+
+describe('the TikTok adapter following a short link', () => {
+  const signal = new AbortController().signal;
+
+  test('follows TikTok redirects to the full video link and reads it', async () => {
+    const tiktok = fakeTikTok({
+      'https://vm.tiktok.com/ZMshort/': 'https://vt.tiktok.com/ZShop/',
+      'https://vt.tiktok.com/ZShop/': 'https://www.tiktok.com/@pastaqueen/video/7400000000000000001?is_from_webapp=1',
+    });
+
+    const video = await tiktokOEmbedAdapter(tiktok.fetchFn)('https://vm.tiktok.com/ZMshort/', signal);
+
+    expect(video).toMatchObject({ externalId: '7400000000000000001', caption: 'Pasta! 200g spaghetti…' });
+  });
+
+  test.each([
+    ['a metadata address', 'http://169.254.169.254/latest/meta-data/'],
+    ['a host that only starts like TikTok', 'https://tiktok.com.evil.example/video/1'],
+    ['localhost', 'http://localhost:54321/rest/v1/'],
+  ])('stops at a redirect to %s, unread, without requesting it', async (_, foreign) => {
+    const tiktok = fakeTikTok({
+      'https://vm.tiktok.com/ZMshort/': 'https://vt.tiktok.com/ZShop/',
+      'https://vt.tiktok.com/ZShop/': foreign,
+      [foreign]: 'https://www.tiktok.com/@pastaqueen/video/7400000000000000001',
+    });
+
+    await expect(tiktokOEmbedAdapter(tiktok.fetchFn)('https://vm.tiktok.com/ZMshort/', signal)).rejects.toMatchObject({
+      name: 'SourceError',
+      reason: 'unreadable',
+    });
+    expect(tiktok.requested).not.toContain(foreign);
+    expect(tiktok.requested.some((url) => url.includes('/video/'))).toBe(false);
   });
 });

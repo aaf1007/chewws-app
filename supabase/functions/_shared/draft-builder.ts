@@ -45,7 +45,10 @@ function toSharedLink(claimed: unknown): SharedLink | null {
 
 function failureOf(error: unknown, timedOut: boolean): BuildFailure {
   if (timedOut) return 'timed_out';
-  if (error instanceof SourceError) return error.reason === 'unavailable' ? 'source_unavailable' : 'source_unreachable';
+  if (error instanceof SourceError) {
+    if (error.reason === 'unreadable') return 'unreadable';
+    return error.reason === 'unavailable' ? 'source_unavailable' : 'source_unreachable';
+  }
   if (error instanceof ExtractError) return error.reason === 'notSetUp' ? 'not_set_up' : 'unreadable';
   return 'unreadable';
 }
