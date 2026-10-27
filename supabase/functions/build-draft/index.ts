@@ -1,7 +1,8 @@
 // POST /functions/v1/build-draft {recipeId}: builds one of the caller's Drafts in the background.
 // A thin Deno entry (docs/agents/verify.md): it checks the caller, answers 202 at once, and runs
-// buildDraft (supabase/functions/_shared/draft-builder.ts) with the real source reader and Claude,
-// or, with DRAFT_FIXTURES=1 on a local stack only, with the canned ones the tests use.
+// buildDraft (supabase/functions/_shared/draft-builder.ts) with the real source reader (TikTok,
+// YouTube and web pages, every read through the guarded fetch) and Claude, or, with
+// DRAFT_FIXTURES=1 on a local stack only, with the canned ones the tests use.
 
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient } from '@supabase/supabase-js';
@@ -9,12 +10,14 @@ import { createClient } from '@supabase/supabase-js';
 import { claudeExtractor, ExtractError, type Extract } from '../_shared/claude-extractor.ts';
 import { buildDraft, type Rpc } from '../_shared/draft-builder.ts';
 import { fixtureAdapters, fixtureExtract } from '../_shared/draft-fixtures.ts';
-import { createSourceReader, tiktokOEmbedAdapter } from '../_shared/source-reader.ts';
+import { createSafeFetch, dnsResolver } from '../_shared/safe-fetch.ts';
+import { createSourceReader, realSourceAdapters } from '../_shared/source-reader.ts';
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
 const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
 const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY')?.trim() ?? '';
+const youtubeKey = Deno.env.get('YOUTUBE_API_KEY')?.trim() ?? '';
 
 /** The local stack's API, as the functions runtime sees it. A hosted project is never one of these. */
 const LOCAL_HOSTS = new Set(['kong', 'localhost', '127.0.0.1', 'host.docker.internal']);
@@ -36,7 +39,9 @@ const notSetUp: Extract = async () => {
   throw new ExtractError('notSetUp', 'ANTHROPIC_API_KEY is not set.');
 };
 
-const readSource = createSourceReader(fixtures ? fixtureAdapters : { tiktok: tiktokOEmbedAdapter(fetch) }).read;
+// Every link a user or a caption names is read through the guarded fetch, and nothing else.
+const safeFetch = createSafeFetch({ fetch, resolveHost: dnsResolver(Deno.resolveDns) });
+const readSource = createSourceReader(fixtures ? fixtureAdapters : realSourceAdapters(safeFetch, youtubeKey)).read;
 const extract: Extract = fixtures
   ? fixtureExtract
   : anthropicKey

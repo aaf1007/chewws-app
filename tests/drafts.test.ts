@@ -157,7 +157,8 @@ test('saving returns at once; the Recipe is an unbuilt Draft until the Draft bui
   });
 });
 
-test('a link inside shared text is saved; text with no link, or a link that is not TikTok, is refused', async () => {
+// Ticket 04 made recipe-site links saveable; an Instagram link stays refused until ticket 05.
+test('a link inside shared text is saved; text with no link, or a link that cannot be saved yet, is refused', async () => {
   const a = await signInTestUser('a');
 
   const { recipeId } = await a.data.saveFromLink({
@@ -168,7 +169,7 @@ test('a link inside shared text is saved; text with no link, or a link that is n
   expect(await a.data.getRecipe(recipeId)).toMatchObject({ title: 'Creamy garlic pasta', sourceVideo: pastaSource });
   await expect(a.data.saveFromLink({ text: 'Check out this recipe!' })).rejects.toMatchObject({ code: 'no_link' });
   await expect(a.data.saveFromLink({ text: '   ' })).rejects.toMatchObject({ code: 'no_link' });
-  await expect(a.data.saveFromLink({ url: 'https://www.allrecipes.com/recipe/1/pasta/' })).rejects.toMatchObject({
+  await expect(a.data.saveFromLink({ url: 'https://www.instagram.com/reel/C1a2b3c4d5e/' })).rejects.toMatchObject({
     code: 'unsupported_link',
   });
   expect((await a.data.listDrafts()).map((d) => d.id)).toEqual([recipeId]);

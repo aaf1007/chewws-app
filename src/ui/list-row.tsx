@@ -16,6 +16,7 @@ export function ListRow({
   scoreTone = 'mine',
   onPress,
   onMore,
+  onPhotoError,
 }: {
   title: string;
   /** Small muted text after the title, e.g. a cook time. */
@@ -30,6 +31,8 @@ export function ListRow({
   onPress?: () => void;
   /** Shows the vertical "more" button at the right. */
   onMore?: () => void;
+  /** Called when the thumbnail fails to load (an expired link, say). */
+  onPhotoError?: () => void;
 }) {
   const lines = meta.slice(0, 2);
   // One accessibility element for the row's content; the "more" button stays a separate one.
@@ -53,7 +56,7 @@ export function ListRow({
         style={({ pressed }) => [styles.main, pressed && styles.pressed]}>
         <View style={styles.thumbWrap}>
           {photo ? (
-            <Image source={photo} style={styles.thumb} accessibilityIgnoresInvertColors />
+            <Image source={photo} style={styles.thumb} onError={onPhotoError} accessibilityIgnoresInvertColors />
           ) : (
             <View style={[styles.thumb, styles.placeholder]}>
               <Icon name="restaurant-outline" size="lg" tone="textMuted" />

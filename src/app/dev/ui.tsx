@@ -169,6 +169,22 @@ export default function UiGallery() {
         onPress={noop}
       />
       <SourceVideoCard platform="TikTok" title="TikTok video" detail="https://vm.tiktok.com/ZMabc123/" />
+      <SourceVideoCard
+        platform="YouTube"
+        title="Lemon Kitchen"
+        detail="Watch on YouTube"
+        thumbnailUrl={photo('photo-1473093295043-cdd812d0e601').uri}
+        onPress={noop}
+      />
+      <SourceVideoCard
+        kind="page"
+        platform="cooking.example.com"
+        title="Rosa Martínez"
+        detail="Open the page"
+        thumbnailUrl={photo('photo-1590412200988-a436970781fa').uri}
+        onPress={noop}
+      />
+      <SourceVideoCard kind="page" platform="blog.example.org" title="My kitchen tour" detail="Open the page" onPress={noop} />
 
       <SectionHeader title="Draft banners" />
       <DraftBanner kind="building" title="Building this Draft…" message="It’ll be ready in a moment." />

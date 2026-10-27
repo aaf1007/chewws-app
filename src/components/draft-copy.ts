@@ -1,6 +1,6 @@
 import type { DraftBuildFailure, DraftSummary, SourcePlatform, SourceVideo } from '@/data';
 
-/** The platform's name as the app shows it. */
+/** The platform's name as the app shows it; a web page's is its site ("cooking.example.com"). */
 export function platformName(platform: SourcePlatform, url?: string): string {
   switch (platform) {
     case 'tiktok':
@@ -14,16 +14,29 @@ export function platformName(platform: SourcePlatform, url?: string): string {
   }
 }
 
-/** The reason line under "Couldn't build this Draft" (decisions 03). */
+/** What the Draft builder reads a recipe from: a TikTok's caption, a YouTube video's description, a page. */
+export function sourceText(platform: SourcePlatform): string {
+  switch (platform) {
+    case 'youtube':
+      return 'description';
+    case 'web':
+      return 'page';
+    default:
+      return 'caption';
+  }
+}
+
+/** The reason line under "Couldn't build this Draft" (decisions 03, 04). */
 export function failureMessage(reason: DraftBuildFailure, video?: SourceVideo): string {
   const platform = video ? platformName(video.platform, video.originalUrl) : 'TikTok';
+  const page = video?.platform === 'web';
   switch (reason) {
     case 'sourceUnavailable':
-      return `${platform} didn't return this video. It may be private or deleted.`;
+      return page ? `Couldn't find ${platform}.` : `${platform} didn't return this video. It may be private or deleted.`;
     case 'sourceUnreachable':
       return `Couldn't reach ${platform}.`;
     case 'unreadable':
-      return "Couldn't read a recipe from it.";
+      return page ? "The app can't open this link." : "Couldn't read a recipe from it.";
     case 'timedOut':
       return 'This took too long.';
     case 'notSetUp':
@@ -31,11 +44,29 @@ export function failureMessage(reason: DraftBuildFailure, video?: SourceVideo): 
   }
 }
 
+/** The banner on a Draft the builder found no recipe in, worded for where it looked. */
+export function notFoundCopy(platform: SourcePlatform | undefined): { title: string; message: string } {
+  switch (platform) {
+    case 'youtube':
+      return {
+        title: 'Recipe not in description',
+        message: 'The description doesn’t list the ingredients. Fill them in from the video.',
+      };
+    case 'web':
+      return {
+        title: 'No recipe on this page',
+        message: 'The app found no recipe it can read on this page. Fill in the ingredients and steps yourself.',
+      };
+    default:
+      return NOT_IN_CAPTION;
+  }
+}
+
 /** One line saying where a Draft is, for the Drafts list. */
-export function draftStatusLine(draft: Pick<DraftSummary, 'build' | 'recipeFound'>): string {
+export function draftStatusLine(draft: Pick<DraftSummary, 'build' | 'recipeFound' | 'sourceVideo'>): string {
   if (draft.build.status === 'building') return 'Building…';
   if (draft.build.status === 'failed') return "Couldn't build this Draft";
-  return draft.recipeFound ? 'Ready to review' : 'Recipe not in caption';
+  return draft.recipeFound ? 'Ready to review' : notFoundCopy(draft.sourceVideo?.platform).title;
 }
 
 export const NOT_IN_CAPTION = {
