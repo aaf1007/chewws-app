@@ -32,7 +32,9 @@ export function failureMessage(reason: DraftBuildFailure, video?: SourceVideo): 
   const page = video?.platform === 'web';
   switch (reason) {
     case 'sourceUnavailable':
-      return page ? `Couldn't find ${platform}.` : `${platform} didn't return this video. It may be private or deleted.`;
+      return page
+        ? `${platform} says this page isn't there. It may have moved or been deleted.`
+        : `${platform} didn't return this video. It may be private or deleted.`;
     case 'sourceUnreachable':
       return `Couldn't reach ${platform}.`;
     case 'unreadable':

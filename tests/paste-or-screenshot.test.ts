@@ -513,3 +513,30 @@ test('a YouTube video whose description is empty is “recipe not in description
     sourceVideo: { platform: 'youtube', creatorName: 'Lemon Kitchen' },
   });
 });
+
+describe('a page that answers 4xx', () => {
+  const answering = (status: number) =>
+    pageAdapter(
+      createSafeFetch({
+        resolveHost: async () => ['93.184.216.34'],
+        fetch: async () => new Response('<html><title>No</title></html>', { status, headers: { 'Content-Type': 'text/html' } }),
+      }),
+    )('https://cooking.example.com/recipes/ramen', new AbortController().signal);
+
+  test.each([
+    [401, 'refused'],
+    [402, 'refused'],
+    [403, 'refused'],
+    [451, 'refused'],
+    [404, 'unavailable'],
+    [410, 'unavailable'],
+    [408, 'unreachable'],
+    [429, 'unreachable'],
+    [400, 'unreadable'],
+    [405, 'unreadable'],
+    [406, 'unreadable'],
+    [418, 'unreadable'],
+  ])('%i is %s', async (status, reason) => {
+    await expect(answering(status)).rejects.toMatchObject({ name: 'SourceError', reason });
+  });
+});

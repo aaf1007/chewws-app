@@ -253,21 +253,29 @@ export function readPage(html: string, pageUrl: string): Omit<PageInfo, 'url'> {
 
 const HTML = ['text/html', 'application/xhtml+xml'];
 
+/** Statuses of a page that won't show itself to the server: sign-in, payment, forbidden, legal. */
+const REFUSED = new Set([401, 402, 403, 451]);
+
 /**
  * The page adapter: one guarded fetch of the page, HTML only. A page that isn't HTML (a PDF, an
  * image) still saves, with no preview: an empty Draft to fill in by hand. One that won't show
- * itself to the server (a 4xx: paywalled, deleted, or a site that turns away anything but a
+ * itself to the server (401, 402, 403, 451: a paywall, or a site that turns away anything but a
  * browser, as big recipe sites do with 402) is `refused`: the app couldn't read it, and the user
  * can paste the recipe or add a screenshot (decisions, "when a source can't be read"). It never
- * pretends to be a browser to get past one.
+ * pretends to be a browser to get past one. 404 and 410 are a page that's gone (`unavailable`),
+ * 408 and 429 a site that didn't answer in time (`unreachable`), any other 4xx a link the app
+ * can't open (`unreadable`).
  */
 export function pageAdapter(safeFetch: SafeFetch): (url: string, signal: AbortSignal) => Promise<PageInfo> {
   return async (url, signal) => {
     const response = await safeFetch(url, { accept: HTML, signal, headers: { Accept: 'text/html' } });
-    if (response.status >= 500 || response.status === 429) {
-      throw new SourceError('unreachable', `${response.url} answered ${response.status}.`);
+    const answered = `${response.url} answered ${response.status}.`;
+    if (response.status >= 500 || response.status === 429 || response.status === 408) {
+      throw new SourceError('unreachable', answered);
     }
-    if (response.status >= 400) throw new SourceError('refused', `${response.url} answered ${response.status}.`);
+    if (REFUSED.has(response.status)) throw new SourceError('refused', answered);
+    if (response.status === 404 || response.status === 410) throw new SourceError('unavailable', answered);
+    if (response.status >= 400) throw new SourceError('unreadable', answered);
     if (response.status >= 300 || response.body === null) {
       return { url: response.url, title: null, imageUrl: null, siteRecipe: null };
     }
