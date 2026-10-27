@@ -7,6 +7,10 @@ import { inject, onTestFinished } from 'vitest';
 
 import { createDataLayer, createSessionStorage, type AuthStorage, type DataLayer, type UserId } from '../src/data';
 import type { Database } from '../src/data/database.types';
+import type { Extract } from '../supabase/functions/_shared/claude-extractor';
+import { buildDraft, type BuildOutcome, type Rpc } from '../supabase/functions/_shared/draft-builder';
+import { fixtureAdapters, fixtureExtract } from '../supabase/functions/_shared/draft-fixtures';
+import { createSourceReader, type SourceAdapters } from '../supabase/functions/_shared/source-reader';
 
 const { url, anonKey, serviceRoleKey } = inject('supabase');
 
@@ -14,9 +18,67 @@ const nodeAuth = { persistSession: false, autoRefreshToken: false, detectSession
 
 const admin = createClient<Database>(url, serviceRoleKey, { auth: nodeAuth });
 
+/** The Draft builder's database calls, as the build-draft function makes them: as the service role. */
+const serviceRpc: Rpc = async (fn, args) => {
+  // Untyped, as the builder's `Rpc` is: it names its functions and checks what they return itself.
+  const service = createClient(url, serviceRoleKey, { auth: nodeAuth });
+  const { data, error } = await service.rpc(fn, args);
+  if (error) throw error;
+  return data;
+};
+
+/**
+ * The fake boundary for Draft builds (spec, Testing Decisions): the TikTok adapter and the Claude
+ * call. By default, the canned videos and answers in supabase/functions/_shared/draft-fixtures.ts.
+ */
+export type DraftFakes = {
+  tiktok?: SourceAdapters['tiktok'];
+  extract?: Extract;
+  /** This many of the app's kicks are lost on the way (no signal), starting no build. */
+  loseKicks?: number;
+};
+
+/** The Draft builds a user's app started, run in-process with the fakes instead of build-draft. */
+export type DraftBuilds = {
+  /** Resolves once every build started so far (and any they lead to) has finished. */
+  settled(): Promise<void>;
+  /** Runs another build of `recipeId` now, as a second kick of build-draft would. */
+  build(recipeId: string): Promise<BuildOutcome>;
+};
+
+export function inProcessDraftBuilds(fakes: DraftFakes = {}) {
+  const readSource = createSourceReader({ tiktok: fakes.tiktok ?? fixtureAdapters.tiktok }).read;
+  const extract = fakes.extract ?? fixtureExtract;
+  const running = new Set<Promise<unknown>>();
+  const build = (recipeId: string) => {
+    const done = buildDraft(recipeId, { rpc: serviceRpc, readSource, extract });
+    running.add(done);
+    void done.finally(() => running.delete(done)).catch(() => {});
+    return done;
+  };
+  const drafts: DraftBuilds = {
+    async settled() {
+      while (running.size > 0) await Promise.allSettled([...running]);
+    },
+    build,
+  };
+  // The app's kick settles once the build has started; the build goes on in the background.
+  let kicksToLose = fakes.loseKicks ?? 0;
+  const startDraftBuild = async (recipeId: string) => {
+    if (kicksToLose > 0) {
+      kicksToLose -= 1;
+      throw new TypeError('Network request failed');
+    }
+    void build(recipeId);
+  };
+  return { drafts, startDraftBuild };
+}
+
 export type Attacker = {
   userId: UserId;
   data: DataLayer;
+  /** The Draft builds this user's saves started, run in-process. */
+  drafts: DraftBuilds;
   /** The user's own signed-in client (anon key + their session). */
   client: SupabaseClient<Database>;
 };
@@ -59,11 +121,12 @@ function memoryAuthStorage(): AuthStorage {
   };
 }
 
-export async function signInAttacker(label = 'user'): Promise<Attacker> {
+export async function signInAttacker(label = 'user', fakes: DraftFakes = {}): Promise<Attacker> {
   const account = await createTestAccount(label);
   const sessionStorage = createSessionStorage(memoryAuthStorage());
   const client = createTestClient(undefined, sessionStorage);
-  const data = createDataLayer(client, { sessionStorage });
+  const { drafts, startDraftBuild } = inProcessDraftBuilds(fakes);
+  const data = createDataLayer(client, { sessionStorage, startDraftBuild });
   const userId = await data.signInWithPassword(account);
-  return { userId, data, client };
+  return { userId, data, drafts, client };
 }

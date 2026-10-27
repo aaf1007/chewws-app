@@ -4,7 +4,15 @@ const expoConfig = require('eslint-config-expo/flat');
 module.exports = defineConfig([
   expoConfig,
   {
-    ignores: ['dist/*', 'ios/*', 'android/*', '.expo/*', 'src/data/database.types.ts'],
+    ignores: [
+      'dist/*',
+      'ios/*',
+      'android/*',
+      '.expo/*',
+      'src/data/database.types.ts',
+      // Deno entries (Deno globals, npm: imports); their logic is in supabase/functions/_shared.
+      'supabase/functions/*/index.ts',
+    ],
   },
   {
     files: ['**/*.{ts,tsx}'],
@@ -17,7 +25,8 @@ module.exports = defineConfig([
     // Tests drive the app through data-layer actions only (spec: Testing Decisions). Access-rule
     // tests in tests/*.access.test.ts attack the API directly with a user's raw client.
     files: ['tests/**/*.{ts,tsx}'],
-    ignores: ['tests/harness.ts', 'tests/global-setup.ts', 'tests/**/*.access.test.ts'],
+    // The harnesses touch Supabase directly (CODING_STANDARDS.md, Tests).
+    ignores: ['tests/harness.ts', 'tests/access-harness.ts', 'tests/global-setup.ts', 'tests/**/*.access.test.ts'],
     rules: {
       'no-restricted-syntax': [
         'error',

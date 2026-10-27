@@ -10,14 +10,28 @@ import {
   type ShoppingListItemId,
   type UserId,
 } from '../src/data';
-import { createTestAccount, createTestClient, signInAttacker, type TestAccount } from './access-harness';
+import {
+  createTestAccount,
+  createTestClient,
+  inProcessDraftBuilds,
+  signInAttacker,
+  type DraftBuilds,
+  type DraftFakes,
+  type TestAccount,
+} from './access-harness';
 
-export type TestUser = { userId: UserId; data: DataLayer };
+export type { DraftBuilds, DraftFakes };
 
-/** A fresh signed-in user. Behaviour tests reach the app only through `data`, its data-layer actions. */
-export async function signInTestUser(label = 'user'): Promise<TestUser> {
-  const { userId, data } = await signInAttacker(label);
-  return { userId, data };
+export type TestUser = { userId: UserId; data: DataLayer; drafts: DraftBuilds };
+
+/**
+ * A fresh signed-in user. Behaviour tests reach the app only through `data`, its data-layer
+ * actions. Their saved links build in-process with `fakes` (canned TikTok videos and Claude
+ * answers by default), with no network; `drafts.settled()` waits for those builds.
+ */
+export async function signInTestUser(label = 'user', fakes: DraftFakes = {}): Promise<TestUser> {
+  const { userId, data, drafts } = await signInAttacker(label, fakes);
+  return { userId, data, drafts };
 }
 
 /** Sessions waiting, directly or through others, on the session with this pid. Live, never cached. */
@@ -198,6 +212,8 @@ export type PhoneOptions = {
    * Off by default: tests then decide when a session is refreshed.
    */
   autoRefreshToken?: boolean;
+  /** The fakes the phone's Draft builds use (see `signInTestUser`). */
+  fakes?: DraftFakes;
 };
 
 /**
@@ -208,7 +224,7 @@ export type PhoneOptions = {
 export async function signInOnPhones(
   label: string,
   count: number,
-  { autoRefreshToken = false }: PhoneOptions = {},
+  { autoRefreshToken = false, fakes = {} }: PhoneOptions = {},
 ): Promise<TestPhone[]> {
   const account = await createTestAccount(label);
   return Promise.all(
@@ -311,13 +327,16 @@ export async function signInOnPhones(
           },
         };
         const client = createTestClient(fetchThroughSignal, authClientStorage, { autoRefreshToken });
+        const { drafts, startDraftBuild } = inProcessDraftBuilds(fakes);
         const data = createDataLayer(client, {
           storage,
           sessionStorage,
           now: () => (clock === null ? Date.now() : clock),
+          startDraftBuild,
         });
         return {
           data,
+          drafts,
           ...network,
           setClock: (at) => void (clock = at.getTime()),
           saved: () => new Map(items),

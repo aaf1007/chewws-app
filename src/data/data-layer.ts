@@ -6,6 +6,7 @@ import {
   type SupabaseClient,
 } from '@supabase/supabase-js';
 
+import { detectSource } from '../../supabase/functions/_shared/detect-source';
 import {
   createChangeQueue,
   memoryStorage,
@@ -27,6 +28,9 @@ import {
   parseShoppingListItemId,
   parseUserId,
   type CheckState,
+  type DraftBuild,
+  type DraftBuildFailure,
+  type DraftSummary,
   type IdTokenProvider,
   type Ingredient,
   type IngredientId,
@@ -38,12 +42,14 @@ import {
   type RecipeId,
   type RecipeInput,
   type RecipeSummary,
+  type SaveFromLinkResult,
   type SessionState,
   type ShoppingList,
   type ShoppingListId,
   type ShoppingListItem,
   type ShoppingListItemId,
   type ShoppingListView,
+  type SourceVideo,
   type UserId,
 } from './types';
 
@@ -53,22 +59,79 @@ type IngredientRow = Database['public']['Tables']['ingredients']['Row'];
 type RecipeLineRow = Database['public']['Tables']['recipe_lines']['Row'];
 type ShoppingListItemRow = Database['public']['Tables']['shopping_list_items']['Row'];
 type ShoppingListAmountRow = Database['public']['Tables']['shopping_list_amounts']['Row'];
+type SourceVideoRow = Database['public']['Tables']['source_videos']['Row'];
+type BuildFailureRow = Database['public']['Enums']['draft_build_failure'];
 
-const RECIPE_WITH_LINES =
-  '*, recipe_lines(position, original_text, amount_text, ingredient:ingredients(id, name))';
+const SOURCE_VIDEO = 'source_video:source_videos(platform, original_url, creator_name, creator_url, thumbnail_url)';
+
+const RECIPE_WITH_LINES = `*, recipe_lines(position, original_text, amount_text, ingredient:ingredients(id, name)), ${SOURCE_VIDEO}`;
+
+const DRAFT_SUMMARY = `id, title, status, recipe_found, build_status, build_failure, build_attempts, build_started_at, created_at, ${SOURCE_VIDEO}`;
+
+/** A build claimed longer ago than this has run past its budget; it reads as timed out. */
+const BUILD_TIMEOUT_MS = 3 * 60_000;
+/** A Draft still unclaimed this long after its save (or Retry) had its kick lost; kick it again. */
+const UNCLAIMED_KICK_AFTER_MS = 30_000;
+/** Builds per Draft, the first and two Retries (decisions 03). */
+const BUILD_ATTEMPTS = 3;
+
+const FAILURES: Record<BuildFailureRow, DraftBuildFailure> = {
+  source_unavailable: 'sourceUnavailable',
+  source_unreachable: 'sourceUnreachable',
+  unreadable: 'unreadable',
+  timed_out: 'timedOut',
+  not_set_up: 'notSetUp',
+};
+
+type BuildColumns = Pick<
+  RecipeRow,
+  'status' | 'build_status' | 'build_failure' | 'build_attempts' | 'build_started_at'
+>;
+
+/** Where the Draft builder is with a Recipe, as of `now`: a build past its time reads as failed. */
+function toDraftBuild(row: BuildColumns, now: number): DraftBuild {
+  const canRetry = row.build_attempts < BUILD_ATTEMPTS;
+  if (row.build_status === 'built') return { status: 'built' };
+  if (row.build_status === 'failed') {
+    return { status: 'failed', reason: FAILURES[row.build_failure ?? 'unreadable'], canRetry };
+  }
+  const startedAt = row.build_started_at === null ? null : Date.parse(row.build_started_at);
+  if (startedAt !== null && now - startedAt > BUILD_TIMEOUT_MS) {
+    return { status: 'failed', reason: 'timedOut', canRetry };
+  }
+  return { status: 'building' };
+}
+
+type SourceVideoColumns = Pick<
+  SourceVideoRow,
+  'platform' | 'original_url' | 'creator_name' | 'creator_url' | 'thumbnail_url'
+>;
+
+function toSourceVideo(row: SourceVideoColumns | null): SourceVideo | null {
+  if (!row) return null;
+  return {
+    platform: row.platform,
+    originalUrl: row.original_url,
+    creatorName: row.creator_name,
+    creatorUrl: row.creator_url,
+    thumbnailUrl: row.thumbnail_url,
+  };
+}
 
 function toRecipe(
   row: RecipeRow & {
     recipe_lines: (Pick<RecipeLineRow, 'position' | 'original_text' | 'amount_text'> & {
       ingredient: Pick<IngredientRow, 'id' | 'name'>;
     })[];
+    source_video: SourceVideoColumns | null;
   },
+  now: number,
 ): Recipe {
-  return {
+  const sourceVideo = toSourceVideo(row.source_video);
+  const fields = {
     id: parseRecipeId(row.id),
     ownerId: parseUserId(row.owner_id),
     title: row.title,
-    status: row.status,
     recipeFound: row.recipe_found,
     lines: [...row.recipe_lines]
       .sort((a, b) => a.position - b.position)
@@ -78,9 +141,13 @@ function toRecipe(
         ingredient: { id: parseIngredientId(line.ingredient.id), name: line.ingredient.name },
       })),
     steps: row.steps,
+    ...(sourceVideo ? { sourceVideo } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+  return row.status === 'draft'
+    ? { ...fields, status: 'draft', build: toDraftBuild(row, now) }
+    : { ...fields, status: 'reviewed' };
 }
 
 /**
@@ -259,6 +326,12 @@ export type DataLayerOptions = {
    * layer ends it on the phone itself, at once, signal or not.
    */
   sessionStorage: SessionStorage;
+  /**
+   * Starts building a saved Draft in the background, and settles once it has started, not when
+   * it's built. By default it kicks the `build-draft` Edge Function and waits for its 202 (10 s at
+   * most). Tests build in-process instead, with a fake source reader and Claude call.
+   */
+  startDraftBuild?: (recipeId: RecipeId) => Promise<void>;
 };
 
 /**
@@ -271,6 +344,12 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   const storage = options.storage ?? memoryStorage();
   const now = options.now ?? Date.now;
   const newId = options.newId ?? (() => crypto.randomUUID());
+  const startDraftBuild =
+    options.startDraftBuild ??
+    (async (recipeId: RecipeId) => {
+      const { error } = await client.functions.invoke('build-draft', { body: { recipeId }, timeout: 10_000 });
+      if (error) throw error;
+    });
 
   const notSignedIn = () => new DataError('not_signed_in', 'No user is signed in.');
 
@@ -602,7 +681,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       .eq('id', id)
       .maybeSingle();
     if (error) fail(error);
-    return data ? toRecipe(data) : null;
+    return data ? toRecipe(data, now()) : null;
   }
 
   /** The signed-in user's reviewed Recipes, newest first. */
@@ -623,6 +702,110 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       stepCount: row.steps.length,
       createdAt: row.created_at,
     }));
+  }
+
+  /** Kicks a Draft's build. A kick that fails changes nothing: `resumeDraftBuilds` kicks again. */
+  async function kick(recipeId: RecipeId): Promise<void> {
+    try {
+      await startDraftBuild(recipeId);
+    } catch {
+      // No signal, or the function failed: the Draft stays building until it's kicked again.
+    }
+  }
+
+  /**
+   * Saves a shared link as a Draft and returns at once: the Draft builder fills it in in the
+   * background. `url` or `text` (shared text with a link in it) names the link; the first link
+   * wins. Only TikTok links are saved for now (ticket 04 adds the rest).
+   */
+  async function saveFromLink(shared: { url?: string; text?: string }): Promise<SaveFromLinkResult> {
+    const detected = detectSource([shared.url, shared.text].filter(Boolean).join(' '));
+    if (detected === null) throw new DataError('no_link', 'There’s no link in what was shared.');
+    if (detected.platform !== 'tiktok') {
+      throw new DataError('unsupported_link', 'Only TikTok links can be saved for now.');
+    }
+    const recipeId = parseRecipeId(newId());
+    const { error } = await client.rpc('save_from_link', {
+      recipe_id: recipeId,
+      url: detected.url,
+      platform: detected.platform,
+    });
+    if (error) fail(error);
+    await kick(recipeId);
+    return { status: 'saved', recipeId };
+  }
+
+  /** The signed-in user's Drafts, in any build state, newest first. */
+  async function listDrafts(): Promise<DraftSummary[]> {
+    const me = await currentUserId();
+    const { data, error } = await client
+      .from('recipes')
+      .select(DRAFT_SUMMARY)
+      .eq('owner_id', me)
+      .eq('status', 'draft')
+      .order('created_at', { ascending: false })
+      .order('id');
+    if (error) fail(error);
+    const at = now();
+    return data.map((row) => ({
+      id: parseRecipeId(row.id),
+      title: row.title,
+      build: toDraftBuild(row, at),
+      recipeFound: row.recipe_found,
+      sourceVideo: toSourceVideo(row.source_video),
+      createdAt: row.created_at,
+    }));
+  }
+
+  /**
+   * Kicks again every Draft whose build seems lost: still unclaimed 30 s after its save or Retry
+   * (its kick didn't get through), or claimed over 3 minutes ago (the build died). Run when the
+   * app comes to the foreground and when the Drafts list opens. A Draft with no builds left, or
+   * one claimed meanwhile, isn't built twice: the builder claims it first.
+   */
+  async function resumeDraftBuilds(): Promise<void> {
+    const me = await currentUserId();
+    const { data, error } = await client
+      .from('recipes')
+      .select('id, updated_at, build_started_at, build_attempts')
+      .eq('owner_id', me)
+      .eq('status', 'draft')
+      .eq('build_status', 'building')
+      .lt('build_attempts', BUILD_ATTEMPTS);
+    if (error) fail(error);
+    const at = now();
+    const lost = data.filter((row) =>
+      row.build_started_at === null
+        ? at - Date.parse(row.updated_at) > UNCLAIMED_KICK_AFTER_MS
+        : at - Date.parse(row.build_started_at) > BUILD_TIMEOUT_MS,
+    );
+    await Promise.all(lost.map((row) => kick(parseRecipeId(row.id))));
+  }
+
+  /** Builds a failed Draft again, while it has builds left. Already building: kicks it again. */
+  async function retryDraft(id: RecipeId): Promise<void> {
+    const { data, error } = await client.rpc('retry_draft', { recipe_id: id });
+    if (error) fail(error);
+    if (data === 'gone') throw new DataError('recipe_not_found', 'That Draft no longer exists.');
+    if (data === 'noAttemptsLeft') {
+      throw new DataError('no_attempts_left', 'This Draft can’t be built again. Fill it in by hand.');
+    }
+    if (data === 'built') throw new DataError('draft_built', 'This Draft is already built.');
+    await kick(id);
+  }
+
+  /**
+   * Saves the user's reviewed version of a Draft (its title, lines and steps, as `editRecipe`
+   * does) and makes it a Recipe in the library. A failed Draft can be filled in by hand; one still
+   * building can't be reviewed yet.
+   */
+  async function reviewDraft(id: RecipeId, input: RecipeInput): Promise<void> {
+    const { data, error } = await client.rpc('review_draft', { recipe_id: id, ...toRecipeArgs(input) });
+    if (error) fail(error);
+    if (data === 'gone') throw new DataError('recipe_not_found', 'That Draft no longer exists.');
+    if (data === 'building') {
+      throw new DataError('draft_building', 'This Draft is still being built. Review it once it’s ready.');
+    }
   }
 
   /** The Ingredients in the signed-in user's Pantry, and their Staples. */
@@ -1189,6 +1372,11 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     deleteRecipe,
     getRecipe,
     listMyRecipes,
+    saveFromLink,
+    listDrafts,
+    resumeDraftBuilds,
+    retryDraft,
+    reviewDraft,
     signInWithIdToken,
     signInWithPassword,
     signOut,
