@@ -109,3 +109,4 @@ TikTok's oEmbed stopped returning `title`, `author_name` and `thumbnail_url` aro
 - "Recipe not in caption" stays for a caption that was read and has no recipe.
 - No scraping of TikTok's internal page data (`__FRONTITY_CONNECT_STATE__`, `__UNIVERSAL_DATA_FOR_REHYDRATION__`), and no browser User-Agent to get past a site's refusal.
 - ADR-0004 gets a dated note recording this.
+- (Ticket 05 review, 2026-10-27) "Paste caption" and "Add screenshot" are offered on any failed Draft and on a built one with no recipe found (an Instagram Reel saved with nothing), each counted toward the 3 builds.

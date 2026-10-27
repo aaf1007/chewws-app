@@ -111,21 +111,25 @@ export default function ReviewDraft() {
           testID="could-not-read"
         />
       ) : null}
-      {build.status === 'failed' && couldNotRead && build.canRetry ? (
-        <AddCaption recipeId={recipe.id} page={recipe.sourceVideo?.platform === 'web'} onAdded={reload} />
-      ) : null}
       {build.status === 'failed' && !couldNotRead ? (
         <DraftBanner
           kind="failed"
           title="Couldn't build this Draft"
-          message={`${failureMessage(build.reason, recipe.sourceVideo)} Fill it in by hand below.`}
+          message={`${failureMessage(build.reason, recipe.sourceVideo)} ${
+            recipe.canAddCaption ? 'Try again, or paste the caption or add a screenshot below.' : 'Fill it in by hand below.'
+          }`}
           actions={build.canRetry ? [{ label: 'Try again', onPress: () => void retry() }] : []}
         />
       ) : null}
       {build.status === 'built' && !recipe.recipeFound ? (
         <DraftBanner kind="notInCaption" title={notFound.title} message={notFound.message} testID="not-in-caption" />
       ) : null}
-      {couldNotRead && build.status === 'failed' && build.canRetry ? <SectionHeader title="Or fill it in by hand" /> : null}
+      {recipe.canAddCaption ? (
+        <>
+          <AddCaption recipeId={recipe.id} page={recipe.sourceVideo?.platform === 'web'} onAdded={reload} />
+          <SectionHeader title="Or fill it in by hand" />
+        </>
+      ) : null}
       {build.status === 'building' ? null : (
         <RecipeForm
           // A Retry that builds it again brings new lines; start the form over from them.

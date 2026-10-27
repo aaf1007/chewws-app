@@ -27,7 +27,7 @@ import { pageAdapter } from '../supabase/functions/_shared/page-reader';
 import { createSafeFetch } from '../supabase/functions/_shared/safe-fetch';
 import { screenshotLoader } from '../supabase/functions/_shared/screenshot';
 import { tiktokOEmbedAdapter } from '../supabase/functions/_shared/source-reader';
-import { countLinkSaves, signInTestUser, type DraftFakes, type TestUser } from './harness';
+import { backdateDraftBuild, countLinkSaves, signInTestUser, type DraftFakes, type TestUser } from './harness';
 import { SCREENSHOT_BASE64, screenshotBytes } from './screenshot-fixture';
 
 const REEL = 'https://www.instagram.com/reel/C1a2b3c4d5e/';
@@ -540,4 +540,61 @@ describe('a page that answers 4xx', () => {
   ])('%i is %s', async (status, reason) => {
     await expect(answering(status)).rejects.toMatchObject({ name: 'SourceError', reason });
   });
+});
+
+test('a caption or screenshot can be added to any failed Draft, and to one built with no recipe found', async () => {
+  const a = await signInTestUser('a');
+  const unreadable = await savedAndBuilt(a, { url: UNREADABLE.url });
+  const nothingAdded = await savedAndBuilt(a, { url: REEL });
+  const found = await savedAndBuilt(a, { url: REEL, caption: PASTED_CAPTION.text });
+  expect(await a.data.getRecipe(unreadable)).toMatchObject({ build: { status: 'failed', reason: 'unreadable' }, canAddCaption: true });
+  expect(await a.data.getRecipe(nothingAdded)).toMatchObject({ build: { status: 'built' }, recipeFound: false, canAddCaption: true });
+  expect(await a.data.getRecipe(found)).toMatchObject({ build: { status: 'built' }, recipeFound: true, canAddCaption: false });
+
+  await a.data.addCaptionToDraft(unreadable, { caption: PASTED_CAPTION.text });
+  await a.data.addCaptionToDraft(nothingAdded, { screenshot: screenshotBytes() });
+  await a.drafts.settled();
+
+  expect(await a.data.getRecipe(unreadable)).toMatchObject({ title: 'Honey garlic chicken', build: { status: 'built' }, recipeFound: true });
+  const fromScreenshot = await a.data.getRecipe(nothingAdded);
+  expect(fromScreenshot).toMatchObject({ title: 'Miso-glazed salmon', build: { status: 'built' }, recipeFound: true, canAddCaption: false });
+  expect(linesOf(fromScreenshot)).toEqual(misoSalmonLines);
+  await expect(a.data.addCaptionToDraft(found, { caption: 'more' })).rejects.toMatchObject({ code: 'draft_built' });
+});
+
+test('a Draft built with no recipe found takes captions while builds are left, 3 in all', async () => {
+  const a = await signInTestUser('a');
+  const id = await savedAndBuilt(a, { url: REEL });
+
+  for (let build = 2; build <= 3; build++) {
+    await a.data.addCaptionToDraft(id, { caption: 'Just a pretty video, no recipe here.' });
+    await a.drafts.settled();
+  }
+
+  expect(await a.data.getRecipe(id)).toMatchObject({ build: { status: 'failed', reason: 'unreadable', canRetry: false }, canAddCaption: false });
+  await expect(a.data.addCaptionToDraft(id, { caption: PASTED_CAPTION.text })).rejects.toMatchObject({ code: 'no_attempts_left' });
+});
+
+test('a timed-out build takes a caption too', async () => {
+  // The first build hangs reading TikTok (until the end of the test), and runs past its 3 minutes.
+  const { promise: stuck, resolve: unstick } = Promise.withResolvers<void>();
+  let reads = 0;
+  const a = await signInTestUser('a', {
+    tiktok: async (url, signal) => {
+      reads += 1;
+      if (reads === 1) await stuck;
+      return fixtureAdapters.tiktok(url, signal);
+    },
+  });
+  const { recipeId: id } = await a.data.saveFromLink({ url: NO_CAPTION.url });
+  await expect.poll(() => reads).toBe(1);
+  await backdateDraftBuild(id, 4);
+  expect(await a.data.getRecipe(id)).toMatchObject({ build: { status: 'failed', reason: 'timedOut' }, canAddCaption: true });
+
+  await a.data.addCaptionToDraft(id, { caption: PASTED_CAPTION.text });
+  await expect.poll(async () => (await a.data.getRecipe(id))?.title).toBe("Honey garlic chicken");
+  unstick();
+  await a.drafts.settled();
+
+  expect(await a.data.getRecipe(id)).toMatchObject({ title: 'Honey garlic chicken', build: { status: 'built' } });
 });

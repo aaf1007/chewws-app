@@ -100,7 +100,15 @@ type RecipeFields = {
  */
 export type Recipe =
   | (RecipeFields & { status: 'reviewed' })
-  | (RecipeFields & { status: 'draft'; build: DraftBuild });
+  | (RecipeFields & {
+      status: 'draft';
+      build: DraftBuild;
+      /**
+       * Whether the user can paste a caption or add a screenshot to build it again
+       * (`addCaptionToDraft`): a failed Draft, or one built with no recipe found, with builds left.
+       */
+      canAddCaption: boolean;
+    });
 
 /** A Draft as the Drafts list shows it. */
 export type DraftSummary = {

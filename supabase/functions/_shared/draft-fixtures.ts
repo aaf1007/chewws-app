@@ -353,7 +353,8 @@ export const fixtureExtract: Extract = async (material) => {
   const pasted = material.pastedText?.trim() || null;
   // Line breaks don't change what a caption says (and a flow's deep link loses them).
   const pastedFixture = PASTED_CAPTIONS.find((p) => pasted !== null && squashed(p.text) === squashed(pasted));
-  if (material.caption === null && pastedFixture) return pastedFixture.extraction;
+  // What the user pasted is what has the recipe, whatever the platform's caption says.
+  if (pastedFixture) return pastedFixture.extraction;
   if (material.caption === null && pasted === null && material.screenshot) return SCREENSHOT_RECIPE;
   const read = material.caption ?? pasted;
   const fixture = read === null ? undefined : FIXTURES.find((f) => f.video.caption === read);

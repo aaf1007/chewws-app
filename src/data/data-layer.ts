@@ -184,9 +184,11 @@ function toRecipe(
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
-  return row.status === 'draft'
-    ? { ...fields, status: 'draft', build: toDraftBuild(row, now) }
-    : { ...fields, status: 'reviewed' };
+  if (row.status === 'reviewed') return { ...fields, status: 'reviewed' };
+  const build = toDraftBuild(row, now);
+  const canAddCaption =
+    build.status === 'failed' ? build.canRetry : build.status === 'built' && !row.recipe_found && row.build_attempts < BUILD_ATTEMPTS;
+  return { ...fields, status: 'draft', build, canAddCaption };
 }
 
 /**
@@ -911,9 +913,10 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   }
 
   /**
-   * Builds a failed Draft again from a caption the user pasted, a screenshot they added, or both
-   * (in place of any added before): for a source the app couldn't read (`noCaption`,
-   * `sourceRefused`). It counts as a Retry, so only while the Draft has builds left.
+   * Builds a Draft again from a caption the user pasted, a screenshot they added, or both (each in
+   * place of one of its kind added before): a failed Draft, most often one whose source the app
+   * couldn't read (`noCaption`, `sourceRefused`), or one built with no recipe found. It counts as a
+   * Retry, so only while the Draft has builds left (`canAddCaption`).
    */
   async function addCaptionToDraft(id: RecipeId, input: CaptionInput): Promise<void> {
     const caption = toPastedCaption(input.caption);

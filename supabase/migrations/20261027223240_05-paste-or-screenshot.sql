@@ -151,9 +151,11 @@ revoke execute on function public.save_from_link(uuid, text, public.source_platf
 grant execute on function public.save_from_link(uuid, text, public.source_platform, text, boolean) to authenticated;
 
 -- A caption the user pasted, a screenshot they uploaded, or both, for one of their failed Drafts
--- (most often one whose source couldn't be read): each replaces one of its kind added before, and
+-- (most often one whose source couldn't be read) or one built with no recipe found (an Instagram
+-- Reel saved with nothing added): each replaces one of its kind added before, and
 -- puts the Draft back to building, for the phone to kick. It counts as a Retry. Returns
--- 'retrying'; 'building' when it already is; 'noAttemptsLeft' (3 builds tried); 'built'; or 'gone'.
+-- 'retrying'; 'building' when it already is; 'noAttemptsLeft' (3 builds tried); 'built' (with a
+-- recipe found); or 'gone'.
 create function public.add_caption_to_draft(recipe_id uuid, pasted_text text default null, with_screenshot boolean default false)
 returns text
 language plpgsql
@@ -175,7 +177,7 @@ begin
   if new_caption is null and not with_screenshot then
     raise exception 'paste a caption or add a screenshot' using errcode = '22023';
   end if;
-  if draft.build_status = 'built' then
+  if draft.build_status = 'built' and draft.recipe_found then
     return 'built';
   end if;
   if draft.build_status = 'building' and not private.build_timed_out(draft.build_started_at) then
