@@ -1,3 +1,4 @@
+export { detectSource, type DetectedSource } from '../../supabase/functions/_shared/detect-source';
 export { memoryStorage, type KeyValueStorage } from './change-queue';
 export { createDataLayer, type DataLayer, type DataLayerOptions } from './data-layer';
 export { normaliseIngredientName } from './ingredient-matcher';

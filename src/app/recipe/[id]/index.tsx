@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Alert, View } from 'react-native';
 
 import { messageOf } from '@/auth/errors';
+import { SourceVideoLink } from '@/components/source-video';
 import { useRecipe } from '@/components/use-recipe';
 import { data } from '@/data/app';
 import {
@@ -64,6 +65,7 @@ export default function RecipeDetail() {
 
   return (
     <Screen title={recipe.title} scroll>
+      {recipe.sourceVideo ? <SourceVideoLink video={recipe.sourceVideo} /> : null}
       <View>
         <SectionHeader title="Ingredients" />
         {recipe.lines.length === 0 ? (

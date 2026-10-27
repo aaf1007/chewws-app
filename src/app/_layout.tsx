@@ -1,5 +1,6 @@
-import { Stack } from 'expo-router';
+import { router, Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
+import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
 import { useEffect } from 'react';
 
 import { SessionProvider, useSession } from '@/session';
@@ -9,9 +10,11 @@ SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   return (
-    <SessionProvider>
-      <RootNavigator />
-    </SessionProvider>
+    <ShareIntentProvider>
+      <SessionProvider>
+        <RootNavigator />
+      </SessionProvider>
+    </ShareIntentProvider>
   );
 }
 
@@ -21,6 +24,18 @@ function RootNavigator() {
   useEffect(() => {
     if (session.status !== 'loading') SplashScreen.hideAsync();
   }, [session.status]);
+
+  // Something shared into the app from the share sheet opens the save screen with it, once the
+  // user is signed in, the same screen `recipeapp://save?url=…` opens.
+  const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntentContext();
+  useEffect(() => {
+    if (session.status !== 'signedIn' || !hasShareIntent) return;
+    router.push({
+      pathname: '/save',
+      params: { url: shareIntent.webUrl ?? '', text: shareIntent.text ?? '' },
+    });
+    resetShareIntent();
+  }, [session.status, hasShareIntent, shareIntent, resetShareIntent]);
 
   if (session.status === 'loading') return null;
 
@@ -40,6 +55,9 @@ function RootNavigator() {
         <Stack.Screen name="recipe/new" options={{ title: '' }} />
         <Stack.Screen name="recipe/[id]/index" options={{ title: '' }} />
         <Stack.Screen name="recipe/[id]/edit" options={{ title: '' }} />
+        <Stack.Screen name="save" options={{ headerShown: false, presentation: 'modal' }} />
+        <Stack.Screen name="drafts" options={{ title: '' }} />
+        <Stack.Screen name="draft/[id]" options={{ title: '' }} />
       </Stack.Protected>
       <Stack.Protected guard={session.status === 'signedOut'}>
         <Stack.Screen name="sign-in" options={{ headerShown: false }} />
