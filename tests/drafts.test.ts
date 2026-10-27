@@ -12,7 +12,7 @@ import {
   fixtureExtract,
 } from '../supabase/functions/_shared/draft-fixtures';
 import { SourceError } from '../supabase/functions/_shared/source-reader';
-import { signInOnPhones, signInTestUser, type TestUser } from './harness';
+import { backdateDraftBuild, countLinkSaves, signInOnPhones, signInTestUser, type TestUser } from './harness';
 
 const THUMBNAIL = FULL_RECIPE.video.thumbnailUrl;
 
@@ -460,4 +460,19 @@ test("a user's Drafts and Source Videos are theirs alone", async () => {
   await expect(stranger.data.retryDraft(id)).rejects.toMatchObject({ code: 'recipe_not_found' });
   await expect(stranger.data.reviewDraft(id, reviewedPasta)).rejects.toMatchObject({ code: 'recipe_not_found' });
   expect(await owner.data.getRecipe(id)).toMatchObject({ title: 'Creamy garlic pasta', status: 'draft' });
+});
+
+test('a save sent again after its answer was lost keeps one Draft and one link save', async () => {
+  const [phone] = await signInOnPhones('a', 1);
+  // The save screen makes the id once, and sends it with every tap of Save.
+  const draftId = phone.data.newDraftId();
+
+  phone.loseNextAnswer('save_from_link');
+  await expect(phone.data.saveFromLink({ url: FULL_RECIPE.url, draftId })).rejects.toMatchObject({ code: 'offline' });
+  const saved = await phone.data.saveFromLink({ url: FULL_RECIPE.url, draftId });
+  await phone.drafts.settled();
+
+  expect(saved).toEqual({ status: 'saved', recipeId: draftId });
+  expect((await phone.data.listDrafts()).map((d) => [d.id, d.title])).toEqual([[draftId, 'Creamy garlic pasta']]);
+  expect(await countLinkSaves(phone)).toBe(1);
 });

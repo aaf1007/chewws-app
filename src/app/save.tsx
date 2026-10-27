@@ -25,6 +25,9 @@ export default function SaveLink() {
   const shared = { url: param(params.url), text: param(params.text) };
   const link = detectSource([shared.url, shared.text].filter(Boolean).join(' '));
   const [state, setState] = useState<SaveState>({ status: 'ready' });
+  // One id for this save, however many times Save is tapped: a save whose answer was lost, tried
+  // again, finds the Draft it made instead of making a second.
+  const [draftId] = useState(() => data.newDraftId());
 
   if (state.status === 'saved') {
     return (
@@ -50,7 +53,7 @@ export default function SaveLink() {
   const save = () => {
     setState({ status: 'saving' });
     data
-      .saveFromLink(shared)
+      .saveFromLink({ ...shared, draftId })
       .then(({ recipeId }) => setState({ status: 'saved', recipeId }))
       .catch((e: unknown) => setState({ status: 'failed', message: messageOf(e) }));
   };

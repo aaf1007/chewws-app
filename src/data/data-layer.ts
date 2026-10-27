@@ -713,18 +713,29 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     }
   }
 
+  /** A new id for a Draft about to be saved; the save screen keeps it for every try of one save. */
+  function newDraftId(): RecipeId {
+    return parseRecipeId(newId());
+  }
+
   /**
    * Saves a shared link as a Draft and returns at once: the Draft builder fills it in in the
    * background. `url` or `text` (shared text with a link in it) names the link; the first link
-   * wins. Only TikTok links are saved for now (ticket 04 adds the rest).
+   * wins. Only TikTok links are saved for now (ticket 04 adds the rest). `draftId` (from
+   * `newDraftId`) names the Draft: send the same one when a save is tried again, after no answer,
+   * and it finds the Draft the first try made rather than making another.
    */
-  async function saveFromLink(shared: { url?: string; text?: string }): Promise<SaveFromLinkResult> {
+  async function saveFromLink(shared: {
+    url?: string;
+    text?: string;
+    draftId?: RecipeId;
+  }): Promise<SaveFromLinkResult> {
     const detected = detectSource([shared.url, shared.text].filter(Boolean).join(' '));
     if (detected === null) throw new DataError('no_link', 'There’s no link in what was shared.');
     if (detected.platform !== 'tiktok') {
       throw new DataError('unsupported_link', 'Only TikTok links can be saved for now.');
     }
-    const recipeId = parseRecipeId(newId());
+    const recipeId = shared.draftId ?? newDraftId();
     const { error } = await client.rpc('save_from_link', {
       recipe_id: recipeId,
       url: detected.url,
@@ -1372,6 +1383,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     deleteRecipe,
     getRecipe,
     listMyRecipes,
+    newDraftId,
     saveFromLink,
     listDrafts,
     resumeDraftBuilds,
