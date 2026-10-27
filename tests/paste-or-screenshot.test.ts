@@ -471,16 +471,26 @@ test('a caption added twice at once builds the Draft once, as one Retry', async 
   const a = await signInTestUser('a', claude.fakes);
   const id = await savedAndBuilt(a, { url: NO_CAPTION.url });
 
+  // A caption with no recipe Claude can read, so the Draft stays failed and its Retries show.
   await Promise.all([
-    a.data.addCaptionToDraft(id, { caption: PASTED_CAPTION.text }),
-    a.data.addCaptionToDraft(id, { caption: PASTED_CAPTION.text }),
+    a.data.addCaptionToDraft(id, { caption: UNREADABLE.video.caption }),
+    a.data.addCaptionToDraft(id, { caption: UNREADABLE.video.caption }),
   ]);
   await a.drafts.settled();
 
   expect(claude.given).toHaveLength(1);
-  expect(await a.data.getRecipe(id)).toMatchObject({ title: 'Honey garlic chicken', build: { status: 'built' } });
-  // One build for the save, one for the caption: a Retry is left.
-  await expect(a.data.listDrafts()).resolves.toMatchObject([{ id, build: { status: 'built' } }]);
+  // One build for the save, one for the caption: exactly one Retry is left.
+  expect(await a.data.getRecipe(id)).toMatchObject({
+    build: { status: 'failed', reason: 'unreadable', canRetry: true },
+    canAddCaption: true,
+  });
+  await a.data.addCaptionToDraft(id, { caption: UNREADABLE.video.caption });
+  await a.drafts.settled();
+  expect(claude.given).toHaveLength(2);
+  expect(await a.data.getRecipe(id)).toMatchObject({
+    build: { status: 'failed', reason: 'unreadable', canRetry: false },
+    canAddCaption: false,
+  });
 });
 
 test('deleting a Draft deletes the screenshot the user added to it', async () => {
@@ -597,4 +607,20 @@ test('a timed-out build takes a caption too', async () => {
   await a.drafts.settled();
 
   expect(await a.data.getRecipe(id)).toMatchObject({ title: 'Honey garlic chicken', build: { status: 'built' } });
+});
+
+test('a screenshot over 3 MB is refused by Storage, and one that isn’t a JPEG is never sent to Claude', async () => {
+  const claude = recording();
+  const a = await signInTestUser('a', claude.fakes);
+  const huge = new Uint8Array(3 * 1024 * 1024 + 1);
+  huge.set(new Uint8Array(screenshotBytes()));
+
+  await expect(a.data.saveFromLink({ url: REEL, screenshot: huge.buffer })).rejects.toMatchObject({ code: 'screenshot_not_saved' });
+  expect(await a.data.listDrafts()).toEqual([]);
+
+  // A PNG sent as a JPEG: Storage takes it, the builder won't pass it on.
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+  const id = await savedAndBuilt(a, { url: REEL, screenshot: Uint8Array.from(png).buffer });
+  expect(claude.given).toEqual([]);
+  expect(await a.data.getRecipe(id)).toMatchObject({ build: { status: 'failed', reason: 'unreadable', canRetry: true } });
 });

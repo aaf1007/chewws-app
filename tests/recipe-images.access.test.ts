@@ -227,3 +227,21 @@ test('a screenshot uploaded for a save the server then refuses is removed', asyn
   expect(await folderOf(stranger)).toEqual({});
   expect(await stranger.data.listDrafts()).toEqual([]);
 });
+
+test('Storage refuses an image over 3 MB, and any type but JPEG', async () => {
+  const owner = await signInAttacker('owner');
+  const huge = new Uint8Array(3 * 1024 * 1024 + 1);
+  huge.set(new Uint8Array(screenshotBytes()));
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+
+  const big = await owner.client.storage
+    .from(BUCKET)
+    .upload(`${owner.userId}/${owner.data.newDraftId()}.jpg`, huge.buffer, { contentType: 'image/jpeg' });
+  const notJpeg = await owner.client.storage
+    .from(BUCKET)
+    .upload(`${owner.userId}/${owner.data.newDraftId()}.jpg`, png, { contentType: 'image/png' });
+
+  expect(big.error).not.toBeNull();
+  expect(notJpeg.error).not.toBeNull();
+  expect(await folderOf(owner)).toEqual({});
+});
