@@ -99,3 +99,13 @@ Defaults chosen where the tickets leave things open. Override any by editing thi
 4. **Notification permission**: asked after the first saved link, not at first launch.
 5. **Drafts**: a "Drafts (n)" row at the top of the Library, hidden when n is 0; no fifth tab.
 6. **Suggested Tags**: shown already selected; the user removes the wrong ones (default, not asked).
+
+## User decision: when a source can't be read (2026-10-27)
+
+TikTok's oEmbed stopped returning `title`, `author_name` and `thumbnail_url` around 2026-10-19 (developer reports; no TikTok announcement); it now returns only the player iframe and `embed_product_id`. Big recipe sites (allrecipes, seriouseats) answer 402 to apps. The user chose to stay on official routes (ADR-0004), not to read TikTok's embed page:
+
+- oEmbed stays the first try for TikTok (it may come back; the creator, thumbnail and caption are used whenever present).
+- When the source gives no caption (TikTok's empty oEmbed) or refuses us (a recipe site's 4xx like 402/403), the Draft doesn't claim "recipe not in caption": it says the app couldn't read it, keeps the link (tapping it opens the video or page), and offers the ticket 05 paths: **paste the caption** or **add a screenshot**. Either builds the Draft through the same Draft builder, counted like a "Try again" (3 attempts in all).
+- "Recipe not in caption" stays for a caption that was read and has no recipe.
+- No scraping of TikTok's internal page data (`__FRONTITY_CONNECT_STATE__`, `__UNIVERSAL_DATA_FOR_REHYDRATION__`), and no browser User-Agent to get past a site's refusal.
+- ADR-0004 gets a dated note recording this.
