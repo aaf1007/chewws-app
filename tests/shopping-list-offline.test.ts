@@ -805,3 +805,55 @@ test('two phones syncing at once, each twice, send every change once', async () 
   ]);
   expect(await pantryNames(phoneA)).toEqual(['butter', 'garlic']);
 });
+
+/** Toast on the user's Shopping List: one line, bread. Every phone has seen the list. */
+async function listWithToast(phones: TestPhone[]) {
+  const [phone] = phones;
+  const toast = await phone.data.createRecipe({
+    title: 'Toast',
+    lines: [{ originalText: '2 slices bread', amountText: '2 slices', ingredientName: 'bread' }],
+    steps: [],
+  });
+  await phone.data.addRecipeToShoppingList(toast);
+  for (const p of phones) await p.data.getShoppingList();
+  return { bread: await itemNamed(phone, 'bread') };
+}
+
+test("removing a Recipe's last line takes the Recipe off the list at once, on the screen and with no signal afterwards, and on the server", async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const { bread } = await listWithToast([phone, other]);
+  const screen = watch(phone);
+  await vi.waitFor(() =>
+    expect(screen.last()).toMatchObject({ status: 'loaded', list: { recipes: [{ title: 'Toast' }] } }),
+  );
+
+  await phone.data.removeFromShoppingList(bread.id);
+
+  expect(screen.last()).toMatchObject({ status: 'loaded', list: { items: [], recipes: [] } });
+  screen.stop();
+  phone.goOffline();
+  expect(await phone.data.getShoppingList()).toMatchObject({ items: [], recipes: [] });
+  expect(await phone.relaunch().data.getShoppingList()).toMatchObject({ items: [], recipes: [] });
+  expect(await other.data.getShoppingList()).toMatchObject({ items: [], recipes: [] });
+});
+
+test("a queued change to a Recipe's last line, removed meanwhile on another phone, takes the Recipe off the list when it's dropped", async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const { bread } = await listWithToast([phone, other]);
+  phone.serverAnswersFor('check_off', 500);
+  const t0 = Date.now();
+  phone.setClock(new Date(t0));
+  await phone.data.checkOff(bread.id);
+  expect(await phone.data.getListSync()).toEqual(retryingAt(t0 + 10 * SECOND, 1));
+
+  await other.data.removeFromShoppingList(bread.id);
+  phone.serverAnswersFor('check_off', null);
+  phone.setClock(new Date(t0 + 10 * SECOND));
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+
+  phone.goOffline();
+  expect(await phone.data.getShoppingList()).toMatchObject({ items: [], recipes: [] });
+  phone.goOnline();
+  expect(await phone.data.getShoppingList()).toMatchObject({ items: [], recipes: [] });
+  expect(await other.data.getShoppingList()).toMatchObject({ items: [], recipes: [] });
+});

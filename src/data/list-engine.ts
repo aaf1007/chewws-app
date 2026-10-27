@@ -85,6 +85,26 @@ export function sortListItems(items: readonly ShoppingListItem[]): ShoppingListI
 }
 
 /**
+ * A Shopping List with these items, in order, and as its Recipes the ones its lines name (by
+ * title). Every list the phone holds is made here, so its Recipes always match its lines: a Recipe
+ * goes as its last line does.
+ */
+export function withItems(
+  list: Pick<ShoppingList, 'id' | 'ownerId'>,
+  items: readonly ShoppingListItem[],
+): ShoppingList {
+  const recipes = new Map(
+    items.flatMap((item) => (item.kind === 'ingredient' ? item.recipes : [])).map((r) => [r.recipe.id, r.recipe]),
+  );
+  return {
+    id: list.id,
+    ownerId: list.ownerId,
+    items: sortListItems(items),
+    recipes: [...recipes.values()].sort((a, b) => compareText(a.title, b.title) || compareText(a.id, b.id)),
+  };
+}
+
+/**
  * The list as the phone shows it: the last list read from the server with the changes made since
  * on top, in the order they were made. A check made here is by `me`, at the time it was made. An
  * item added here has no Ingredient yet: the server matches it when it arrives. A change to an item
@@ -115,5 +135,5 @@ export function withListChanges(
       return item.check.status === 'checked' ? item : { ...item, check: { status: 'checked', checkedAt: madeAt, checkedBy: me } };
     });
   }
-  return items === list.items ? list : { ...list, items: sortListItems(items) };
+  return items === list.items ? list : withItems(list, items);
 }

@@ -15,7 +15,7 @@ import {
 } from './change-queue';
 import type { Database } from './database.types';
 import { normaliseIngredientName } from './ingredient-matcher';
-import { sortListItems, toListLines, withListChanges, type ListChange } from './list-engine';
+import { toListLines, withItems, withListChanges, type ListChange } from './list-engine';
 import { parseListChange, parseSavedShoppingList } from './list-storage';
 import { validateRecipeInput } from './recipe-input';
 import { sessionIdOf, type SessionStorage } from './session-storage';
@@ -723,18 +723,12 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     if (notReached(status)) return { status: 'unreachable' };
     if (error) fail(error);
     if (!data) throw new DataError('shopping_list_missing', `No Shopping List for user ${me}.`);
-    const items = sortListItems(data.shopping_list_items.map(toShoppingListItem));
-    const recipes = new Map(
-      items.flatMap((item) => (item.kind === 'ingredient' ? item.recipes : [])).map((r) => [r.recipe.id, r.recipe]),
-    );
     return {
       status: 'reached',
-      list: {
-        id: parseShoppingListId(data.id),
-        ownerId: parseUserId(data.owner_id),
-        items,
-        recipes: [...recipes.values()].sort((a, b) => compareText(a.title, b.title) || compareText(a.id, b.id)),
-      },
+      list: withItems(
+        { id: parseShoppingListId(data.id), ownerId: parseUserId(data.owner_id) },
+        data.shopping_list_items.map(toShoppingListItem),
+      ),
     };
   }
 
@@ -857,7 +851,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
         if (!lastSeen) return;
         if (delivery.status === 'sent') keep(withListChanges(lastSeen, [{ madeAt, change }], me));
         if (delivery.status === 'dropped') {
-          keep({ ...lastSeen, items: lastSeen.items.filter((item) => item.id !== change.itemId) });
+          keep(withItems(lastSeen, lastSeen.items.filter((item) => item.id !== change.itemId)));
         }
         if (delivery.status === 'superseded') superseded = true;
       },
@@ -940,7 +934,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     }
 
     function forget(itemId: ShoppingListItemId) {
-      if (lastSeen) keep({ ...lastSeen, items: lastSeen.items.filter((item) => item.id !== itemId) });
+      if (lastSeen) keep(withItems(lastSeen, lastSeen.items.filter((item) => item.id !== itemId)));
       emit();
     }
 
