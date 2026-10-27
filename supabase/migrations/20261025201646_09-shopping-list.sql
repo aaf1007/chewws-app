@@ -114,15 +114,17 @@ create policy "Users can remove Recipe amounts from Shopping Lists they use"
 -- normalised by the data layer's Ingredient matcher.
 
 -- Adds one of the caller's Recipes to their list. `lines` is the list engine's output for it: a JSON
--- array of {ingredient_id, amount_texts}, already without the Ingredients the caller has. Each
--- Ingredient joins its existing line, or makes a new one; a line the Recipe is already on is left
--- alone, so adding a Recipe twice changes nothing. A checked-off line that a new Recipe needs is
--- needed again, so it's unchecked. Every line it needs is locked before any amount is attached, so
--- a concurrent removal of a line either waits for the add or finishes first and the line is made
--- again: no amount is lost. Existing lines are locked in id order, as removals lock them, so the
--- two can't deadlock. Returns false when the caller has no such Recipe.
+-- array of {ingredient_id, amount_texts}. An Ingredient that isn't on one of the Recipe's lines is
+-- refused (22023), and those the caller has (private.ingredients_had, read here, so a Pantry change
+-- made since the phone read it counts) are left off. Each other Ingredient joins its existing line,
+-- or makes a new one; a line the Recipe is already on is left alone, so adding a Recipe twice
+-- changes nothing. A checked-off line that a new Recipe needs is needed again, so it's unchecked.
+-- Every line it needs is locked before any amount is attached, so a concurrent removal of a line
+-- either waits for the add or finishes first and the line is made again: no amount is lost.
+-- Existing lines are locked in id order, as removals lock them, so the two can't deadlock. Returns
+-- the Ingredients it put the Recipe on the list for, or null when the caller has no such Recipe.
 create function public.add_recipe_to_shopping_list(recipe_id uuid, lines jsonb)
-returns boolean
+returns uuid[]
 language plpgsql
 security definer
 set search_path = ''
@@ -130,20 +132,38 @@ as $$
 #variable_conflict use_column
 declare
   list uuid := private.my_shopping_list();
+  wanted jsonb;
   added_to uuid[];
 begin
   if list is null or not exists (
     select 1 from public.recipes r
     where r.id = add_recipe_to_shopping_list.recipe_id and r.owner_id = (select auth.uid())
   ) then
-    return false;
+    return null;
   end if;
+
+  if exists (
+    select 1 from jsonb_array_elements(add_recipe_to_shopping_list.lines) as line
+    where not exists (
+      select 1 from public.recipe_lines rl
+      where rl.recipe_id = add_recipe_to_shopping_list.recipe_id
+        and rl.ingredient_id = (line ->> 'ingredient_id')::uuid
+    )
+  ) then
+    raise exception 'Only the Recipe''s own Ingredients can be added with it.' using errcode = '22023';
+  end if;
+
+  select coalesce(jsonb_agg(line), '[]'::jsonb) into wanted
+  from jsonb_array_elements(add_recipe_to_shopping_list.lines) as line
+  where (line ->> 'ingredient_id')::uuid not in (
+    select h.ingredient_id from private.ingredients_had((select auth.uid())) h
+  );
 
   perform 1
   from public.shopping_list_items i
   where i.list_id = list
     and i.hand_added_text is null
-    and i.ingredient_id in (select (line ->> 'ingredient_id')::uuid from jsonb_array_elements(lines) as line)
+    and i.ingredient_id in (select (line ->> 'ingredient_id')::uuid from jsonb_array_elements(wanted) as line)
   order by i.id
   for update;
 
@@ -152,7 +172,7 @@ begin
   with needed as (
     insert into public.shopping_list_items as i (list_id, ingredient_id)
     select list, (line ->> 'ingredient_id')::uuid
-    from jsonb_array_elements(lines) as line
+    from jsonb_array_elements(wanted) as line
     order by 2
     on conflict (list_id, ingredient_id) where hand_added_text is null
       do update set updated_at = i.updated_at
@@ -163,7 +183,7 @@ begin
     select n.id,
       add_recipe_to_shopping_list.recipe_id,
       array(select jsonb_array_elements_text(line -> 'amount_texts'))
-    from jsonb_array_elements(lines) as line
+    from jsonb_array_elements(wanted) as line
     join needed n on n.ingredient_id = (line ->> 'ingredient_id')::uuid
     order by n.id
     on conflict (item_id, recipe_id) do nothing
@@ -175,7 +195,7 @@ begin
   set checked_at = null, checked_by = null, updated_at = now()
   where i.id = any (added_to) and i.checked_at is not null;
 
-  return true;
+  return array(select (line ->> 'ingredient_id')::uuid from jsonb_array_elements(wanted) as line);
 end;
 $$;
 

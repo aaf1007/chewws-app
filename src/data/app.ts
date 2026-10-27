@@ -7,6 +7,7 @@ import { AppState } from 'react-native';
 
 import { createDataLayer } from './data-layer';
 import type { Database } from './database.types';
+import { withTimeout } from './fetch-with-timeout';
 import { createSessionStorage } from './session-storage';
 
 export const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
@@ -18,18 +19,10 @@ if (!supabaseUrl || !anonKey) {
   );
 }
 
-/**
- * A request with no answer after this long counts as no signal. With no signal at all a request
- * usually fails at once; this covers a connection that goes nowhere.
- */
+/** A request with no answer after this long counts as no signal (see `withTimeout`). */
 const REQUEST_TIMEOUT_MS = 8_000;
 
-const fetchWithTimeout: typeof fetch = (input, init) => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  init?.signal?.addEventListener('abort', () => controller.abort());
-  return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
-};
+const fetchWithTimeout = withTimeout((input, init) => fetch(input, init), REQUEST_TIMEOUT_MS);
 
 /** The auth client keeps its session in AsyncStorage, through this, so signing out can clear it. */
 const sessionStorage = createSessionStorage(AsyncStorage);

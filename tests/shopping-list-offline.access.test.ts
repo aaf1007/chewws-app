@@ -2,6 +2,8 @@
 // uncheck and add_manual_item directly, with change times of their choosing, as an attacker would.
 // The checks inside those functions are what have to stop them; and nobody, the owner included,
 // can stamp a change in the future to lock an item against later changes.
+import { randomUUID } from 'node:crypto';
+
 import { expect, inject, test } from 'vitest';
 
 import { signInAttacker, type Attacker } from './access-harness';
@@ -46,17 +48,40 @@ test("a stranger's timestamped changes cannot check off, uncheck or take over so
     );
   }
   const takeId = await stranger.client.rpc('add_manual_item', {
+    list_id: (await stranger.data.getShoppingList()).id,
     item_text: 'Snacks',
     ingredient_name: 'snack',
     item_id: towelsId,
     changed_at: farFuture,
   });
 
-  for (const result of results) expect(result).toMatchObject({ data: false, error: null });
+  for (const result of results) expect(result).toMatchObject({ data: 'gone', error: null });
   expect(takeId).toMatchObject({ data: 'taken', error: null });
   await expectOwnerListUnchanged();
   expect((await stranger.data.getShoppingList()).items).toEqual([]);
   expect((await stranger.data.getPantry()).ingredients).toEqual([]);
+});
+
+test("a stranger's hand-add names someone else's Shopping List: it's refused, and lands on neither list", async () => {
+  const { owner, stranger, expectOwnerListUnchanged } = await ownerListAndStranger();
+  const ownerListId = (await owner.data.getShoppingList()).id;
+
+  const results = [];
+  for (const itemId of [randomUUID(), undefined]) {
+    results.push(
+      await stranger.client.rpc('add_manual_item', {
+        list_id: ownerListId,
+        item_text: 'Snacks',
+        ingredient_name: 'snack',
+        item_id: itemId,
+        changed_at: new Date().toISOString(),
+      }),
+    );
+  }
+
+  for (const result of results) expect(result).toMatchObject({ data: null, error: null });
+  await expectOwnerListUnchanged();
+  expect((await stranger.data.getShoppingList()).items).toEqual([]);
 });
 
 test('a change stamped in the future counts as made when it arrived, so it cannot lock an item', async () => {
@@ -64,11 +89,12 @@ test('a change stamped in the future counts as made when it arrived, so it canno
 
   const checked = await owner.client.rpc('check_off', { item_id: garlic.id, changed_at: farFuture });
   const added = await owner.client.rpc('add_manual_item', {
+    list_id: (await owner.data.getShoppingList()).id,
     item_text: 'Foil',
     ingredient_name: 'foil',
     changed_at: farFuture,
   });
-  expect(checked).toMatchObject({ data: true, error: null });
+  expect(checked).toMatchObject({ data: 'applied', error: null });
   expect(added.error).toBeNull();
   const soon = Date.now() + 60_000;
   for (const item of (await owner.data.getShoppingList()).items) {
@@ -125,11 +151,13 @@ test('the record of removed items is not exposed through the Data API, and keeps
 
   // A stranger using the removed item's id adds it to their own list only; the owner's stays gone.
   const strangerAdd = await stranger.client.rpc('add_manual_item', {
+    list_id: (await stranger.data.getShoppingList()).id,
     item_text: 'Paper towels',
     ingredient_name: 'paper towel',
     item_id: towelsId,
   });
   const ownerAdd = await owner.client.rpc('add_manual_item', {
+    list_id: (await owner.data.getShoppingList()).id,
     item_text: 'Paper towels',
     ingredient_name: 'paper towel',
     item_id: towelsId,

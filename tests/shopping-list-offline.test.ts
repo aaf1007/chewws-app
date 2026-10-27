@@ -203,6 +203,48 @@ test.each([
   },
 );
 
+test("a phone whose clock runs 30 s behind the server checks off a line just after adding its Recipe: it's checked, and in the Pantry", async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  phone.setClock(new Date(Date.now() - 30 * SECOND));
+  const bread = await phone.data.createRecipe({
+    title: 'Garlic bread',
+    lines: [
+      { originalText: '2 cloves garlic, minced', amountText: '2 cloves', ingredientName: 'garlic' },
+      { originalText: '4 tbsp butter', amountText: '4 tbsp', ingredientName: 'butter' },
+    ],
+    steps: [],
+  });
+  await phone.data.addRecipeToShoppingList(bread);
+  const garlic = await itemNamed(phone, 'garlic');
+
+  await phone.data.checkOff(garlic.id);
+
+  expect(await phone.data.getListSync()).toEqual({ status: 'idle', waiting: 0 });
+  expect(view(await other.data.getShoppingList())).toEqual([butterLine(false), garlicBread(true)]);
+  expect(view(await phone.data.getShoppingList())).toEqual([butterLine(false), garlicBread(true)]);
+  expect(await pantryNames(other)).toEqual(['garlic']);
+});
+
+test('a change the server skips, as another phone changed the item later, is not shown as made: the list is read again', async () => {
+  const [phoneA, phoneB] = await signInOnPhones('shopper', 2);
+  // A's clock runs a minute behind from the start. A phone never stamps a change before its last
+  // one, so setting it back only after A checks off butter below would stamp A's garlic just after
+  // that, a few ms before B's uncheck: within the server clock's drift from the phones' (the
+  // server stamps a change no later than its own now), and B's uncheck could lose.
+  phoneA.setClock(new Date(Date.now() - MINUTE));
+  const { garlic } = await listWithGarlicAndButter([phoneA, phoneB]);
+  // B unchecks garlic (already unchecked); A checks it off, by A's clock a minute before.
+  await phoneB.data.uncheck(garlic.id);
+  await phoneA.data.checkOff(garlic.id);
+
+  expect(await phoneA.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  expect(view(await phoneB.data.getShoppingList())).toEqual([butterLine(true), garlicBread(false)]);
+  expect(await pantryNames(phoneB)).toEqual(['butter']);
+  // What phone A saved is the list as the server has it, not its own check.
+  phoneA.goOffline();
+  expect(view(await phoneA.data.getShoppingList())).toEqual([butterLine(true), garlicBread(false)]);
+});
+
 test('sending the same queue again (an answer lost on the way back) changes nothing', async () => {
   const [phone, other] = await signInOnPhones('shopper', 2);
   const { garlic, butter } = await listWithGarlicAndButter([phone, other]);
@@ -699,6 +741,45 @@ test('saved data the app cannot read is ignored: unreadable changes are skipped,
   screen.stop();
 });
 
+/** What an older version saved: hand-adds queued without the Shopping List they're for. */
+function withoutListIds(saved: ReadonlyMap<string, string>): Map<string, string> {
+  const older = new Map(saved);
+  for (const [key, value] of older) {
+    if (!key.startsWith('recipeapp.listChanges.')) continue;
+    const parsed: { queue: { change: Record<string, unknown> }[] } = JSON.parse(value);
+    for (const { change } of parsed.queue) delete change.listId;
+    older.set(key, JSON.stringify(parsed));
+  }
+  return older;
+}
+
+test('hand-adds an older version queued without their list go to the list the phone last saw for that user; with no list saved, they are skipped', async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  await listWithGarlicAndButter([phone, other]);
+  phone.goOffline();
+  await phone.data.addManualItem('Foil');
+  await phone.data.addManualItem('Snacks');
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 2 });
+  const older = withoutListIds(phone.saved());
+
+  const noList = new Map(older);
+  noList.delete(`recipeapp.shoppingList.${phone.userId}`);
+  const skipped = phone.relaunch(noList);
+  skipped.goOnline();
+  expect(await skipped.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  expect(view(await other.data.getShoppingList())).toEqual([butterLine(true), garlicBread(false)]);
+
+  const reopened = phone.relaunch(older);
+  reopened.goOnline();
+  expect(await reopened.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  expect(view(await other.data.getShoppingList())).toEqual([
+    butterLine(true),
+    { handAdded: 'Foil', ingredient: null, checked: false },
+    garlicBread(false),
+    { handAdded: 'Snacks', ingredient: null, checked: false },
+  ]);
+});
+
 test('two phones syncing at once, each twice, send every change once', async () => {
   const [phoneA, phoneB] = await signInOnPhones('shopper', 2);
   const { garlic, butter } = await listWithGarlicAndButter([phoneA, phoneB]);
@@ -723,4 +804,56 @@ test('two phones syncing at once, each twice, send every change once', async () 
     garlicBread(true),
   ]);
   expect(await pantryNames(phoneA)).toEqual(['butter', 'garlic']);
+});
+
+/** Toast on the user's Shopping List: one line, bread. Every phone has seen the list. */
+async function listWithToast(phones: TestPhone[]) {
+  const [phone] = phones;
+  const toast = await phone.data.createRecipe({
+    title: 'Toast',
+    lines: [{ originalText: '2 slices bread', amountText: '2 slices', ingredientName: 'bread' }],
+    steps: [],
+  });
+  await phone.data.addRecipeToShoppingList(toast);
+  for (const p of phones) await p.data.getShoppingList();
+  return { bread: await itemNamed(phone, 'bread') };
+}
+
+test("removing a Recipe's last line takes the Recipe off the list at once, on the screen and with no signal afterwards, and on the server", async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const { bread } = await listWithToast([phone, other]);
+  const screen = watch(phone);
+  await vi.waitFor(() =>
+    expect(screen.last()).toMatchObject({ status: 'loaded', list: { recipes: [{ title: 'Toast' }] } }),
+  );
+
+  await phone.data.removeFromShoppingList(bread.id);
+
+  expect(screen.last()).toMatchObject({ status: 'loaded', list: { items: [], recipes: [] } });
+  screen.stop();
+  phone.goOffline();
+  expect(await phone.data.getShoppingList()).toMatchObject({ items: [], recipes: [] });
+  expect(await phone.relaunch().data.getShoppingList()).toMatchObject({ items: [], recipes: [] });
+  expect(await other.data.getShoppingList()).toMatchObject({ items: [], recipes: [] });
+});
+
+test("a queued change to a Recipe's last line, removed meanwhile on another phone, takes the Recipe off the list when it's dropped", async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const { bread } = await listWithToast([phone, other]);
+  phone.serverAnswersFor('check_off', 500);
+  const t0 = Date.now();
+  phone.setClock(new Date(t0));
+  await phone.data.checkOff(bread.id);
+  expect(await phone.data.getListSync()).toEqual(retryingAt(t0 + 10 * SECOND, 1));
+
+  await other.data.removeFromShoppingList(bread.id);
+  phone.serverAnswersFor('check_off', null);
+  phone.setClock(new Date(t0 + 10 * SECOND));
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+
+  phone.goOffline();
+  expect(await phone.data.getShoppingList()).toMatchObject({ items: [], recipes: [] });
+  phone.goOnline();
+  expect(await phone.data.getShoppingList()).toMatchObject({ items: [], recipes: [] });
+  expect(await other.data.getShoppingList()).toMatchObject({ items: [], recipes: [] });
 });

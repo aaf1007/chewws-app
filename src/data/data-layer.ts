@@ -1,5 +1,6 @@
 import {
-  isAuthRetryableFetchError,
+  isAuthApiError,
+  isAuthSessionMissingError,
   type AuthError,
   type PostgrestError,
   type SupabaseClient,
@@ -14,10 +15,10 @@ import {
 } from './change-queue';
 import type { Database } from './database.types';
 import { normaliseIngredientName } from './ingredient-matcher';
-import { sortListItems, toListLines, withListChanges, type ListChange } from './list-engine';
+import { toListLines, withItems, withListChanges, type ListChange } from './list-engine';
 import { parseListChange, parseSavedShoppingList } from './list-storage';
 import { validateRecipeInput } from './recipe-input';
-import type { SessionStorage } from './session-storage';
+import { sessionIdOf, type SessionStorage } from './session-storage';
 import {
   DataError,
   parseIngredientId,
@@ -39,6 +40,7 @@ import {
   type RecipeSummary,
   type SessionState,
   type ShoppingList,
+  type ShoppingListId,
   type ShoppingListItem,
   type ShoppingListItemId,
   type ShoppingListView,
@@ -173,24 +175,6 @@ function parseSavedUserId(raw: string | null): UserId | null {
 }
 
 /**
- * Which session a session the auth client holds is: its access token's `session_id` claim, the
- * same across refreshes, so a refresh that lands after the session ended is still that session.
- * The refresh token (new on each refresh) if the claim can't be read.
- */
-function sessionIdOf({ access_token, refresh_token }: { access_token: string; refresh_token: string }): string {
-  try {
-    const payload = access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-    const claims: unknown = JSON.parse(atob(payload.padEnd(Math.ceil(payload.length / 4) * 4, '=')));
-    if (typeof claims === 'object' && claims !== null && 'session_id' in claims && typeof claims.session_id === 'string') {
-      return claims.session_id;
-    }
-  } catch {
-    // Not a token this app can read.
-  }
-  return refresh_token;
-}
-
-/**
  * A session the auth client kept on the phone, as much of it as ending it needs: which it is
  * (`sessionIdOf`), and whose (null if that can't be read).
  */
@@ -244,15 +228,24 @@ function fail(error: AuthError | PostgrestError): never {
 
 /**
  * Whether a response means the server wasn't reached, or can't answer yet, so a queued change
- * should wait and be sent again: no response at all, a session that needs refreshing, a timeout,
- * too many requests, or any server error (5xx: the server, or a gateway in front of it, failed;
- * the change itself may be fine). Only a 4xx refuses the change.
+ * should wait and be sent again: no response at all, a timeout, too many requests, or any server
+ * error (5xx: the server, or a gateway in front of it, failed; the change itself may be fine).
+ * A 401 is handled first by `asSignedIn`. Only a 4xx refuses the change.
  */
-const notReached = (status: number) => status === 0 || [401, 408, 429].includes(status) || status >= 500;
+const notReached = (status: number) => status === 0 || [408, 429].includes(status) || status >= 500;
 
-/** For a queued change, a server error is told apart: one that never passes gives the change up. */
-const serverFailed = (status: number): Extract<Delivery, { status: 'serverFailed' }> | null =>
-  status >= 500 ? { status: 'serverFailed', error: new DataError('server_error', `The server failed (${status}).`) } : null;
+/**
+ * For a queued change, a server error is told apart: one that never passes gives the change up.
+ * So is a 401 that `asSignedIn` got again after refreshing the session: the server keeps refusing
+ * a session it just refreshed, which waiting alone won't fix.
+ */
+const serverFailed = (status: number): Extract<Delivery, { status: 'serverFailed' }> | null => {
+  if (status >= 500) return { status: 'serverFailed', error: new DataError('server_error', `The server failed (${status}).`) };
+  if (status === 401) {
+    return { status: 'serverFailed', error: new DataError('unauthorized', 'The server refused the session (401).') };
+  }
+  return null;
+};
 
 export type DataLayerOptions = {
   /** Where the phone keeps list changes waiting to be sent and the last list it saw. */
@@ -326,10 +319,10 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   }
 
   /**
-   * The sessions ended on this phone (`sessionIdOf`). The auth client may yet report one it held,
-   * or refresh one after it ended.
+   * Whether a session was ended on this phone (`sessionIdOf`). The auth client may yet report one
+   * it held, or refresh one after it ended (`sessionStorage` never saves that refresh).
    */
-  const ended = new Set<string>();
+  const ended = (sessionId: string) => sessionStorage.hasEnded(sessionId);
 
   function remember(id: UserId | null): Promise<void> {
     remembered = Promise.resolve(id);
@@ -359,12 +352,15 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   });
 
   /**
-   * Why a session ends on this phone. `signedOut`: the user signed out. The auth client asks for
-   * the others, at `turn` `seen`: `refused`, it dropped the session because the server refused to
-   * refresh it (revoked, or signed out everywhere); `noSession`, the app started and it had no
-   * session it could use, and not for lack of a signal.
+   * Why a session ends on this phone. `signedOut`: the user signed out. The others are asked for
+   * at `turn` `seen`, and only when `refusesSession` says the server refused `refusedSessionId`
+   * (revoked, or signed out everywhere), or there was no session: `refused`, the auth client
+   * dropped its session, or `asSignedIn`'s refresh was refused; `noSession`, the app started and
+   * the auth client had no session it could use.
    */
-  type SessionEnd = { reason: 'signedOut' } | { reason: 'refused' | 'noSession'; seen: number };
+  type SessionEnd =
+    | { reason: 'signedOut' }
+    | { reason: 'refused' | 'noSession'; seen: number; refusedSessionId?: string };
 
   /**
    * Ends the session on this phone; the only thing that does. The session the auth client kept is
@@ -380,12 +376,11 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
         if (turn !== end.seen) return [];
         const kept = (await sessionStorage.saved()).map(parseKeptSession);
         // One that says whose it isn't, no one can be signed in with.
-        if (kept.some((s) => s?.userId && !ended.has(s.sessionId))) return [];
+        if (kept.some((s) => s?.userId && !ended(s.sessionId) && s.sessionId !== end.refusedSessionId)) return [];
       }
       turn += 1;
       const me = session.status === 'signedIn' ? session.userId : await remembered;
       const cleared = (await sessionStorage.clear()).map(parseKeptSession).filter((s) => s !== null);
-      for (const { sessionId } of cleared) ended.add(sessionId);
       await remember(null);
       if (me) {
         const list = shoppingListOf(me);
@@ -398,29 +393,32 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   }
 
   /**
-   * The auth client started without a session: there is none, or it couldn't refresh it for lack
-   * of a signal (a network failure, not an answer from the server). Only the first signs out.
+   * The auth client has no session to give: it started without one (`noSession`), or dropped the
+   * one it had (`refused`). There is none, or refreshing it failed. Only no session at all, or a
+   * refresh the server refused (`refusesSession`), signs out; any other failure (no signal, a rate
+   * limit, a timeout, a proxy's error page) keeps the user signed in, and the session kept on the
+   * phone (`sessionStorage` never lets the auth client remove it) is refreshed later.
    */
-  async function settleWithoutSession(seen: number) {
+  async function settleWithoutSession(reason: 'refused' | 'noSession', seen: number) {
+    const kept = (await sessionStorage.saved()).map(parseKeptSession).find((s) => s !== null);
     const { data, error } = await client.auth.getSession();
     const id = await remembered;
     if (turn !== seen) return; // A sign-in, a sign-out or a session reported since has the say.
-    if (data.session && !ended.has(sessionIdOf(data.session))) signedInAs(parseUserId(data.session.user.id));
-    else if (id && error && isAuthRetryableFetchError(error)) setSession({ status: 'signedIn', userId: id });
-    else await endSessionOnPhone({ reason: 'noSession', seen });
+    if (data.session && !ended(sessionIdOf(data.session))) signedInAs(parseUserId(data.session.user.id));
+    else if (id && error && !refusesSession(error)) setSession({ status: 'signedIn', userId: id });
+    else await endSessionOnPhone({ reason, seen, refusedSessionId: error ? kept?.sessionId : undefined });
   }
 
   client.auth.onAuthStateChange((event, authSession) => {
     if (authSession) {
       // One ended on this phone, as the auth client held it before then, has no say.
-      if (!ended.has(sessionIdOf(authSession))) signedInAs(parseUserId(authSession.user.id));
-    } else if (event === 'INITIAL_SESSION') {
-      // Asking the auth client from inside its own callback would wait on itself.
+      if (!ended(sessionIdOf(authSession))) signedInAs(parseUserId(authSession.user.id));
+    } else if (event === 'INITIAL_SESSION' || event === 'SIGNED_OUT') {
+      // Asking the auth client from inside its own callback would wait on itself. Not waited on:
+      // the auth client waits on this callback, maybe in the middle of a sync.
       const seen = turn;
-      setTimeout(() => void settleWithoutSession(seen), 0);
-    } else if (event === 'SIGNED_OUT') {
-      // Not waited on: the auth client waits on this callback, maybe in the middle of a sync.
-      void endSessionOnPhone({ reason: 'refused', seen: turn });
+      const reason = event === 'INITIAL_SESSION' ? 'noSession' : 'refused';
+      setTimeout(() => void settleWithoutSession(reason, seen), 0);
     }
   });
 
@@ -442,12 +440,71 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   }
 
   /**
-   * Whether requests now go out as `me`, refreshing their session first if it ran out. With no
-   * signal to refresh it, they'd go out as nobody.
+   * The session the auth client would make a request with now, refreshing it first if it ran out,
+   * if it's `me`'s, wasn't ended on this phone, and is the session `sessionId` names (when given).
+   * Null otherwise: signed out, someone else signed in since, or no signal to refresh it.
    */
-  async function hasSessionOf(me: UserId): Promise<boolean> {
+  async function sessionOf(me: UserId, sessionId?: string): Promise<{ accessToken: string; sessionId: string } | null> {
     const { data } = await client.auth.getSession();
-    return data.session?.user.id === me;
+    if (data.session?.user.id !== me) return null;
+    const id = sessionIdOf(data.session);
+    if (ended(id) || (sessionId !== undefined && id !== sessionId)) return null;
+    return { accessToken: data.session.access_token, sessionId: id };
+  }
+
+  /**
+   * Makes a request as `me`, with their session's access token (`bearer`), so it can never go out
+   * as anyone else. Before each request, and before a refresh, the session is checked
+   * (`sessionOf`): still `me`'s, the same session the first request went out with, and, for a
+   * queued change, its queue not `discarded`. If not, nothing more is sent: `unreachable` when the
+   * session isn't `me`'s (signed out, someone else signed in, no signal to refresh it), `ended`
+   * once their queue is discarded. A 401 means the server refused the access token: the session is
+   * refreshed once and the request made again. With no signal to refresh it, or any answer that
+   * doesn't refuse the session (a rate limit, a timeout, a proxy's error page), the request is
+   * `unreachable`; a refresh the server refuses ends the session on this phone (`ended`), even when
+   * the auth client keeps it because its access token hasn't run out by the phone's clock. A 401
+   * after a refresh that worked is returned as the answer.
+   */
+  async function asSignedIn<R extends { status: number }>(
+    me: UserId,
+    request: (accessToken: string) => PromiseLike<R>,
+    discarded: () => boolean = () => false,
+  ): Promise<R | 'unreachable' | 'ended'> {
+    const current = async (sessionId?: string) => {
+      const found = await sessionOf(me, sessionId);
+      if (discarded()) return 'ended';
+      return found ?? 'unreachable';
+    };
+    const first = await current();
+    if (typeof first === 'string') return first;
+    const answer = await request(first.accessToken);
+    if (answer.status !== 401) return answer;
+    const seen = turn;
+    const before = await current(first.sessionId);
+    if (typeof before === 'string') return before;
+    const { error } = await client.auth.refreshSession();
+    if (error) {
+      if (!refusesSession(error)) return 'unreachable';
+      await endSessionOnPhone({ reason: 'refused', seen, refusedSessionId: first.sessionId });
+      return 'ended';
+    }
+    const after = await current(first.sessionId);
+    if (typeof after === 'string') return after;
+    return request(after.accessToken);
+  }
+
+  /** The `Authorization` header a request made as a user's session carries. */
+  const bearer = (accessToken: string) => `Bearer ${accessToken}`;
+
+  /**
+   * Whether a failed refresh ends the session: there was no session, or the auth server itself
+   * (its JSON answer) refused the refresh with a 400, 401 or 403, whatever its code (a revoked or
+   * reused refresh token, a banned user, a malformed request alike). Anything else (no signal, a
+   * 408 or 429, a 5xx, a body that isn't the auth server's JSON) says nothing about the session.
+   */
+  function refusesSession(error: AuthError): boolean {
+    if (isAuthSessionMissingError(error)) return true;
+    return isAuthApiError(error) && [400, 401, 403].includes(error.status);
   }
 
   /** Signs in, once any sign-out still finishing is done. */
@@ -649,30 +706,29 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   async function fetchShoppingList(
     me: UserId,
   ): Promise<{ status: 'reached'; list: ShoppingList } | { status: 'unreachable' } | { status: 'serverFailed'; error: DataError }> {
-    if (!(await hasSessionOf(me))) return { status: 'unreachable' };
-    const { data, error, status } = await client
-      .from('shopping_lists')
-      .select(SHOPPING_LIST_WITH_ITEMS)
-      .eq('owner_id', me)
-      .maybeSingle()
-      .retry(false);
+    const answer = await asSignedIn(me, (token) =>
+      client
+        .from('shopping_lists')
+        .select(SHOPPING_LIST_WITH_ITEMS)
+        .eq('owner_id', me)
+        .maybeSingle()
+        .retry(false)
+        .setHeader('Authorization', bearer(token)),
+    );
+    if (answer === 'unreachable') return { status: 'unreachable' };
+    if (answer === 'ended') throw notSignedIn();
+    const { data, error, status } = answer;
     const failed = serverFailed(status);
     if (failed) return failed;
     if (notReached(status)) return { status: 'unreachable' };
     if (error) fail(error);
     if (!data) throw new DataError('shopping_list_missing', `No Shopping List for user ${me}.`);
-    const items = sortListItems(data.shopping_list_items.map(toShoppingListItem));
-    const recipes = new Map(
-      items.flatMap((item) => (item.kind === 'ingredient' ? item.recipes : [])).map((r) => [r.recipe.id, r.recipe]),
-    );
     return {
       status: 'reached',
-      list: {
-        id: parseShoppingListId(data.id),
-        ownerId: parseUserId(data.owner_id),
-        items,
-        recipes: [...recipes.values()].sort((a, b) => compareText(a.title, b.title) || compareText(a.id, b.id)),
-      },
+      list: withItems(
+        { id: parseShoppingListId(data.id), ownerId: parseUserId(data.owner_id) },
+        data.shopping_list_items.map(toShoppingListItem),
+      ),
     };
   }
 
@@ -680,27 +736,35 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     new DataError('offline', `You're offline. ${what} needs a connection.`);
 
   /**
-   * Sends one queued Shopping List change, stamped with when it was made. Nothing is sent once its
-   * queue is `discarded`.
+   * Sends one queued Shopping List change, stamped with when it was made. Only the user who made it
+   * sends it, with their own session, checked before every request (`asSignedIn`): signed out, or
+   * someone else signed in, or a session that can't refresh with no signal, it waits. Once its
+   * queue is `discarded` (their session ended on this phone, and the change with it, even if
+   * they've signed in again since), nothing is sent.
    */
   async function sendListChange(
     me: UserId,
     { madeAt, change }: QueuedChange<ListChange>,
     discarded: () => boolean,
   ): Promise<Delivery> {
-    // Only the user who made a change sends it. Signed out, or a session that can't refresh with
-    // no signal, it waits.
-    if (!(await hasSessionOf(me))) return { status: 'unreachable' };
-    // Their session ended on this phone while that waited (a refresh with no signal retries for
-    // about 25 seconds), and the change with it, even if they've signed in again since.
-    if (discarded()) return { status: 'refused', error: notSignedIn() };
     if (change.kind === 'addManualItem') {
-      const { data: added, error, status } = await client.rpc('add_manual_item', {
-        item_text: change.text,
-        ingredient_name: normaliseIngredientName(change.text),
-        item_id: change.itemId,
-        changed_at: madeAt,
-      });
+      const answer = await asSignedIn(
+        me,
+        (token) =>
+          client
+            .rpc('add_manual_item', {
+              list_id: change.listId,
+              item_text: change.text,
+              ingredient_name: normaliseIngredientName(change.text),
+              item_id: change.itemId,
+              changed_at: madeAt,
+            })
+            .setHeader('Authorization', bearer(token)),
+        discarded,
+      );
+      if (answer === 'unreachable') return { status: 'unreachable' };
+      if (answer === 'ended') return { status: 'refused', error: notSignedIn() };
+      const { data: added, error, status } = answer;
       const failed = serverFailed(status);
       if (failed) return failed;
       if (notReached(status)) return { status: 'unreachable' };
@@ -709,17 +773,33 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       // Removed since it was first sent (that answer lost): it stays removed.
       if (added === 'gone') return { status: 'dropped' };
       if (added === 'taken') return { status: 'refused', error: idTaken() };
-      return { status: 'refused', error: new DataError('shopping_list_missing', 'You have no Shopping List.') };
+      return {
+        status: 'refused',
+        error: new DataError('shopping_list_missing', "That Shopping List isn't one you can change."),
+      };
     }
     const args = { item_id: change.itemId, changed_at: madeAt };
-    const { data: found, error, status } =
-      change.kind === 'checkOff' ? await client.rpc('check_off', args) : await client.rpc('uncheck', args);
+    const answer = await asSignedIn(
+      me,
+      (token) =>
+        (change.kind === 'checkOff' ? client.rpc('check_off', args) : client.rpc('uncheck', args)).setHeader(
+          'Authorization',
+          bearer(token),
+        ),
+      discarded,
+    );
+    if (answer === 'unreachable') return { status: 'unreachable' };
+    if (answer === 'ended') return { status: 'refused', error: notSignedIn() };
+    const { data: result, error, status } = answer;
     const failed = serverFailed(status);
     if (failed) return failed;
     if (notReached(status)) return { status: 'unreachable' };
     if (error) return { status: 'refused', error: toDataError(error) };
+    if (result === 'applied') return { status: 'sent' };
+    // A phone changed the item after this change was made: that change stands.
+    if (result === 'superseded') return { status: 'superseded' };
     // Gone (removed meanwhile, maybe from another phone): the change has nothing to change.
-    return found ? { status: 'sent' } : { status: 'dropped' };
+    return { status: 'dropped' };
   }
 
   /**
@@ -734,6 +814,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     let lastError: DataError | null = null;
     let savingList: Promise<void> = Promise.resolve();
     let discarded = false;
+    // A change the server skipped for a later one: the list last seen is out of date.
+    let superseded = false;
 
     function keep(list: ShoppingList) {
       if (discarded) return; // A read or change that finishes after its user signed out.
@@ -743,10 +825,21 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       savingList = savingList.then(() => storage.setItem(listKey, snapshot)).catch(() => {});
     }
 
+    // The list saved on the phone, read first: a hand-add an older version queued without its list
+    // is for this one.
+    const savedList = storage
+      .getItem(listKey)
+      .catch(() => null)
+      .then(parseSavedShoppingList);
+    let savedListId: ShoppingListId | null = null;
+
     const queue = createChangeQueue<ListChange>({
       storage,
       key: `recipeapp.listChanges.${me}`,
-      parseChange: parseListChange,
+      parseChange: (raw) => parseListChange(raw, savedListId),
+      parseAfter: savedList.then((list) => {
+        savedListId = list?.ownerId === me ? list.id : null;
+      }),
       send: (change, discarded) => sendListChange(me, change, discarded),
       // Named as the list shows it now: once given up, the item may go before the user is told.
       nameOf({ change }) {
@@ -758,24 +851,24 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
         if (!lastSeen) return;
         if (delivery.status === 'sent') keep(withListChanges(lastSeen, [{ madeAt, change }], me));
         if (delivery.status === 'dropped') {
-          keep({ ...lastSeen, items: lastSeen.items.filter((item) => item.id !== change.itemId) });
+          keep(withItems(lastSeen, lastSeen.items.filter((item) => item.id !== change.itemId)));
         }
+        if (delivery.status === 'superseded') superseded = true;
       },
-      // Read the list again for whoever's watching it, or to find out the phone is back online.
-      afterSync: (wasOffline) => (watchers.size > 0 || wasOffline ? refresh() : Promise.resolve('reached')),
+      // Read the list again for whoever's watching it, to find out the phone is back online, or to
+      // show the later change that beat one of this phone's.
+      afterSync: (wasOffline) =>
+        watchers.size > 0 || wasOffline || superseded ? refresh() : Promise.resolve('reached'),
       now,
       newId,
     });
 
     const ready: Promise<unknown> = Promise.all([
       queue.ready,
-      storage
-        .getItem(listKey)
-        .catch(() => null)
-        .then((raw) => {
-          // A list read from the server meanwhile is newer than the saved one.
-          lastSeen ??= parseSavedShoppingList(raw);
-        }),
+      savedList.then((list) => {
+        // A list read from the server meanwhile is newer than the saved one.
+        lastSeen ??= list;
+      }),
     ]);
 
     function sync(): ListSync {
@@ -816,7 +909,10 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
           return 'unreachable';
         }
         if (fetched.status === 'serverFailed') lastError ??= fetched.error;
-        else keep(fetched.list);
+        else {
+          superseded = false;
+          keep(fetched.list);
+        }
       } catch (e) {
         lastError = e instanceof DataError ? e : new DataError('unknown', String(e), { cause: e });
       }
@@ -838,7 +934,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     }
 
     function forget(itemId: ShoppingListItemId) {
-      if (lastSeen) keep({ ...lastSeen, items: lastSeen.items.filter((item) => item.id !== itemId) });
+      if (lastSeen) keep(withItems(lastSeen, lastSeen.items.filter((item) => item.id !== itemId)));
       emit();
     }
 
@@ -867,7 +963,10 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
    * seen, it fails with code `offline`.
    */
   async function getShoppingList(): Promise<ShoppingList> {
-    const me = await requireListOwner();
+    return loadShoppingList(await requireListOwner());
+  }
+
+  async function loadShoppingList(me: UserId): Promise<ShoppingList> {
     const lists = shoppingListOf(me);
     await lists.ready;
     const fetched = await fetchShoppingList(me);
@@ -946,9 +1045,9 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
 
   /**
    * Puts the Ingredients one of the user's Recipes needs on their Shopping List, except those they
-   * have (Pantry or Staples). Each joins the line for its Ingredient, with this Recipe's amounts
-   * kept apart. Adding a Recipe that's already on the list changes nothing. Returns the
-   * Ingredients the Recipe needed that the user didn't have.
+   * have (Pantry or Staples), as the server sees it when it adds them. Each joins the line for its
+   * Ingredient, with this Recipe's amounts kept apart. Adding a Recipe that's already on the list
+   * changes nothing. Returns the Ingredients the Recipe needed that the user didn't have.
    */
   async function addRecipeToShoppingList(recipeId: RecipeId): Promise<Ingredient[]> {
     const [recipe, had] = await Promise.all([getRecipe(recipeId), listIngredientsIHave()]);
@@ -964,7 +1063,9 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     if (error) fail(error);
     if (!data) throw new DataError('recipe_not_found', 'That Recipe no longer exists.');
     shoppingListOf(recipe.ownerId).refreshWatched();
-    return lines.map((line) => line.ingredient);
+    // The server leaves off what the user has by the time it adds them, which may be more.
+    const onList = new Set(data.map(parseIngredientId));
+    return lines.filter((line) => onList.has(line.ingredient.id)).map((line) => line.ingredient);
   }
 
   const idTaken = () => new DataError('shopping_list_item_id_taken', 'That item id is already in use.');
@@ -974,11 +1075,11 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
 
   /**
    * Queues a Shopping List change and sends it, with every change queued before it. Resolves once
-   * the server has it, or at once with no signal: it waits on the phone, shown on the list, and is
-   * sent on reconnect. Fails if the server says its item is gone, or refuses it.
+   * the server has it (or has a later change to the item, made on another phone, which stands), or
+   * at once with no signal: it waits on the phone, shown on the list, and is sent on reconnect.
+   * Fails if the server says its item is gone, or refuses it.
    */
-  async function changeShoppingList(change: ListChange): Promise<void> {
-    const me = await requireListOwner();
+  async function changeShoppingList(me: UserId, change: ListChange): Promise<void> {
     const outcome = await shoppingListOf(me).queue.enqueue(change);
     if (outcome.status === 'dropped') throw itemGone();
     if (outcome.status === 'refused') throw outcome.error;
@@ -988,8 +1089,9 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
    * Adds something typed by hand to the user's Shopping List. If its name is an existing
    * Ingredient's, it's linked to it, so checking it off puts that Ingredient in the Pantry;
    * otherwise ("paper towels") checking it off changes no Pantry. Works with no signal (see
-   * `changeShoppingList`). The phone makes the item's id, or pass `id` to choose it, so adding the
-   * same item twice adds it once.
+   * `changeShoppingList`), once the phone has seen the list: the add names it, and the server takes
+   * it only for a list its sender can use. The phone makes the item's id, or pass `id` to choose it,
+   * so adding the same item twice adds it once.
    */
   async function addManualItem(
     text: string,
@@ -998,7 +1100,12 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     const itemText = text.trim();
     if (!itemText) throw new DataError('item_text_required', 'Type what you need to buy.');
     const itemId = options.id ?? parseShoppingListItemId(newId());
-    await changeShoppingList({ kind: 'addManualItem', itemId, text: itemText });
+    const me = await requireListOwner();
+    const lists = shoppingListOf(me);
+    await lists.ready;
+    // The list it's for: as the phone last saw it, or read the first time.
+    const listId = lists.shown()?.id ?? (await loadShoppingList(me)).id;
+    await changeShoppingList(me, { kind: 'addManualItem', listId, itemId, text: itemText });
     return itemId;
   }
 
@@ -1008,12 +1115,12 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
    * item changed after this check was made, the later change stands.
    */
   async function checkOff(itemId: ShoppingListItemId): Promise<void> {
-    await changeShoppingList({ kind: 'checkOff', itemId });
+    await changeShoppingList(await requireListOwner(), { kind: 'checkOff', itemId });
   }
 
   /** Unchecks an item. The Pantry is left as it is. Works with no signal, like `checkOff`. */
   async function uncheck(itemId: ShoppingListItemId): Promise<void> {
-    await changeShoppingList({ kind: 'uncheck', itemId });
+    await changeShoppingList(await requireListOwner(), { kind: 'uncheck', itemId });
   }
 
   /**
@@ -1029,8 +1136,12 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     const before = lists.queue.state();
     if (before.status === 'offline' || before.queue.length > 0) await lists.queue.sync();
     if (lists.queue.state().status === 'offline') throw needsConnection('Removing');
-    const { error, status } = await client.from('shopping_list_items').delete().eq('id', itemId);
-    if (status >= 500) {
+    const answer = await asSignedIn(me, (token) =>
+      client.from('shopping_list_items').delete().eq('id', itemId).setHeader('Authorization', bearer(token)),
+    );
+    if (answer === 'ended') throw notSignedIn();
+    const { error, status } = answer === 'unreachable' ? { error: null, status: 0 } : answer;
+    if (serverFailed(status)) {
       throw new DataError('server_error', "Couldn't remove it: the server had a problem. Try again in a moment.");
     }
     if (notReached(status)) {

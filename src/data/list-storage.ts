@@ -3,7 +3,7 @@
  * changes. What's saved was written by this app, but may be from an older version, cut short or
  * cleared, so anything that isn't exactly the expected shape reads as nothing rather than throwing.
  */
-import type { ListChange } from './list-engine';
+import { withItems, type ListChange } from './list-engine';
 import {
   parseIngredientId,
   parseRecipeId,
@@ -11,6 +11,7 @@ import {
   parseShoppingListItemId,
   parseUserId,
   type CheckState,
+  type ShoppingListId,
   type Ingredient,
   type ShoppingList,
   type ShoppingListItem,
@@ -91,19 +92,22 @@ export function parseSavedShoppingList(raw: string | null): ShoppingList | null 
   if (raw === null) return null;
   try {
     const row = record(JSON.parse(raw));
-    return {
-      id: parseShoppingListId(text(row.id)),
-      ownerId: parseUserId(text(row.ownerId)),
-      items: list(row.items).map(item),
-      recipes: list(row.recipes).map(recipe),
-    };
+    // Its Recipes are those its lines name, whatever was saved beside them.
+    return withItems(
+      { id: parseShoppingListId(text(row.id)), ownerId: parseUserId(text(row.ownerId)) },
+      list(row.items).map(item),
+    );
   } catch {
     return null;
   }
 }
 
-/** One queued Shopping List change, or null if it isn't one. */
-export function parseListChange(value: unknown): ListChange | null {
+/**
+ * One queued Shopping List change, or null if it isn't one. A hand-add an older version saved
+ * without its list is for `savedListId`, the list the phone saved for the same user; with none, it
+ * isn't one.
+ */
+export function parseListChange(value: unknown, savedListId: ShoppingListId | null): ListChange | null {
   try {
     const row = record(value);
     const itemId = parseShoppingListItemId(text(row.itemId));
@@ -114,7 +118,8 @@ export function parseListChange(value: unknown): ListChange | null {
         return { kind: 'uncheck', itemId };
       case 'addManualItem': {
         const typed = text(row.text).trim();
-        return typed ? { kind: 'addManualItem', itemId, text: typed } : null;
+        const listId = row.listId === undefined ? savedListId : parseShoppingListId(text(row.listId));
+        return typed && listId ? { kind: 'addManualItem', listId, itemId, text: typed } : null;
       }
       default:
         return null;

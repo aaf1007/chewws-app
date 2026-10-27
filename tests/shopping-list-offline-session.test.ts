@@ -407,7 +407,17 @@ test(
     read.release();
     await syncing;
     expect(session.states).toEqual([signedIn(phone), signedOut]);
+    // The late refresh wasn't saved on the phone: nothing works as the user, now or after a restart.
+    expect([...phone.savedAuth().keys()]).toEqual([]);
+    await expect(phone.data.getShoppingList()).rejects.toMatchObject({ code: 'not_signed_in' });
+    const reopened = phone.relaunch();
+    const reopenedSession = watchSession(reopened);
+    await vi.waitFor(() => expect(reopenedSession.last()).toEqual(signedOut));
+    await expect(reopened.data.getShoppingList()).rejects.toMatchObject({ code: 'not_signed_in' });
+    await expect(reopened.data.getMyProfile()).rejects.toMatchObject({ code: 'not_signed_in' });
+    expect(reopenedSession.states).toEqual([signedOut]);
     session.stop();
+    reopenedSession.stop();
   },
   RUN_OUT_TEST_TIMEOUT_MS,
 );
@@ -449,4 +459,262 @@ test.each(['kept', 'none'] as const)(
     states.stop();
   },
   RUN_OUT_TEST_TIMEOUT_MS,
+);
+
+const REFRESH = 'grant_type=refresh_token';
+
+/**
+ * The auth server refusing a refresh, as it answers one (API version 2024-01-01). Whatever the
+ * code, a JSON answer of 400, 401 or 403 from the auth server ends the session.
+ */
+const REFRESH_REFUSALS = [
+  ['refresh_token_not_found', { code: 'refresh_token_not_found', message: 'Invalid Refresh Token: Refresh Token Not Found' }],
+  ['user_banned', { code: 'user_banned', message: 'Invalid Refresh Token: User Banned' }],
+  ['validation_failed', { code: 'validation_failed', message: 'refresh_token required' }],
+] as const;
+
+test.each(REFRESH_REFUSALS)(
+  'the server refuses the session while list changes wait (every request answers 401, its refresh 400 %s): the user is signed out, never left offline',
+  async (_, refusal) => {
+    const [phone, other] = await signInOnPhones('shopper', 2);
+    const { foil } = await foilAndTowels([phone, other]);
+    const session = watchSession(phone);
+    await vi.waitFor(() => expect(session.last()).toEqual(signedIn(phone)));
+    phone.goOffline();
+    await phone.data.checkOff(foil);
+
+    phone.goOnline();
+    phone.serverAnswers(401);
+    phone.serverAnswersFor(REFRESH, 400, refusal);
+    await phone.data.syncListChanges();
+    await vi.waitFor(() => expect(session.last()).toEqual(signedOut));
+    expect([...phone.saved().keys()]).toEqual([]);
+    expect([...phone.savedAuth().keys()]).toEqual([]);
+    await expect(phone.data.getListSync()).rejects.toMatchObject({ code: 'not_signed_in' });
+
+    phone.serverAnswers(null);
+    expect(view(await other.data.getShoppingList())).toEqual([
+      { item: 'Foil', checked: false },
+      { item: 'Paper towels', checked: false },
+    ]);
+    session.stop();
+  },
+);
+
+test("the server answers an item's changes with 401 even after the session is refreshed: retried with backoff like a server error, then given up and the user told", async () => {
+  const [phone, other] = await signInOnPhones('shopper', 2);
+  const { foil, towels } = await foilAndTowels([phone, other]);
+  const session = watchSession(phone);
+  phone.goOffline();
+  await phone.data.checkOff(foil);
+  await phone.data.checkOff(towels);
+
+  phone.goOnline();
+  phone.serverAnswersFor(foil, 401);
+  const t0 = Date.now();
+  phone.setClock(new Date(t0));
+  const retryingAt = (at: number) => ({ status: 'waitingToRetry', waiting: 2, retryAt: new Date(t0 + at * 1000).toISOString() });
+  expect(await phone.data.syncListChanges()).toEqual(retryingAt(10));
+  for (const [at, next] of [
+    [10, 40],
+    [40, 100],
+    [100, 400],
+    [400, 1300],
+  ]) {
+    phone.setClock(new Date(t0 + at * 1000));
+    expect(await phone.data.syncListChanges()).toEqual(retryingAt(next));
+  }
+  phone.setClock(new Date(t0 + 1300 * 1000));
+  expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+
+  const expected = [
+    { item: 'Foil', checked: false },
+    { item: 'Paper towels', checked: true },
+  ];
+  expect(view(await other.data.getShoppingList())).toEqual(expected);
+  const screen = watch(phone);
+  await vi.waitFor(() =>
+    expect(screen.last()).toMatchObject({ status: 'loaded', notSaved: [{ kind: 'checkOff', itemName: 'Foil' }] }),
+  );
+  expect(listOf(screen.last())).toEqual(expected);
+  expect(session.states).toEqual([signedIn(phone)]);
+  screen.stop();
+  session.stop();
+});
+
+test.each([
+  ['rate limited by the auth server (429)', 429, { code: 'over_request_rate_limit', message: 'Request rate limit reached' }],
+  ['timed out at a gateway (408, plain text)', 408, undefined],
+  ['refused by a proxy (403, not JSON)', 403, undefined],
+] as const)(
+  'a 401 whose refresh is %s is no answer about the session: the user stays signed in with their changes waiting',
+  async (_, status, json) => {
+    const [phone, other] = await signInOnPhones('shopper', 2);
+    const { foil } = await foilAndTowels([phone, other]);
+    const session = watchSession(phone);
+    await vi.waitFor(() => expect(session.last()).toEqual(signedIn(phone)));
+    phone.goOffline();
+    await phone.data.checkOff(foil);
+
+    phone.goOnline();
+    phone.serverAnswers(401);
+    phone.serverAnswersFor(REFRESH, status, json);
+    expect(await phone.data.syncListChanges()).toEqual({ status: 'offline', waiting: 1 });
+    expect(session.states).toEqual([signedIn(phone)]);
+    expect([...phone.savedAuth().keys()]).not.toEqual([]);
+
+    phone.serverAnswers(null);
+    phone.serverAnswersFor(REFRESH, null);
+    expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+    expect(view(await other.data.getShoppingList())).toEqual([
+      { item: 'Foil', checked: true },
+      { item: 'Paper towels', checked: false },
+    ]);
+    expect(session.states).toEqual([signedIn(phone)]);
+    session.stop();
+  },
+);
+
+test.each([
+  ['rate limited by the auth server (429)', 429, { code: 'over_request_rate_limit', message: 'Request rate limit reached' }],
+  ['timed out at a gateway (408, plain text)', 408, undefined],
+  ['refused by a proxy (403, not JSON)', 403, undefined],
+] as const)(
+  'opened from cold with the access token run out, its refresh %s: still signed in, with the changes still waiting sent once the auth server answers',
+  async (_, status, json) => {
+    const [phone, other] = await signInOnPhones('shopper', 2);
+    const { foil } = await foilAndTowels([phone, other]);
+    phone.goOffline();
+    await phone.data.checkOff(foil);
+    phone.expireAccessToken();
+
+    const reopened = phone.relaunch();
+    reopened.goOnline();
+    reopened.serverAnswersFor(REFRESH, status, json);
+    const session = watchSession(reopened);
+    // Waits on the auth client, which answers once it has tried the refresh.
+    expect(await reopened.data.syncListChanges()).toEqual({ status: 'offline', waiting: 1 });
+    expect([...reopened.savedAuth().keys()]).not.toEqual([]);
+    expect(session.states).toEqual([signedIn(reopened)]);
+
+    reopened.serverAnswersFor(REFRESH, null);
+    passTime(61_000);
+    expect(await reopened.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+    expect(view(await other.data.getShoppingList())).toEqual([
+      { item: 'Foil', checked: true },
+      { item: 'Paper towels', checked: false },
+    ]);
+    expect(session.states).toEqual([signedIn(reopened)]);
+    session.stop();
+  },
+);
+
+test.each(REFRESH_REFUSALS)(
+  'opened from cold with the access token run out, its refresh refused (400 %s): signed out, the changes still waiting thrown away',
+  async (_, refusal) => {
+    const [phone, other] = await signInOnPhones('shopper', 2);
+    const { foil } = await foilAndTowels([phone, other]);
+    phone.goOffline();
+    await phone.data.checkOff(foil);
+    phone.expireAccessToken();
+
+    const reopened = phone.relaunch();
+    reopened.goOnline();
+    reopened.serverAnswersFor(REFRESH, 400, refusal);
+    const session = watchSession(reopened);
+    await vi.waitFor(() => expect(session.last()).toEqual(signedOut));
+    expect([...reopened.saved().keys()]).toEqual([]);
+    expect([...reopened.savedAuth().keys()]).toEqual([]);
+    await expect(reopened.data.getListSync()).rejects.toMatchObject({ code: 'not_signed_in' });
+
+    reopened.serverAnswersFor(REFRESH, null);
+    expect(view(await other.data.getShoppingList())).toEqual([
+      { item: 'Foil', checked: false },
+      { item: 'Paper towels', checked: false },
+    ]);
+    session.stop();
+  },
+);
+
+const ADD_MANUAL_ITEM = '/rest/v1/rpc/add_manual_item';
+
+test.each(['its first send', 'its retry, after the refresh'] as const)(
+  'a hand-add whose send gets a 401, while the user signs out and someone else signs in as %s is on the way: nothing goes out as the newcomer, and the add is discarded with the sign-out',
+  async (window) => {
+    const [phone, other] = await signInOnPhones('shopper', 2);
+    const [next] = await signInOnPhones('next', 1);
+    await foilAndTowels([phone, other]);
+    phone.goOffline();
+    await phone.data.addManualItem('Snacks');
+    const sentBefore = phone.requestsMade().length;
+
+    // Back online, the server refuses the access token the add goes out with, so the phone
+    // refreshes the session and sends it again.
+    phone.goOnline();
+    phone.serverAnswersFor('add_manual_item', 401);
+    const send = phone.holdNextRequest('add_manual_item');
+    const syncing = phone.data.syncListChanges();
+    await send.reached;
+
+    // Meanwhile the user signs out (with no signal, so the server keeps their session and a
+    // refresh of it still gets through), and someone else signs in on the phone.
+    async function switchUsers() {
+      phone.goOffline();
+      await phone.data.signOut();
+      phone.goOnline();
+      expect(await phone.data.signInWithPassword(next.account)).toEqual(next.userId);
+    }
+    if (window === 'its first send') {
+      // The first send is slow: it's answered after the switch, so a refresh after it would be of
+      // the session signed in since.
+      const refresh = phone.holdNextRequest(REFRESH);
+      await switchUsers();
+      send.release();
+      await Promise.race([refresh.reached, syncing]);
+      phone.serverAnswersFor('add_manual_item', null);
+      refresh.release();
+    } else {
+      // The first send's 401 comes back and the user's session is refreshed. The retry then reads
+      // the session the auth client just saved, slowly (AsyncStorage on a phone can be), and the
+      // switch happens before it has read: what it reads is the newcomer's session.
+      const read = phone.holdSessionReadAfterNextSave();
+      send.release();
+      await read.reached;
+      phone.serverAnswersFor('add_manual_item', null);
+      await switchUsers();
+      read.release();
+    }
+    await syncing;
+
+    // Not one list change went out with the newcomer's session.
+    const listChangesAsNext = () =>
+      phone
+        .requestsMade()
+        .slice(sentBefore)
+        .filter((sent) => sent.user === next.userId && sent.path.startsWith('/rest/v1/rpc/'));
+    expect(listChangesAsNext()).toEqual([]);
+    expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+    expect((await phone.data.getShoppingList()).items).toEqual([]);
+    expect((await next.data.getShoppingList()).items).toEqual([]);
+
+    // The user signs in again: the add went with their sign-out, as every change still waiting does.
+    await phone.data.signOut();
+    expect(await phone.data.signInWithPassword(phone.account)).toEqual(phone.userId);
+    expect(await phone.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+    const unchanged = [
+      { item: 'Foil', checked: false },
+      { item: 'Paper towels', checked: false },
+    ];
+    expect(view(await phone.data.getShoppingList())).toEqual(unchanged);
+    expect(view(await other.data.getShoppingList())).toEqual(unchanged);
+
+    // The add went out once, the first send, as the user; never again, as anyone.
+    expect(listChangesAsNext()).toEqual([]);
+    expect(
+      phone
+        .requestsMade()
+        .slice(sentBefore)
+        .filter((sent) => sent.path === ADD_MANUAL_ITEM),
+    ).toEqual([{ user: phone.userId, path: ADD_MANUAL_ITEM }]);
+  },
 );

@@ -19,6 +19,7 @@ import type {
   Recipe,
   RecipeId,
   ShoppingList,
+  ShoppingListId,
   ShoppingListItem,
   ShoppingListItemId,
   UserId,
@@ -61,8 +62,11 @@ export function toListLines(
 export type ListChange =
   | { kind: 'checkOff'; itemId: ShoppingListItemId }
   | { kind: 'uncheck'; itemId: ShoppingListItemId }
-  /** Something typed by hand, with the id the phone made for it. */
-  | { kind: 'addManualItem'; itemId: ShoppingListItemId; text: string };
+  /**
+   * Something typed by hand, with the id the phone made for it, for the list `listId`: the server
+   * refuses it unless whoever sends it can use that list.
+   */
+  | { kind: 'addManualItem'; listId: ShoppingListId; itemId: ShoppingListItemId; text: string };
 
 const compareText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -78,6 +82,26 @@ export function sortListItems(items: readonly ShoppingListItem[]): ShoppingListI
     (a, b) =>
       compareText(itemName(a), itemName(b)) || KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || compareText(a.id, b.id),
   );
+}
+
+/**
+ * A Shopping List with these items, in order, and as its Recipes the ones its lines name (by
+ * title). Every list the phone holds is made here, so its Recipes always match its lines: a Recipe
+ * goes as its last line does.
+ */
+export function withItems(
+  list: Pick<ShoppingList, 'id' | 'ownerId'>,
+  items: readonly ShoppingListItem[],
+): ShoppingList {
+  const recipes = new Map(
+    items.flatMap((item) => (item.kind === 'ingredient' ? item.recipes : [])).map((r) => [r.recipe.id, r.recipe]),
+  );
+  return {
+    id: list.id,
+    ownerId: list.ownerId,
+    items: sortListItems(items),
+    recipes: [...recipes.values()].sort((a, b) => compareText(a.title, b.title) || compareText(a.id, b.id)),
+  };
 }
 
 /**
@@ -111,5 +135,5 @@ export function withListChanges(
       return item.check.status === 'checked' ? item : { ...item, check: { status: 'checked', checkedAt: madeAt, checkedBy: me } };
     });
   }
-  return items === list.items ? list : { ...list, items: sortListItems(items) };
+  return items === list.items ? list : withItems(list, items);
 }
