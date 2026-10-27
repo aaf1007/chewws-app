@@ -14,6 +14,7 @@ import {
   createTestAccount,
   createTestClient,
   inProcessDraftBuilds,
+  inProcessSourceRefresh,
   signInAttacker,
   type DraftBuilds,
   type DraftFakes,
@@ -138,6 +139,32 @@ export async function backdateDraftBuild(recipeId: string, minutes: number): Pro
      where id = $1 and build_started_at is not null`,
     [recipeId, minutes],
   );
+}
+
+/** The Recipe's Source Video was last read from its platform `days` ago. */
+export async function backdateSourceVideo(recipeId: string, days: number): Promise<void> {
+  await asDatabaseOwner(
+    `update public.source_videos set fetched_at = now() - make_interval(days => $2) where recipe_id = $1`,
+    [recipeId, days],
+  );
+}
+
+/** The last refresh of the Recipe's Source Video was asked for `minutes` ago. */
+export async function backdateSourceRefresh(recipeId: string, minutes: number): Promise<void> {
+  await asDatabaseOwner(
+    `update public.source_videos set refresh_requested_at = now() - make_interval(mins => $2) where recipe_id = $1`,
+    [recipeId, minutes],
+  );
+}
+
+/** Runs the daily job that drops YouTube data over 30 days old, now (pg_cron runs it at 03:17). */
+export async function runYouTubeExpiryJob(): Promise<void> {
+  await asDatabaseOwner('select private.expire_youtube_source_data()', []);
+}
+
+/** The jobs pg_cron runs. */
+export async function scheduledJobs(): Promise<{ jobname: string; schedule: string; command: string }[]> {
+  return asDatabaseOwner('select jobname, schedule, command from cron.job order by jobname', []);
 }
 
 /**
@@ -375,6 +402,7 @@ export async function signInOnPhones(
           sessionStorage,
           now: () => (clock === null ? Date.now() : clock),
           startDraftBuild,
+          refreshSourceVideo: inProcessSourceRefresh(client, fakes),
         });
         return {
           data,

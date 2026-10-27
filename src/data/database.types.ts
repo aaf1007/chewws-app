@@ -336,6 +336,7 @@ export type Database = {
           platform: Database["public"]["Enums"]["source_platform"]
           recipe_id: string
           recipe_site_url: string | null
+          refresh_requested_at: string | null
           screenshot_path: string | null
           thumbnail_url: string | null
           title: string | null
@@ -352,6 +353,7 @@ export type Database = {
           platform: Database["public"]["Enums"]["source_platform"]
           recipe_id: string
           recipe_site_url?: string | null
+          refresh_requested_at?: string | null
           screenshot_path?: string | null
           thumbnail_url?: string | null
           title?: string | null
@@ -368,6 +370,7 @@ export type Database = {
           platform?: Database["public"]["Enums"]["source_platform"]
           recipe_id?: string
           recipe_site_url?: string | null
+          refresh_requested_at?: string | null
           screenshot_path?: string | null
           thumbnail_url?: string | null
           title?: string | null
@@ -434,6 +437,7 @@ export type Database = {
         Returns: string
       }
       claim_draft_build: { Args: { recipe_id: string }; Returns: Json }
+      claim_source_refresh: { Args: { recipe_id: string }; Returns: Json }
       create_recipe: {
         Args: { lines: Json; steps: string[]; title: string }
         Returns: string
@@ -471,6 +475,10 @@ export type Database = {
           url: string
         }
         Returns: Json
+      }
+      store_source_refresh: {
+        Args: { recipe_id: string; source: Json }
+        Returns: boolean
       }
       uncheck: {
         Args: { changed_at?: string; item_id: string }

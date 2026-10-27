@@ -6,7 +6,7 @@ import {
   type SupabaseClient,
 } from '@supabase/supabase-js';
 
-import { detectSource } from '../../supabase/functions/_shared/detect-source';
+import { checkSharedLink } from '../../supabase/functions/_shared/detect-source';
 import {
   createChangeQueue,
   memoryStorage,
@@ -62,7 +62,8 @@ type ShoppingListAmountRow = Database['public']['Tables']['shopping_list_amounts
 type SourceVideoRow = Database['public']['Tables']['source_videos']['Row'];
 type BuildFailureRow = Database['public']['Enums']['draft_build_failure'];
 
-const SOURCE_VIDEO = 'source_video:source_videos(platform, original_url, creator_name, creator_url, thumbnail_url)';
+const SOURCE_VIDEO =
+  'source_video:source_videos(platform, original_url, creator_name, creator_url, thumbnail_url, fetched_at)';
 
 const RECIPE_WITH_LINES = `*, recipe_lines(position, original_text, amount_text, ingredient:ingredients(id, name)), ${SOURCE_VIDEO}`;
 
@@ -74,6 +75,10 @@ const BUILD_TIMEOUT_MS = 3 * 60_000;
 const UNCLAIMED_KICK_AFTER_MS = 30_000;
 /** Builds per Draft, the first and two Retries (decisions 03). */
 const BUILD_ATTEMPTS = 3;
+/** YouTube data older than this is read again before it's shown (YouTube's API terms). */
+const YOUTUBE_DATA_MAX_AGE_MS = 30 * 24 * 60 * 60_000;
+/** How long opening a Recipe waits for that refresh before showing what's stored. */
+const REFRESH_WAIT_MS = 5_000;
 
 const FAILURES: Record<BuildFailureRow, DraftBuildFailure> = {
   source_unavailable: 'sourceUnavailable',
@@ -104,8 +109,17 @@ function toDraftBuild(row: BuildColumns, now: number): DraftBuild {
 
 type SourceVideoColumns = Pick<
   SourceVideoRow,
-  'platform' | 'original_url' | 'creator_name' | 'creator_url' | 'thumbnail_url'
+  'platform' | 'original_url' | 'creator_name' | 'creator_url' | 'thumbnail_url' | 'fetched_at'
 >;
+
+/** Whether a Source Video holds YouTube data read over 30 days ago, as of `now`. */
+function isStaleYouTube(row: SourceVideoColumns | null, now: number): boolean {
+  return (
+    row?.platform === 'youtube' &&
+    row.fetched_at !== null &&
+    now - Date.parse(row.fetched_at) > YOUTUBE_DATA_MAX_AGE_MS
+  );
+}
 
 function toSourceVideo(row: SourceVideoColumns | null): SourceVideo | null {
   if (!row) return null;
@@ -332,6 +346,12 @@ export type DataLayerOptions = {
    * most). Tests build in-process instead, with a fake source reader and Claude call.
    */
   startDraftBuild?: (recipeId: RecipeId) => Promise<void>;
+  /**
+   * Asks the server to read a Recipe's Source Video from its platform again, and settles once
+   * it's done. By default it calls the `refresh-source-video` Edge Function (10 s at most). Tests
+   * refresh in-process, with fake platforms.
+   */
+  refreshSourceVideo?: (recipeId: RecipeId) => Promise<void>;
 };
 
 /**
@@ -348,6 +368,12 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     options.startDraftBuild ??
     (async (recipeId: RecipeId) => {
       const { error } = await client.functions.invoke('build-draft', { body: { recipeId }, timeout: 10_000 });
+      if (error) throw error;
+    });
+  const requestSourceRefresh =
+    options.refreshSourceVideo ??
+    (async (recipeId: RecipeId) => {
+      const { error } = await client.functions.invoke('refresh-source-video', { body: { recipeId }, timeout: 10_000 });
       if (error) throw error;
     });
 
@@ -674,14 +700,57 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     if (data.length === 0) throw new DataError('recipe_not_found', 'That Recipe no longer exists.');
   }
 
-  async function getRecipe(id: RecipeId): Promise<Recipe | null> {
+  async function readRecipe(id: RecipeId) {
     const { data, error } = await client
       .from('recipes')
       .select(RECIPE_WITH_LINES)
       .eq('id', id)
       .maybeSingle();
     if (error) fail(error);
-    return data ? toRecipe(data, now()) : null;
+    return data;
+  }
+
+  /** Runs `work`, waiting `ms` at most for it; it goes on in the background after that. */
+  async function waitAtMost(ms: number, work: Promise<unknown>): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const gaveUp = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, ms);
+    });
+    await Promise.race([work.catch(() => {}), gaveUp]);
+    clearTimeout(timer);
+  }
+
+  /**
+   * One Recipe, or null if the user can't see it. A YouTube Source Video read over 30 days ago
+   * is read again first (YouTube's API terms), waiting 5 s at most for it.
+   */
+  async function getRecipe(id: RecipeId): Promise<Recipe | null> {
+    let row = await readRecipe(id);
+    if (row && isStaleYouTube(row.source_video, now())) {
+      await waitAtMost(REFRESH_WAIT_MS, requestSourceRefresh(id));
+      row = await readRecipe(id);
+    }
+    return row ? toRecipe(row, now()) : null;
+  }
+
+  /**
+   * Reads a Recipe's TikTok or YouTube Source Video from its platform again, as when its stored
+   * thumbnail URL stops loading (TikTok's expire), and returns the Source Video as stored after.
+   * At most one refresh per Recipe every 10 minutes, and none for a web page: the Source Video
+   * then comes back as it was, and the screen shows it without its picture. Null when the Recipe
+   * has no Source Video (or is gone).
+   */
+  async function refreshSourceVideo(id: RecipeId): Promise<SourceVideo | null> {
+    await requestSourceRefresh(id).catch(() => {
+      // No signal, or the platform didn't answer: what's stored stays.
+    });
+    const { data, error } = await client
+      .from('source_videos')
+      .select('platform, original_url, creator_name, creator_url, thumbnail_url, fetched_at')
+      .eq('recipe_id', id)
+      .maybeSingle();
+    if (error) fail(error);
+    return toSourceVideo(data);
   }
 
   /** The signed-in user's reviewed Recipes, newest first. */
@@ -721,7 +790,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   /**
    * Saves a shared link as a Draft and returns at once: the Draft builder fills it in in the
    * background. `url` or `text` (shared text with a link in it) names the link; the first link
-   * wins. Only TikTok links are saved for now (ticket 04 adds the rest). `draftId` (from
+   * wins. TikTok and YouTube videos and any web page can be saved; Instagram can't yet (ticket
+   * 05), nor a YouTube link that isn't a video. `draftId` (from
    * `newDraftId`) names the Draft: send the same one when a save is tried again, after no answer,
    * and it finds the Draft the first try made rather than making another.
    */
@@ -730,11 +800,10 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     text?: string;
     draftId?: RecipeId;
   }): Promise<SaveFromLinkResult> {
-    const detected = detectSource([shared.url, shared.text].filter(Boolean).join(' '));
-    if (detected === null) throw new DataError('no_link', 'There’s no link in what was shared.');
-    if (detected.platform !== 'tiktok') {
-      throw new DataError('unsupported_link', 'Only TikTok links can be saved for now.');
-    }
+    const checked = checkSharedLink([shared.url, shared.text].filter(Boolean).join(' '));
+    if (checked.status === 'noLink') throw new DataError('no_link', 'There’s no link in what was shared.');
+    if (checked.status === 'unsupported') throw new DataError('unsupported_link', checked.message);
+    const detected = checked.link;
     const recipeId = shared.draftId ?? newDraftId();
     const { error } = await client.rpc('save_from_link', {
       recipe_id: recipeId,
@@ -1384,6 +1453,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     editRecipe,
     deleteRecipe,
     getRecipe,
+    refreshSourceVideo,
     listMyRecipes,
     newDraftId,
     saveFromLink,
