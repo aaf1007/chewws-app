@@ -16,6 +16,7 @@ import {
   fixtureExtract,
   laterFixtureAdapters,
 } from '../supabase/functions/_shared/draft-fixtures';
+import { pageAdapter } from '../supabase/functions/_shared/page-reader';
 import { createSafeFetch } from '../supabase/functions/_shared/safe-fetch';
 import { SourceError, tiktokOEmbedAdapter, type SourceMaterial } from '../supabase/functions/_shared/source-reader';
 import {
@@ -639,4 +640,54 @@ test.each([429, 403, 503])('a refresh TikTok answers with %i keeps the creator, 
   oEmbed.state.status = status;
 
   expect(await a.data.refreshSourceVideo(id)).toEqual(stored);
+});
+
+/**
+ * The real page adapter through the real guarded fetch, over a fake network: `dns` gives each
+ * host's addresses, and every request that gets out is answered with the recipe site's page (so
+ * a link the guard should have stopped would build a full Draft) and recorded.
+ */
+function guardedPages(dns: Record<string, string[]>, redirects: Record<string, string> = {}) {
+  const requested: string[] = [];
+  const page = pageAdapter(
+    createSafeFetch({
+      resolveHost: async (host) => dns[host] ?? ['93.184.216.34'],
+      fetch: async (input) => {
+        const url = String(input);
+        requested.push(url);
+        const next = redirects[url];
+        if (next) return new Response(null, { status: 302, headers: { Location: next } });
+        return new Response(SHAKSHUKA_PAGE.html, { headers: { 'Content-Type': 'text/html' } });
+      },
+    }),
+  );
+  return { page, requested };
+}
+
+test.each([
+  ['a host that resolves to the cloud metadata address', 'https://metadata.example.net/latest/', {}],
+  ['a redirect to a host on the private network', 'https://short.example.com/r', { 'https://short.example.com/r': 'https://intranet.example.net/' }],
+])('a shared link to %s fails as unreadable, through the real guarded fetch, never fetched', async (_, url, redirects) => {
+  const pages = guardedPages({ 'metadata.example.net': ['169.254.169.254'], 'intranet.example.net': ['10.0.0.7'] }, redirects);
+  const a = await signInTestUser('a', { page: pages.page });
+
+  const id = await savedAndBuilt(a, url);
+
+  expect(await a.data.getRecipe(id)).toMatchObject({
+    status: 'draft',
+    build: { status: 'failed', reason: 'unreadable', canRetry: true },
+    lines: [],
+    steps: [],
+  });
+  expect(pages.requested).toEqual(Object.keys(redirects));
+});
+
+test('a recipe-site link in a caption that leads to a private address is not fetched; the video still builds', async () => {
+  const pages = guardedPages({ 'cooking.example.com': ['127.0.0.1'] });
+  const a = await signInTestUser('a', { page: pages.page });
+
+  const id = await savedAndBuilt(a, SITE_LINK.url);
+
+  expect(pages.requested).toEqual([]);
+  expect(await a.data.getRecipe(id)).toMatchObject({ build: { status: 'built' }, recipeFound: false, lines: [] });
 });
