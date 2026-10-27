@@ -151,3 +151,25 @@ describe('decodeEntities', () => {
     expect(decodeEntities(text)).toBe(expected);
   });
 });
+
+describe('hostile HTML', () => {
+  const twoMb = (chunk: string) => chunk.repeat(Math.ceil((2 * 1024 * 1024) / chunk.length));
+
+  test.each([
+    ['unclosed <meta tags', twoMb('<meta ')],
+    ['unclosed <title tags', twoMb('<title>')],
+    ['<title with no end', `<title>${twoMb('a')}`],
+    ['unclosed ld+json blocks', twoMb('<script type="application/ld+json">')],
+    ['unclosed <script tags', twoMb('<script ')],
+    ['<meta tags that all end at one far >', `${twoMb('<meta ')}>`],
+    ['<meta tags full of long attribute names', twoMb(`<meta ${'a'.repeat(4000)}>`)],
+    ['a JSON-LD Recipe whose name is all <', ldJson({ '@type': 'Recipe', name: twoMb('<'), recipeIngredient: [twoMb('<b')] })],
+  ])('%s (2 MB) are read in well under a second', (_, html) => {
+    const started = performance.now();
+
+    readPagePreview(html, URL);
+    readSchemaOrgRecipe(html, URL);
+
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+});

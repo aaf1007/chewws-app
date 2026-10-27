@@ -43,8 +43,11 @@ export function decodeEntities(text: string): string {
 /** Text as a reader shows it: tags dropped, references decoded, whitespace collapsed. */
 function plain(value: unknown): string {
   if (typeof value !== 'string') return '';
-  // Inline tags go without a trace ("the <b>mince</b>."); any other tag separates words.
-  const untagged = value.replace(/<\/?(?:a|b|i|em|strong|span|u|small|sub|sup|mark)\b[^>]*>/giu, '').replace(/<[^>]*>/gu, ' ');
+  // Inline tags go without a trace ("the <b>mince</b>."); any other tag separates words. A tag
+  // ends at the next < as well as at >, so text full of < can't make these scans quadratic.
+  const untagged = value
+    .replace(/<\/?(?:a|b|i|em|strong|span|u|small|sub|sup|mark)\b[^<>]*>/giu, '')
+    .replace(/<[^<>]*>/gu, ' ');
   return decodeEntities(untagged)
     .replace(/\s+/gu, ' ')
     .trim();
@@ -71,11 +74,52 @@ function imageUrl(value: unknown, pageUrl: string): string | null {
 const field = (node: unknown, key: string): unknown =>
   typeof node === 'object' && node !== null && !Array.isArray(node) ? Reflect.get(node, key) : undefined;
 
+/*
+ * Finding tags. A page is untrusted and up to 2 MB, so tags are found with indexOf, never with a
+ * regex scanned across the page: `/<meta\b[^>]*>/g` over 2 MB of "<meta " with no ">" takes
+ * quadratic time. Every scan below only moves forward, so reading a page is linear in its size.
+ */
+
+/** A tag's text, from its `<` to its `>`, is at most this long; a longer one is skipped. */
+const MAX_TAG = 4096;
+/** `<meta>` and `<title>` belong in the head: only the start of a page is searched for them. */
+const HEAD_LIMIT = 256 * 1024;
+
+/** `html` with ASCII letters lowercased: same length, so its indexes are the page's. */
+const asciiLower = (html: string) => html.replace(/[A-Z]+/gu, (letters) => letters.toLowerCase());
+
+const isNameEnd = (char: string) => char === '' || char === '>' || char === '/' || /\s/u.test(char);
+
+/** Each `<name …>` tag in `lower` that starts before `limit`: where it starts and ends (after `>`). */
+function* tagsNamed(lower: string, name: string, limit = lower.length): Generator<{ start: number; end: number }> {
+  let at = 0;
+  let close = -1;
+  while (true) {
+    const start = lower.indexOf(`<${name}`, at);
+    if (start === -1 || start >= limit) return;
+    at = start + 1;
+    if (!isNameEnd(lower.charAt(start + name.length + 1))) continue;
+    if (close < start) close = lower.indexOf('>', start);
+    if (close === -1) return;
+    if (close - start > MAX_TAG) continue;
+    yield { start, end: close + 1 };
+    at = close + 1;
+  }
+}
+
 /** The JSON in each `<script type="application/ld+json">` block that parses. */
 function jsonLdBlocks(html: string): unknown[] {
-  const blocks = html.matchAll(/<script\b[^>]*\btype\s*=\s*["']?application\/ld\+json["']?[^>]*>([\s\S]*?)<\/script\s*>/giu);
-  return [...blocks].flatMap((match) => {
-    const text = match[1]
+  const lower = asciiLower(html);
+  const texts: string[] = [];
+  let closing = -1;
+  for (const tag of tagsNamed(lower, 'script')) {
+    if (!/\btype\s*=\s*["']?application\/ld\+json/u.test(lower.slice(tag.start, tag.end))) continue;
+    if (closing < tag.end) closing = lower.indexOf('</script', tag.end);
+    if (closing === -1) break;
+    texts.push(html.slice(tag.end, closing));
+  }
+  return texts.flatMap((block) => {
+    const text = block
       .trim()
       .replace(/^(?:\/\/\s*)?<!\[CDATA\[|(?:\/\/\s*)?\]\]>$/gu, '')
       .replace(/^<!--|-->$/gu, '');
@@ -159,28 +203,39 @@ export function readSchemaOrgRecipe(html: string, pageUrl: string): SiteRecipe |
   return null;
 }
 
-/** The attributes of each `<meta>` tag, names lowercased. */
-function metaTags(html: string): Map<string, string>[] {
-  return [...html.matchAll(/<meta\b[^>]*>/giu)].map((tag) => {
+/** The attributes of each `<meta>` tag in the start of the page, names lowercased. */
+function metaTags(html: string, lower: string): Map<string, string>[] {
+  return [...tagsNamed(lower, 'meta', HEAD_LIMIT)].map(({ start, end }) => {
     const attributes = new Map<string, string>();
-    for (const a of tag[0].matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gu)) {
-      attributes.set(a[1].toLowerCase(), a[2] ?? a[3] ?? a[4] ?? '');
+    // The value is optional, so a name with none is consumed whole rather than rescanned.
+    for (const a of html.slice(start, end).matchAll(/([\w:-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/gu)) {
+      const value = a[2] ?? a[3] ?? a[4];
+      if (value !== undefined) attributes.set(a[1].toLowerCase(), value);
     }
     return attributes;
   });
+}
+
+/** The text of the page's first `<title>`, if it closes. */
+function titleText(html: string, lower: string): string | undefined {
+  const tag = tagsNamed(lower, 'title', HEAD_LIMIT).next();
+  if (tag.done) return undefined;
+  const end = lower.indexOf('</title', tag.value.end);
+  return end === -1 ? undefined : html.slice(tag.value.end, end);
 }
 
 const MAX_TITLE = 200;
 
 /** A plain preview of any page: `og:title` or else `<title>`, and `og:image`. */
 export function readPagePreview(html: string, pageUrl: string): PagePreview {
+  const lower = asciiLower(html);
   const meta = new Map<string, string>();
-  for (const tag of metaTags(html)) {
+  for (const tag of metaTags(html, lower)) {
     const key = (tag.get('property') ?? tag.get('name') ?? '').toLowerCase();
     const content = tag.get('content');
     if (key && content !== undefined && !meta.has(key)) meta.set(key, content);
   }
-  const titleTag = /<title\b[^>]*>([\s\S]*?)<\/title\s*>/iu.exec(html)?.[1];
+  const titleTag = titleText(html, lower);
   const title = plain(meta.get('og:title')) || plain(titleTag) || plain(meta.get('twitter:title'));
   return {
     title: title ? title.slice(0, MAX_TITLE) : null,
