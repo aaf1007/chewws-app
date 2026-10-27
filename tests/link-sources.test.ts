@@ -82,7 +82,7 @@ describe('the YouTube adapter', () => {
     const video = await youtubeDataApiAdapter(youtube.safeFetch, 'test-key')('LemonPasta1', signal);
 
     expect(youtube.requested).toEqual([
-      'https://www.googleapis.com/youtube/v3/videos?part=snippet&id=LemonPasta1&key=test-key',
+      'https://www.googleapis.com/youtube/v3/videos?part=snippet&id=LemonPasta1',
     ]);
     expect(video).toEqual({
       externalId: 'LemonPasta1',
@@ -181,4 +181,21 @@ describe('following a recipe-site link in a caption', () => {
     expect(pages.asked).toEqual(['https://a.example.com/', 'https://b.example.com/', 'https://c.example.com/']);
     expect(material).toMatchObject({ kind: 'video', caption, siteRecipe: null, recipeSiteUrl: null });
   });
+});
+
+test('the YouTube adapter sends its API key in the X-Goog-Api-Key header, never in the URL', async () => {
+  const sent: { url: string; key: string | null }[] = [];
+  const safeFetch = createSafeFetch({
+    resolveHost: async () => ['142.250.80.10'],
+    fetch: async (input, init) => {
+      sent.push({ url: String(input), key: new Headers(init?.headers).get('x-goog-api-key') });
+      return Response.json({ items: [{ snippet }] });
+    },
+  });
+
+  await youtubeDataApiAdapter(safeFetch, ' secret-key ')('LemonPasta1', signal);
+
+  expect(sent).toEqual([
+    { url: 'https://www.googleapis.com/youtube/v3/videos?part=snippet&id=LemonPasta1', key: 'secret-key' },
+  ]);
 });

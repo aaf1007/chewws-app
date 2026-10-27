@@ -252,11 +252,12 @@ function bestThumbnail(snippet: unknown): string | null {
 export function youtubeDataApiAdapter(safeFetch: SafeFetch, apiKey: string): SourceAdapters['youtube'] {
   return async (videoId, signal) => {
     if (apiKey.trim() === '') throw new SourceError('notSetUp', 'YOUTUBE_API_KEY is not set.');
-    const query = new URLSearchParams({ part: 'snippet', id: videoId, key: apiKey.trim() });
+    const query = new URLSearchParams({ part: 'snippet', id: videoId });
+    // In a header, not the query string, so the key stays out of any log of URLs.
     const response = await safeFetch(`https://www.googleapis.com/youtube/v3/videos?${query}`, {
       signal,
       accept: ['application/json'],
-      headers: { Accept: 'application/json' },
+      headers: { Accept: 'application/json', 'X-Goog-Api-Key': apiKey.trim() },
     });
     if (response.status >= 500) throw new SourceError('unreachable', `YouTube answered ${response.status}.`);
     if (response.status === 403 && /quotaExceeded|rateLimitExceeded/u.test(response.body ?? '')) {
