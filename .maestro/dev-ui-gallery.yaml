@@ -1,0 +1,73 @@
+# Opens the dev-only UI gallery from the Profile tab, checks a scrolling Screen with and without a
+# navigation header, and scrolls through every primitive.
+appId: com.ant1007.recipeapp
+---
+- runFlow: subflows/sign-in-dev.yaml
+- tapOn:
+    id: "tab-profile"
+- tapOn: "UI gallery (dev)"
+- extendedWaitUntil:
+    visible: "UI gallery"
+    timeout: 10000
+
+# A scrolling Screen under a header: no bar at rest, then a bar with the compact title once the
+# large title has scrolled away.
+- tapOn: "Scrolling screen under a header"
+- extendedWaitUntil:
+    visible: "Under a header"
+    timeout: 10000
+- assertNotVisible:
+    id: "screen-bar"
+- scrollUntilVisible:
+    element: "Step 30.*"
+    direction: DOWN
+- assertVisible:
+    id: "screen-bar"
+- assertVisible:
+    id: "screen-compact-title"
+    text: "Under a header"
+- tapOn: "Back"
+
+# The same without a header, as on a tab: the content leaves room for the Screen's own bar.
+- tapOn: "Scrolling screen without a header"
+- extendedWaitUntil:
+    visible: "Without a header"
+    timeout: 10000
+- assertNotVisible:
+    id: "screen-bar"
+- scrollUntilVisible:
+    element: "Step 30.*"
+    direction: DOWN
+- assertVisible:
+    id: "screen-compact-title"
+    text: "Without a header"
+# Back at the top, the bar goes again.
+- swipe:
+    direction: DOWN
+- swipe:
+    direction: DOWN
+- swipe:
+    direction: DOWN
+- assertNotVisible:
+    id: "screen-bar"
+- tapOn: "Back to the gallery"
+
+- assertVisible: "largeTitle"
+- scrollUntilVisible:
+    element: "Want to Cook"
+    direction: DOWN
+- assertVisible: "Saved"
+- scrollUntilVisible:
+    element: "Score 7.8"
+    direction: DOWN
+- assertVisible: "Friends’ Score 9.3"
+- scrollUntilVisible:
+    element: "Crispy chilli tofu.*"
+    direction: DOWN
+- scrollUntilVisible:
+    element: "Green salad.*"
+    direction: DOWN
+- scrollUntilVisible:
+    element: "Nothing here yet"
+    direction: DOWN
+- assertVisible: "Map"

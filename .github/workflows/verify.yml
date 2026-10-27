@@ -1,0 +1,44 @@
+name: verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.12.0 # eas.json build.development.node
+          cache: npm
+
+      - run: npm ci
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.109.1 # keep in step with the local CLI so generated DB types match
+
+      # Tests use auth, PostgREST and Postgres through Kong; the rest is skipped to start faster.
+      # -x takes container names (mailpit, logflare, storage-api), not the names `--help` lists.
+      # The OAuth provider secrets in config.toml are unset here; the CLI only warns about them.
+      - name: Start local Supabase
+        run: supabase start -x studio,imgproxy,mailpit,edge-runtime,logflare,vector,realtime,storage-api
+
+      # Typecheck, lint, DB types freshness, vitest. The Maestro e2e flows need the iOS simulator.
+      - run: npm run verify
+
+      - name: Stop local Supabase
+        if: always()
+        run: supabase stop --no-backup

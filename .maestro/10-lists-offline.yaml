@@ -1,0 +1,131 @@
+# Ticket 10: the Shopping List with no signal. Adds three items by hand and checks one off, then
+# takes the app offline (pauses the local API gateway through scripts/net-control.mjs, which
+# scripts/e2e.sh runs). Offline it checks one off, unchecks another and adds one: the list shows
+# each at once and says the changes are waiting to sync; removing says it needs a connection. The
+# app is closed, its saved access token is made to run out (as after an hour in a pocket; through
+# scripts/expire-session.mjs), and it's opened again, still offline: it stays signed in and shows
+# the same list, though it can't refresh the token. Back online the token is refreshed and the
+# changes sync, and a fresh install signed in again reads them back from the server.
+# Run with `npm run e2e -- .maestro/10-lists-offline.yaml` (not with `maestro test` alone: nothing
+# would answer go-offline.js).
+appId: com.ant1007.recipeapp
+---
+- runFlow: subflows/sign-in-dev.yaml
+- tapOn:
+    id: "tab-shopping-list"
+- extendedWaitUntil:
+    visible: "Your Shopping List is empty"
+    timeout: 10000
+
+# Online: Paper towels, Bin bags and Foil, with Foil checked off.
+- tapOn:
+    id: "shopping-list-add"
+- inputText: "Paper towels"
+- pressKey: Enter
+- extendedWaitUntil:
+    visible: "Check off: Paper towels"
+    timeout: 10000
+- inputText: "Bin bags"
+- pressKey: Enter
+- extendedWaitUntil:
+    visible: "Check off: Bin bags"
+    timeout: 10000
+- inputText: "Foil"
+- pressKey: Enter
+- extendedWaitUntil:
+    visible: "Check off: Foil"
+    timeout: 10000
+- hideKeyboard
+- tapOn: "Check off: Foil"
+- extendedWaitUntil:
+    visible: "Uncheck: Foil"
+    timeout: 10000
+- assertNotVisible:
+    id: "shopping-list-sync"
+
+# No signal. Every change shows on the list straight away.
+- runScript: scripts/go-offline.js
+- tapOn: "Check off: Paper towels"
+- extendedWaitUntil:
+    visible: "Uncheck: Paper towels"
+    timeout: 3000
+- tapOn: "Uncheck: Foil"
+- extendedWaitUntil:
+    visible: "Check off: Foil"
+    timeout: 3000
+- tapOn:
+    id: "shopping-list-add"
+- inputText: "Snacks"
+- pressKey: Enter
+- extendedWaitUntil:
+    visible: "Check off: Snacks"
+    timeout: 3000
+- hideKeyboard
+
+# The list says three changes are waiting (once the first try to send them has given up).
+- extendedWaitUntil:
+    visible: ".*offline. 3 changes will sync when you're back online."
+    timeout: 30000
+
+# Removing needs a connection: Bin bags stays.
+- tapOn: "Remove: Bin bags"
+- extendedWaitUntil:
+    visible: ".*offline. Removing needs a connection."
+    timeout: 30000
+- assertVisible: "Check off: Bin bags"
+
+# Closed, left until the access token runs out, and opened again with no signal: still signed in,
+# the same list, still waiting to sync.
+- stopApp
+- runScript: scripts/expire-session.js
+- launchApp:
+    stopApp: true
+    clearState: false
+- openLink: "recipeapp://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8081&__expo_disable_onboarding=1&__expo_disable_auto_launch=1&__expo_disable_fab=1"
+- extendedWaitUntil:
+    visible:
+      id: "tab-shopping-list"
+    timeout: 60000
+- tapOn:
+    id: "tab-shopping-list"
+- extendedWaitUntil:
+    visible: "Uncheck: Paper towels"
+    timeout: 10000
+- assertVisible: "Check off: Foil"
+- assertVisible: "Check off: Snacks"
+- assertVisible: "Check off: Bin bags"
+- assertNotVisible: "Sign in as test user (dev)"
+# Once the auth client gives up refreshing the token (each try waits for an answer that never comes).
+- extendedWaitUntil:
+    visible: ".*offline. 3 changes will sync when you're back online."
+    timeout: 90000
+- assertVisible:
+    id: "tab-shopping-list"
+
+# Back online: the token is refreshed and the changes sync (on a later retry: the auth client
+# waits a minute before trying a refresh that failed again), and the notice goes.
+- runScript: scripts/go-online.js
+- extendedWaitUntil:
+    notVisible:
+      id: "shopping-list-sync"
+    timeout: 150000
+- assertVisible: "Uncheck: Paper towels"
+- assertVisible: "Check off: Foil"
+- assertVisible: "Check off: Snacks"
+
+# Removing works again.
+- tapOn: "Remove: Bin bags"
+- extendedWaitUntil:
+    notVisible: "Check off: Bin bags"
+    timeout: 10000
+
+# The server has every change: a fresh install, signed in again, reads them back.
+- runFlow: subflows/sign-in-dev.yaml
+- tapOn:
+    id: "tab-shopping-list"
+- extendedWaitUntil:
+    visible: "Uncheck: Paper towels"
+    timeout: 10000
+- assertVisible: "Check off: Foil"
+- assertVisible: "Check off: Snacks"
+- assertNotVisible: "Check off: Bin bags"

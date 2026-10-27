@@ -1,0 +1,135 @@
+# Ticket 08: adds Ingredients to the Pantry and marks one used up, then edits the Staples (salt,
+# pepper and oil by default), and finds it all still there after leaving the tab. Then removes two
+# Staples in quick succession and finds both stay removed, and adds two Ingredients back to back.
+# Run with `npm run e2e -- .maestro/08-pantry-and-staples.yaml`.
+appId: com.ant1007.recipeapp
+---
+- runFlow: subflows/sign-in-dev.yaml
+- tapOn:
+    id: "tab-pantry"
+- extendedWaitUntil:
+    visible: "Your Pantry is empty"
+    timeout: 10000
+- assertVisible: "Remove: oil"
+- assertVisible: "Remove: pepper"
+- assertVisible: "Remove: salt"
+
+# The Add button waits for a name.
+- assertVisible:
+    text: "Add: Add an Ingredient you have"
+    enabled: false
+
+# Add Ingredients as typed; the Pantry lists them by their Ingredient's name.
+- tapOn:
+    id: "pantry-add"
+- inputText: "Eggs"
+- tapOn: "Add: Add an Ingredient you have"
+- extendedWaitUntil:
+    visible: "Used up: egg"
+    timeout: 10000
+- assertNotVisible: "Your Pantry is empty"
+- tapOn:
+    id: "pantry-add"
+- inputText: "Crème fraîche"
+- pressKey: Enter
+- extendedWaitUntil:
+    visible: "Used up: crème fraîche"
+    timeout: 10000
+# A name the Ingredient matcher leaves nothing of is refused, and the field keeps it.
+- tapOn:
+    id: "pantry-add"
+- inputText: "?!"
+- pressKey: Enter
+- extendedWaitUntil:
+    visible: "Type the name of an Ingredient."
+    timeout: 10000
+- assertVisible:
+    id: "pantry-add"
+    text: "?!"
+- tapOn:
+    id: "pantry-add"
+- eraseText: 5
+- hideKeyboard
+
+# Mark the eggs used up.
+- tapOn: "Used up: egg"
+- extendedWaitUntil:
+    notVisible: "Used up: egg"
+    timeout: 10000
+- assertVisible: "Used up: crème fraîche"
+- assertNotVisible: "Type the name of an Ingredient."
+
+# Edit the Staples: drop pepper, add butter.
+- tapOn: "Remove: pepper"
+- extendedWaitUntil:
+    notVisible: "Remove: pepper"
+    timeout: 10000
+- scrollUntilVisible:
+    element:
+      id: "staple-add"
+    direction: DOWN
+- tapOn:
+    id: "staple-add"
+- inputText: "Butter"
+- pressKey: Enter
+- extendedWaitUntil:
+    visible: "Remove: butter"
+    timeout: 10000
+- hideKeyboard
+- assertVisible: "Remove: oil"
+- assertVisible: "Remove: salt"
+
+# Leave the tab and come back: it's all saved.
+- tapOn:
+    id: "tab-library"
+- tapOn:
+    id: "tab-pantry"
+- extendedWaitUntil:
+    visible: "Used up: crème fraîche"
+    timeout: 10000
+- assertNotVisible: "Used up: egg"
+- assertVisible: "Remove: butter"
+- assertVisible: "Remove: oil"
+- assertVisible: "Remove: salt"
+- assertNotVisible: "Remove: pepper"
+
+# Two quick Removes in a row, the second tapped before the first has reloaded: both stay removed.
+- tapOn:
+    text: "Remove: butter"
+    waitToSettleTimeoutMs: 0
+- tapOn:
+    text: "Remove: oil"
+    waitToSettleTimeoutMs: 0
+- extendedWaitUntil:
+    notVisible: "Remove: butter"
+    timeout: 10000
+- extendedWaitUntil:
+    notVisible: "Remove: oil"
+    timeout: 10000
+- assertVisible: "Remove: salt"
+- tapOn:
+    id: "tab-library"
+- tapOn:
+    id: "tab-pantry"
+- extendedWaitUntil:
+    visible: "Remove: salt"
+    timeout: 10000
+- assertNotVisible: "Remove: butter"
+- assertNotVisible: "Remove: oil"
+
+# Add two Ingredients back to back, typing the second while the first is still saving: the field
+# keeps the second name, and both end up in the Pantry.
+- tapOn:
+    id: "pantry-add"
+# One inputText, so Maestro doesn't wait for the screen to settle between the Return and "Flour".
+- inputText: "Milk\nFlour"
+- assertVisible:
+    id: "pantry-add"
+    text: "Flour"
+- pressKey: Enter
+- extendedWaitUntil:
+    visible: "Used up: milk"
+    timeout: 10000
+- extendedWaitUntil:
+    visible: "Used up: flour"
+    timeout: 10000

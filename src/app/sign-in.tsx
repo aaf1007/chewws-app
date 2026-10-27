@@ -1,12 +1,12 @@
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { useEffect, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Platform, StyleSheet, View } from 'react-native';
 
 import { signInWithApple } from '@/auth/apple';
 import { messageOf } from '@/auth/errors';
 import { googleNotConfiguredMessage, isGoogleConfigured, signInWithGoogle } from '@/auth/google';
 import { DevSignInButton } from '@/components/dev-sign-in-button';
+import { Button, Icon, Screen, Text, colors, radii, spacing } from '@/ui';
 
 export default function SignIn() {
   const [error, setError] = useState<string | null>(null);
@@ -22,56 +22,60 @@ export default function SignIn() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <Screen>
       <View style={styles.hero}>
-        <Text style={styles.title}>Recipe App</Text>
-        <Text style={styles.subtitle}>Save recipes from the videos you watch.</Text>
+        <View style={styles.mark}>
+          <Icon name="restaurant" size="xl" tone="onAccent" />
+        </View>
+        <Text variant="largeTitle">Recipe App</Text>
+        <Text tone="textMuted">Save recipes from the videos you watch, then plan, shop and cook.</Text>
       </View>
 
       <View style={styles.buttons}>
         {appleAvailable ? (
+          // Apple's own button, as App Review requires.
           <AppleAuthentication.AppleAuthenticationButton
             buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
             buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
-            cornerRadius={8}
+            cornerRadius={radii.md}
             style={styles.appleButton}
             onPress={() => run(signInWithApple)}
           />
         ) : null}
 
-        <Pressable
-          accessibilityRole="button"
-          style={styles.googleButton}
+        <Button
+          label="Sign in with Google"
+          variant="outlined"
+          icon="logo-google"
           onPress={() =>
             isGoogleConfigured ? run(signInWithGoogle) : setError(googleNotConfiguredMessage)
-          }>
-          <Text style={styles.googleLabel}>Sign in with Google</Text>
-        </Pressable>
+          }
+        />
 
         <DevSignInButton onError={(e) => setError(messageOf(e))} />
 
-        {error ? <Text style={styles.error}>{error}</Text> : null}
+        {error ? (
+          <Text variant="caption" tone="danger" style={styles.error}>
+            {error}
+          </Text>
+        ) : null}
       </View>
-    </SafeAreaView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'space-between', padding: 24, backgroundColor: '#fff' },
-  hero: { flex: 1, justifyContent: 'center', gap: 8 },
-  title: { fontSize: 34, fontWeight: '700' },
-  subtitle: { fontSize: 17, color: '#666' },
-  buttons: { gap: 12, paddingBottom: 16 },
-  appleButton: { height: 48 },
-  googleButton: {
-    height: 48,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#dadce0',
+  hero: { flex: 1, justifyContent: 'center', gap: spacing.sm },
+  mark: {
+    width: 72,
+    height: 72,
+    borderRadius: radii.lg,
+    backgroundColor: colors.accent,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#fff',
+    marginBottom: spacing.md,
   },
-  googleLabel: { fontSize: 17, fontWeight: '500', color: '#1f1f1f' },
-  error: { color: '#c62828', textAlign: 'center' },
+  buttons: { gap: spacing.md, paddingBottom: spacing.sm },
+  appleButton: { height: 48 },
+  error: { textAlign: 'center' },
 });

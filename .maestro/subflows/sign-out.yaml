@@ -1,0 +1,9 @@
+# Signs out from the Profile tab. Ends on the sign-in screen.
+appId: com.ant1007.recipeapp
+---
+- tapOn:
+    id: "tab-profile"
+- tapOn: "Sign out"
+- extendedWaitUntil:
+    visible: "Sign in as test user (dev)"
+    timeout: 5000

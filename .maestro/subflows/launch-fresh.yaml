@@ -1,0 +1,13 @@
+# Starts the dev build from scratch (no saved session) and loads the JS from Metro on 8081.
+# Ends on the sign-in screen. Needs `npm run dev:up` first.
+# The __expo_* params skip the dev client's onboarding, keep its menu from opening at launch and
+# hide its floating tools button, so no dev-only chrome sits over the app while a flow runs.
+appId: com.ant1007.recipeapp
+---
+- launchApp:
+    clearState: true
+- openLink: "recipeapp://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8081&__expo_disable_onboarding=1&__expo_disable_auto_launch=1&__expo_disable_fab=1"
+- extendedWaitUntil:
+    visible: "Sign in as test user (dev)"
+    timeout: 60000
+- waitForAnimationToEnd
