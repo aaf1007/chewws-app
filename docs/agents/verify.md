@@ -12,12 +12,13 @@ npm run verify   # typecheck, lint, database types freshness, vitest against loc
 
 ```sh
 npm run dev:up   # idempotent: local Supabase, Metro on 8081 (.logs/metro.log), iPhone 17 simulator, dev build
-npm run e2e      # scripts/e2e.sh: resets the local database, then runs one top-level flow; repeats per flow
+npm run e2e      # scripts/e2e.sh: resets the local database, waits until it answers, then runs one top-level flow; repeats per flow
 npm run e2e -- .maestro/dev-ui-gallery.yaml   # just these flows (still reset first)
 ```
 
 - Write one flow per ticket in `.maestro/`, named after the ticket (`02-write-a-recipe-by-hand.yaml`). Start it with `- runFlow: subflows/sign-in-dev.yaml`, which relaunches the app with cleared state, loads the bundle from Metro and signs in as the seeded dev user, ending on the Library. `subflows/sign-out.yaml` signs out from the Profile tab.
 - Every flow starts from a freshly reset local database (`supabase db reset`: migrations plus `supabase/seed.sql`), so the seeded dev user (`dev@example.com`) has an empty Library and no other data. A flow may assume exactly that state and must not rely on anything another flow created. Data a flow needs, it creates itself. `npm run e2e` wipes the local database, so don't run it while you need data in it.
+- After each reset, `scripts/stack-ready.sh` waits (30 s at most) until auth, and the functions runtime when there are functions, answer through Kong. The reset restarts those containers and they can swap addresses; Kong keeps the old ones and answers 502 ("An invalid response was received from the upstream server") until it is reloaded, which the script does. Don't add sleeps or retries to flows for this.
 - Don't call `maestro test` on the whole folder for a ticket's proof: it skips the resets. Use `npm run e2e`.
 - `subflows/launch-fresh.yaml` opens the dev build with `__expo_disable_onboarding=1&__expo_disable_auto_launch=1&__expo_disable_fab=1`, so no dev-client onboarding, menu or floating tools button covers the app during a flow. Don't drag dev chrome out of the way or retry taps; if a tap is swallowed, find what's covering the target.
 - Tap tabs by test id: `tapOn: { id: "tab-library" }` (also `tab-pantry`, `tab-shopping-list`, `tab-profile`). Their accessibility labels read "Pantry, tab, 2 of 4".

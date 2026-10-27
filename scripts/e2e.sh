@@ -59,6 +59,9 @@ for flow in "${flows[@]}"; do
     echo "supabase db reset failed. Is local Supabase running? npm run dev:up" >&2
     exit 1
   fi
+  # The reset restarts auth and the functions runtime, which Kong may still look for at their old
+  # addresses; this waits until both answer through Kong (see scripts/stack-ready.sh).
+  scripts/stack-ready.sh
   maestro test "$flow" || failed+=("$flow")
 done
 
