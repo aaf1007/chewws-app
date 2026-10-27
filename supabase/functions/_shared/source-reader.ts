@@ -208,7 +208,11 @@ export function tiktokOEmbedAdapter(safeFetch: SafeFetch): SourceAdapters['tikto
         response = await oEmbed(full, signal);
       }
     }
-    if (response.status >= 500) throw new SourceError('unreachable', `TikTok answered ${response.status}.`);
+    // Refused (403), rate-limited (429) or down (5xx) says nothing about the video: it may be
+    // there, so it isn't "unavailable" (which drops what a refresh had stored about it).
+    if (response.status >= 500 || response.status === 403 || response.status === 429) {
+      throw new SourceError('unreachable', `TikTok answered ${response.status}.`);
+    }
     if (response.status >= 300) throw new SourceError('unavailable', `TikTok has no video at ${url} (${response.status}).`);
     const json = parseJson(response.body, 'TikTok');
     return {

@@ -16,7 +16,8 @@ import {
   fixtureExtract,
   laterFixtureAdapters,
 } from '../supabase/functions/_shared/draft-fixtures';
-import { SourceError, type SourceMaterial } from '../supabase/functions/_shared/source-reader';
+import { createSafeFetch } from '../supabase/functions/_shared/safe-fetch';
+import { SourceError, tiktokOEmbedAdapter, type SourceMaterial } from '../supabase/functions/_shared/source-reader';
 import {
   backdateSourceRefresh,
   backdateSourceVideo,
@@ -600,4 +601,42 @@ test('a daily job drops YouTube data over 30 days old that nobody viewed, and no
     schedule: '17 3 * * *',
     command: 'select private.expire_youtube_source_data()',
   });
+});
+
+/**
+ * TikTok's oEmbed as a fake fetch, through the real adapter and guarded fetch: it answers with the
+ * video until `status` is set, then with that status.
+ */
+function tiktokOEmbed() {
+  const state: { status: number | null } = { status: null };
+  const safeFetch = createSafeFetch({
+    resolveHost: async () => ['93.184.216.34'],
+    fetch: async () =>
+      state.status === null
+        ? Response.json({
+            title: FULL_RECIPE.video.caption,
+            author_name: 'Pasta Queen',
+            author_url: 'https://www.tiktok.com/@pastaqueen',
+            thumbnail_url: 'https://p16-sign.tiktokcdn.com/old.jpeg',
+          })
+        : new Response('Too many requests', { status: state.status }),
+  });
+  return { state, tiktok: tiktokOEmbedAdapter(safeFetch) };
+}
+
+test.each([429, 403, 503])('a refresh TikTok answers with %i keeps the creator, caption and thumbnail', async (status) => {
+  const oEmbed = tiktokOEmbed();
+  const a = await signInTestUser('a', { tiktok: oEmbed.tiktok });
+  const id = await savedAndBuilt(a, FULL_RECIPE.url);
+  const stored = {
+    platform: 'tiktok',
+    originalUrl: FULL_RECIPE.url,
+    creatorName: 'Pasta Queen',
+    creatorUrl: 'https://www.tiktok.com/@pastaqueen',
+    thumbnailUrl: 'https://p16-sign.tiktokcdn.com/old.jpeg',
+  };
+  expect((await a.data.getRecipe(id))?.sourceVideo).toEqual(stored);
+  oEmbed.state.status = status;
+
+  expect(await a.data.refreshSourceVideo(id)).toEqual(stored);
 });
