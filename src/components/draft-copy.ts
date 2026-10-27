@@ -88,6 +88,11 @@ export function notFoundCopy(platform: SourcePlatform | undefined): { title: str
         title: 'Recipe not in description',
         message: 'The description doesn’t list the ingredients. Fill them in from the video.',
       };
+    case 'instagram':
+      return {
+        title: NOT_IN_CAPTION.title,
+        message: 'The app can’t read Instagram, and there was no ingredient list to read. Fill them in from the Reel.',
+      };
     case 'web':
       return {
         title: 'No recipe on this page',

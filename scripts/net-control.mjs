@@ -1,7 +1,9 @@
 // Lets a Maestro flow take the app offline and back: Maestro's runScript can make HTTP requests
 // but not run commands, so scripts/e2e.sh runs this while flows run. POST /offline or /online runs
 // scripts/net.sh with that word; POST /expire-session runs scripts/expire-session.mjs (the app's
-// saved access token runs out); nothing else. Listens on 127.0.0.1 only.
+// saved access token runs out); POST /add-photo puts .maestro/assets/caption-screenshot.jpg in the
+// booted simulator's photo library (for a flow that picks a screenshot); nothing else. Listens on
+// 127.0.0.1 only.
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +14,7 @@ const commands = {
   '/offline': [script('./net.sh'), ['offline']],
   '/online': [script('./net.sh'), ['online']],
   '/expire-session': [process.execPath, [script('./expire-session.mjs')]],
+  '/add-photo': ['xcrun', ['simctl', 'addmedia', 'booted', script('../.maestro/assets/caption-screenshot.jpg')]],
 };
 
 createServer((req, res) => {

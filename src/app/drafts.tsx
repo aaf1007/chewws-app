@@ -2,10 +2,10 @@ import { router } from 'expo-router';
 import { Alert, View } from 'react-native';
 
 import { messageOf } from '@/auth/errors';
-import { draftStatusLine, failureMessage, platformName } from '@/components/draft-copy';
+import { couldNotReadCopy, draftStatusLine, failureMessage, platformName } from '@/components/draft-copy';
 import { useSourceThumbnail } from '@/components/use-source-thumbnail';
 import { useWhileFocused } from '@/components/use-while-focused';
-import type { DraftSummary } from '@/data';
+import { couldNotReadSource, type DraftSummary } from '@/data';
 import { data } from '@/data/app';
 import { DraftBanner, EmptyState, ListRow, Screen, Text, spacing } from '@/ui';
 
@@ -27,17 +27,29 @@ function DraftRow({ draft, onRetry }: { draft: DraftSummary; onRetry: () => void
     ? [platformName(video.platform, video.originalUrl), video.creatorName].filter(Boolean).join(' · ')
     : undefined;
   const { build } = draft;
+  // The user's own screenshot is the Draft's picture when there is one.
+  const picture = video?.screenshotUrl ?? thumbnail.uri;
   return (
     <View style={{ paddingBottom: build.status === 'failed' ? spacing.md : 0 }}>
       <ListRow
         title={draft.title}
         // A page not read yet is titled with its site; don't say the site twice.
         meta={[draftStatusLine(draft), ...(from && from !== draft.title ? [from] : [])]}
-        photo={thumbnail.uri ? { uri: thumbnail.uri } : undefined}
-        onPhotoError={thumbnail.onError}
+        photo={picture ? { uri: picture } : undefined}
+        onPhotoError={video?.screenshotUrl ? undefined : thumbnail.onError}
         onPress={() => openDraft(draft.id)}
       />
-      {build.status === 'failed' ? (
+      {build.status === 'failed' && couldNotReadSource(build.reason) ? (
+        <DraftBanner
+          kind="couldNotRead"
+          {...couldNotReadCopy(build.reason, video ?? undefined, build.canRetry)}
+          actions={[
+            ...(build.canRetry ? [{ label: 'Add caption or screenshot', onPress: () => openDraft(draft.id) }] : []),
+            { label: 'Fill in by hand', onPress: () => openDraft(draft.id) },
+          ]}
+        />
+      ) : null}
+      {build.status === 'failed' && !couldNotReadSource(build.reason) ? (
         <DraftBanner
           kind="failed"
           title="Couldn't build this Draft"
@@ -69,7 +81,7 @@ export default function Drafts() {
         <EmptyState
           icon="document-text-outline"
           title="No Drafts"
-          message="Share a TikTok, a YouTube Short or a recipe page to the app and it shows up here while it’s filled in, ready for you to review."
+          message="Share a TikTok, an Instagram Reel, a YouTube Short or a recipe page to the app and it shows up here while it’s filled in, ready for you to review."
         />
       ) : null}
       {state.status === 'loaded' && state.value.length > 0 ? (

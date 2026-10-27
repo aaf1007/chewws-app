@@ -249,8 +249,7 @@ Ingredients:
 - 3 cloves garlic, minced
 - 2 tbsp soy sauce
 - 1 tbsp butter
-Sear the chicken skin-side down until crisp. Add the butter, garlic, honey and soy sauce and simmer until sticky.
-#dinner #chicken`,
+Sear the chicken skin-side down until crisp. Add the butter, garlic, honey and soy sauce and simmer until sticky.`,
   extraction: {
     title: 'Honey garlic chicken',
     recipeFound: true,
@@ -267,6 +266,24 @@ Sear the chicken skin-side down until crisp. Add the butter, garlic, honey and s
     ],
   } satisfies Extraction,
 };
+
+/** A caption short and plain enough for a Maestro flow to type, with Claude's answer. */
+export const TYPED_CAPTION = {
+  text: 'Garlic noodles: 200g noodles, 4 cloves garlic, 2 tbsp butter, 1 tbsp soy sauce. Fry the garlic in the butter, then toss in the noodles and soy sauce.',
+  extraction: {
+    title: 'Garlic noodles',
+    recipeFound: true,
+    lines: [
+      { text: '200g noodles', amount: '200g', ingredient: 'noodles' },
+      { text: '4 cloves garlic', amount: '4 cloves', ingredient: 'garlic' },
+      { text: '2 tbsp butter', amount: '2 tbsp', ingredient: 'butter' },
+      { text: '1 tbsp soy sauce', amount: '1 tbsp', ingredient: 'soy sauce' },
+    ],
+    steps: ['Fry the garlic in the butter.', 'Toss in the noodles and soy sauce.'],
+  } satisfies Extraction,
+};
+
+const PASTED_CAPTIONS = [PASTED_CAPTION, TYPED_CAPTION];
 
 /** Claude's answer for any screenshot the user adds (with no caption pasted beside it). */
 export const SCREENSHOT_RECIPE: Extraction = {
@@ -320,6 +337,8 @@ export const laterFixtureAdapters: SourceAdapters = adapters(true);
 
 const NOT_FOUND = (fixture: Fixture): Extraction => ({ title: fixture.extraction.title, recipeFound: false, lines: [], steps: [] });
 
+const squashed = (text: string) => text.replace(/\s+/gu, '');
+
 /**
  * Claude as the fixtures have it: the canned answer for each canned caption (or the same caption
  * pasted by the user), for a recipe site's Recipe shared directly or linked from a pasted caption,
@@ -332,7 +351,9 @@ export const fixtureExtract: Extract = async (material) => {
     if (page?.extraction) return page.extraction;
   }
   const pasted = material.pastedText?.trim() || null;
-  if (material.caption === null && pasted === PASTED_CAPTION.text) return PASTED_CAPTION.extraction;
+  // Line breaks don't change what a caption says (and a flow's deep link loses them).
+  const pastedFixture = PASTED_CAPTIONS.find((p) => pasted !== null && squashed(p.text) === squashed(pasted));
+  if (material.caption === null && pastedFixture) return pastedFixture.extraction;
   if (material.caption === null && pasted === null && material.screenshot) return SCREENSHOT_RECIPE;
   const read = material.caption ?? pasted;
   const fixture = read === null ? undefined : FIXTURES.find((f) => f.video.caption === read);
