@@ -1,6 +1,6 @@
 // Ticket 03: saving a TikTok link into a Draft. Builds run in-process with the fake TikTok adapter
 // and fake Claude call (supabase/functions/_shared/draft-fixtures.ts): no network.
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 
 import type { Recipe, RecipeId, RecipeInput } from '../src/data';
 import type { Extract } from '../supabase/functions/_shared/claude-extractor';
@@ -475,4 +475,70 @@ test('a save sent again after its answer was lost keeps one Draft and one link s
   expect(saved).toEqual({ status: 'saved', recipeId: draftId });
   expect((await phone.data.listDrafts()).map((d) => [d.id, d.title])).toEqual([[draftId, 'Creamy garlic pasta']]);
   expect(await countLinkSaves(phone)).toBe(1);
+});
+
+/** A user whose first build hangs at TikTok until `release()`; later builds read it at once. */
+async function userWithAStuckBuild(extract?: Extract) {
+  const reached = Promise.withResolvers<void>();
+  const stuck = gate();
+  let calls = 0;
+  const user = await signInTestUser('a', {
+    extract,
+    tiktok: async (url, signal) => {
+      calls += 1;
+      if (calls === 1) {
+        reached.resolve();
+        await stuck.wait();
+      }
+      return fixtureAdapters.tiktok(url, signal);
+    },
+  });
+  const { recipeId } = await user.data.saveFromLink({ url: FULL_RECIPE.url });
+  await reached.promise; // claimed, and stuck reading TikTok
+  return { user, recipeId, release: stuck.open };
+}
+
+test('the server lets a build claimed over 3 minutes ago be claimed again, and the stuck one then changes nothing', async () => {
+  const { user, recipeId, release } = await userWithAStuckBuild();
+
+  expect(await user.drafts.build(recipeId)).toEqual({ status: 'notClaimed' });
+  await backdateDraftBuild(recipeId, 4);
+  expect(await user.drafts.build(recipeId)).toEqual({ status: 'built', changed: true });
+
+  release();
+  await user.drafts.settled();
+  expect(await user.data.getRecipe(recipeId)).toMatchObject({ title: 'Creamy garlic pasta', build: { status: 'built' } });
+  expect(linesOf(await user.data.getRecipe(recipeId))).toHaveLength(7);
+});
+
+test('the server lets a build claimed over 3 minutes ago be retried, and not before', async () => {
+  const claude = countingExtract();
+  const { user, recipeId, release } = await userWithAStuckBuild(claude.extract);
+
+  await user.data.retryDraft(recipeId); // still within its time: already building, nothing restarts
+  await backdateDraftBuild(recipeId, 4);
+  await user.data.retryDraft(recipeId); // restarts it; this build claims it while the stuck one hangs
+  await vi.waitFor(async () => expect(await buildOf(user, recipeId)).toEqual({ status: 'built' }));
+  expect(claude.calls()).toBe(1);
+
+  release();
+  await user.drafts.settled();
+  expect(claude.calls()).toBe(2); // the stuck build finished too, but changed nothing
+  expect(await user.data.getRecipe(recipeId)).toMatchObject({ title: 'Creamy garlic pasta' });
+  expect(linesOf(await user.data.getRecipe(recipeId))).toHaveLength(7);
+});
+
+test('the server lets a Draft whose build was claimed over 3 minutes ago be reviewed, and not before', async () => {
+  const { user, recipeId, release } = await userWithAStuckBuild();
+
+  await expect(user.data.reviewDraft(recipeId, reviewedPasta)).rejects.toMatchObject({ code: 'draft_building' });
+  await backdateDraftBuild(recipeId, 4);
+  await user.data.reviewDraft(recipeId, reviewedPasta);
+
+  release();
+  await user.drafts.settled();
+  // The stuck build, finishing late, doesn't overwrite what the user reviewed.
+  const recipe = await user.data.getRecipe(recipeId);
+  expect(recipe).toMatchObject({ title: 'Garlic pasta for two', status: 'reviewed' });
+  expect(linesOf(recipe)).toHaveLength(3);
 });
