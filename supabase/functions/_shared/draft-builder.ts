@@ -114,6 +114,10 @@ async function extractionOf(material: SourceMaterial, deps: DraftBuilderDeps, si
   const fromUser = userAddedCaption({ text: material.pastedText, screenshotPath: material.screenshotPath });
   if (!fromUser && material.kind === 'page') return plainPage(material);
   if (!fromUser && material.platform === 'instagram') return NOTHING_ADDED;
+  // A video whose description is empty, linking to no recipe site: nothing for Claude to read.
+  if (!fromUser && material.caption === null && material.siteRecipe === null) {
+    return { title: material.title ?? '', recipeFound: false, lines: [], steps: [] };
+  }
   const screenshot = material.screenshotPath === null ? null : await deps.loadScreenshot(material.screenshotPath, signal);
   return deps.extract({ ...material, screenshot }, signal);
 }

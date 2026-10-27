@@ -126,8 +126,8 @@ export function createSourceReader(adapters: SourceAdapters): SourceReader {
   }
 
   /**
-   * Reads a video from its platform. A video with no caption can't be read (TikTok's oEmbed lost
-   * its title in 2026), unless the user added one. When they did, the platform is still asked (its
+   * Reads a video from its platform. A TikTok with no caption can't be read (its oEmbed lost its
+   * title in 2026), unless the user added one. When they did, the platform is still asked (its
    * creator and thumbnail are welcome), but nothing it says stops the build: the user's caption is
    * what's read.
    */
@@ -147,8 +147,10 @@ export function createSourceReader(adapters: SourceAdapters): SourceReader {
         if (id === null) throw new SourceError('unavailable', `Not a YouTube video: ${url}`);
         video = await withOneRetry(() => adapters.youtube(id, signal), signal);
       }
-      if (video.caption === null && !fromUser) {
-        throw new SourceError('noCaption', `${platform === 'tiktok' ? 'TikTok' : 'YouTube'} gave no caption for ${url}.`);
+      // TikTok's empty oEmbed says nothing about the caption: the app couldn't read it. YouTube's
+      // API did read the description, and an empty one is a video with no recipe in it.
+      if (platform === 'tiktok' && video.caption === null && !fromUser) {
+        throw new SourceError('noCaption', `TikTok gave no caption for ${url}.`);
       }
       return video;
     } catch (e) {

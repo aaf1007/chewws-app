@@ -493,3 +493,23 @@ test('deleting a Draft deletes the screenshot the user added to it', async () =>
   expect(await a.data.getRecipe(id)).toBeNull();
   expect(await bytesAt(link)).toBeNull();
 });
+
+test('a YouTube video whose description is empty is “recipe not in description”, not “couldn’t read it”, without asking Claude', async () => {
+  const claude = recording();
+  const a = await signInTestUser('a', {
+    ...claude.fakes,
+    youtube: async (videoId, signal) => ({ ...(await fixtureAdapters.youtube(videoId, signal)), caption: null }),
+  });
+
+  const id = await savedAndBuilt(a, { url: 'https://www.youtube.com/shorts/LemonPasta1' });
+
+  expect(claude.given).toEqual([]);
+  expect(await a.data.getRecipe(id)).toMatchObject({
+    title: 'Lemon pasta in 10 minutes #shorts',
+    build: { status: 'built' },
+    recipeFound: false,
+    lines: [],
+    steps: [],
+    sourceVideo: { platform: 'youtube', creatorName: 'Lemon Kitchen' },
+  });
+});
