@@ -4,14 +4,14 @@
 
 **Blocked by:** 02 (Write a Recipe by hand).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The app appears in the iOS share sheet for links (via expo-share-intent) and saves a TikTok link with one tap
-- [ ] Saving returns immediately; the Recipe exists as an unbuilt Draft until the Draft builder finishes
-- [ ] The source reader sits behind one interface, with a TikTok oEmbed adapter returning caption, creator, creator URL and thumbnail URL
-- [ ] The Draft builder produces title, ingredient lines (text, amount, linked Ingredient), steps and a recipeFound flag
-- [ ] A Draft with recipeFound false shows "recipe not in caption" with empty ingredients and steps
-- [ ] The user can review and edit a Draft and mark it reviewed, after which it is a normal Recipe
-- [ ] Drafts can stay unreviewed indefinitely
-- [ ] The Recipe shows the Source Video's thumbnail and creator, and tapping it opens the original video
-- [ ] Data-layer tests use a fake source reader and a fake Claude call (no network): a full-recipe TikTok caption produces a Draft with the expected ingredients; a "link in bio" caption produces a recipe-not-in-caption Draft
+- [x] The app appears in the iOS share sheet for links (via expo-share-intent) and saves a TikTok link with one tap
+- [x] Saving returns immediately; the Recipe exists as an unbuilt Draft until the Draft builder finishes
+- [x] The source reader sits behind one interface, with a TikTok oEmbed adapter returning caption, creator, creator URL and thumbnail URL
+- [x] The Draft builder produces title, ingredient lines (text, amount, linked Ingredient), steps and a recipeFound flag
+- [x] A Draft with recipeFound false shows "recipe not in caption" with empty ingredients and steps
+- [x] The user can review and edit a Draft and mark it reviewed, after which it is a normal Recipe
+- [x] Drafts can stay unreviewed indefinitely
+- [x] The Recipe shows the Source Video's thumbnail and creator, and tapping it opens the original video
+- [x] Data-layer tests use a fake source reader and a fake Claude call (no network): a full-recipe TikTok caption produces a Draft with the expected ingredients; a "link in bio" caption produces a recipe-not-in-caption Draft
