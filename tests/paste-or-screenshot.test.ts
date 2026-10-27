@@ -117,7 +117,8 @@ test('an Instagram Reel saved with neither a screenshot nor a caption is a recip
   const a = await signInTestUser('a', claude.fakes);
 
   const { recipeId: id } = await a.data.saveFromLink({ text: `Look at this ${REEL}` });
-  expect(await a.data.getRecipe(id)).toMatchObject({ title: 'Instagram Reel', build: { status: 'building' } });
+  // Built in-process at once, so it may already be built here: only the placeholder title is sure.
+  expect(await a.data.getRecipe(id)).toMatchObject({ title: 'Instagram Reel' });
   await a.drafts.settled();
 
   expect(claude.given).toEqual([]);
