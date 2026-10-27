@@ -50,6 +50,29 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       },
     ],
     'expo-apple-authentication',
+    // The share sheet entry (ticket 03): a TikTok, YouTube or recipe-site link, a caption as text,
+    // or an Instagram screenshot (ticket 05).
+    [
+      'expo-share-intent',
+      {
+        iosActivationRules: {
+          NSExtensionActivationSupportsWebURLWithMaxCount: 1,
+          NSExtensionActivationSupportsText: true,
+          NSExtensionActivationSupportsImageWithMaxCount: 1,
+        },
+        androidIntentFilters: ['text/*', 'image/*'],
+      },
+    ],
+    // In this build so tickets 05 and 07 need no new one; their JS arrives with those tickets.
+    [
+      'expo-image-picker',
+      {
+        photosPermission: 'Pick a screenshot of a caption to build a Draft from it.',
+        cameraPermission: false,
+        microphonePermission: false,
+      },
+    ],
+    'expo-notifications',
     ...googleSignInPlugin(),
   ],
   owner: 'ant1007',
