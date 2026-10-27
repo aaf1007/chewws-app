@@ -11,7 +11,7 @@ npm run verify   # typecheck, lint, database types freshness, vitest against loc
 ## 2. On the simulator
 
 ```sh
-npm run dev:up   # idempotent: local Supabase, Metro on 8081 (.logs/metro.log), iPhone 17 simulator, dev build
+npm run dev:up   # idempotent: local Supabase, Edge Functions, Metro on 8081 (.logs/metro.log), iPhone 17 simulator, dev build
 npm run e2e      # scripts/e2e.sh: resets the local database, waits until it answers, then runs one top-level flow; repeats per flow
 npm run e2e -- .maestro/dev-ui-gallery.yaml   # just these flows (still reset first)
 ```
@@ -25,6 +25,15 @@ npm run e2e -- .maestro/dev-ui-gallery.yaml   # just these flows (still reset fi
 - Files in `.maestro/subflows/` are not run on their own.
 - Screenshot for the ticket notes: `xcrun simctl io booted screenshot /path/to/shot.png`. Inspect the screen with `maestro hierarchy`.
 - On failure, Maestro's logs and screenshots are in `~/.maestro/tests/<timestamp>/`, and Metro's in `.logs/metro.log` (only when `dev:up` started Metro).
+
+## Edge Functions
+
+A function lives in `supabase/functions/<name>/index.ts` and is served at `http://127.0.0.1:54421/functions/v1/<name>` (the API URL the app and tests already use), with a user's access token or the anon key as `Authorization: Bearer …`.
+
+- `npm run dev:up` and `npm run e2e` run `scripts/functions.sh`: `supabase functions serve` in the background (logs in `.logs/functions.log`). It picks up edited and new functions without a restart, and does nothing while `supabase/functions` holds no function.
+- Secrets come from `supabase/.env` (git-ignored; see `supabase/.env.example`), the file the CLI already reads for `config.toml`. After changing one, stop the serve process (`pkill -f '^([^ ]*/)?supabase functions serve'`) and rerun `scripts/functions.sh`. Keys starting with `SUPABASE_` are skipped; the runtime sets `SUPABASE_URL` and the keys itself. Never put a real key in a committed file.
+- Only one serve can run per stack, and every worktree with this `project_id` shares the stack. `scripts/functions.sh` stops with a message if another worktree's serve is running. Never start a second `supabase functions serve` by hand: it takes the runtime down before it fails.
+- **The rule: `npm run verify` never needs the functions runtime.** CI starts Supabase with `-x edge-runtime`, and tests never call `/functions/v1`. A function is a thin wrapper: it reads the request, calls a module under `src/` (for the Draft builder, the logic that turns source reader output plus the Claude answer into a Draft), and writes the result. That module takes the Claude call and the source reader as parameters, so vitest runs it in Node with fakes (`CODING_STANDARDS.md`, Tests). The function imports it by relative path (`../../../src/…/x.ts`; the CLI mounts imported files), so the module must also run in Deno: import siblings with their `.ts` extension (Deno won't resolve `./x`; `tsconfig.json` allows `./x.ts`), and use no Node-only or React Native imports. `tsconfig.json` leaves out `supabase/functions` (Deno globals), so `verify` doesn't typecheck the wrappers; keep them thin. If a function fails to load, `scripts/functions.sh` prints the end of `.logs/functions.log`. The real Claude call and the wrapper are checked by hand or in a Maestro flow, not in `verify`.
 
 ## The dev build
 

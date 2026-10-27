@@ -14,6 +14,9 @@ else
   supabase start
 fi
 
+# Edge Functions at /functions/v1/<name>, from supabase/functions with secrets from supabase/.env.
+scripts/functions.sh
+
 if curl -fsS "http://127.0.0.1:$METRO_PORT/status" 2>/dev/null | grep -q 'packager-status:running'; then
   echo "metro: running on $METRO_PORT"
 else

@@ -50,6 +50,9 @@ if [[ " $(listening_on_port | tr '\n' ' ') " != *" $net_control "* ]]; then
   exit 1
 fi
 
+# The flows reach Edge Functions too; serve this worktree's (no-op when already served).
+scripts/functions.sh
+
 failed=()
 for flow in "${flows[@]}"; do
   scripts/net.sh online >/dev/null
