@@ -200,7 +200,8 @@ const HTML = ['text/html', 'application/xhtml+xml'];
 
 /**
  * The page adapter: one guarded fetch of the page, HTML only. A page that isn't HTML (a PDF, an
- * image) still saves, with no preview.
+ * image), or that won't show itself to the server (a 4xx: deleted, paywalled, or a site that turns
+ * away anything but a browser), still saves, with no preview: an empty Draft to fill in by hand.
  */
 export function pageAdapter(safeFetch: SafeFetch): (url: string, signal: AbortSignal) => Promise<PageInfo> {
   return async (url, signal) => {
@@ -208,8 +209,9 @@ export function pageAdapter(safeFetch: SafeFetch): (url: string, signal: AbortSi
     if (response.status >= 500 || response.status === 429) {
       throw new SourceError('unreachable', `${response.url} answered ${response.status}.`);
     }
-    if (response.status >= 300) throw new SourceError('unavailable', `${response.url} answered ${response.status}.`);
-    if (response.body === null) return { url: response.url, title: null, imageUrl: null, siteRecipe: null };
+    if (response.status >= 300 || response.body === null) {
+      return { url: response.url, title: null, imageUrl: null, siteRecipe: null };
+    }
     return { url: response.url, ...readPage(response.body, response.url) };
   };
 }

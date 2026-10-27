@@ -2,7 +2,7 @@
 // user's, or a caption's: it must not walk the server to its own network. Fake fetch and DNS only.
 import { describe, expect, test } from 'vitest';
 
-import { createSafeFetch, isPublicAddress, type GuardedRequest } from '../supabase/functions/_shared/safe-fetch';
+import { createSafeFetch, dnsResolver, isPublicAddress, type GuardedRequest } from '../supabase/functions/_shared/safe-fetch';
 
 const PUBLIC_V4 = '93.184.216.34';
 
@@ -263,5 +263,30 @@ describe('isPublicAddress', () => {
     ['1::2::3', false],
   ])('%s is public: %s', (address, expected) => {
     expect(isPublicAddress(address)).toBe(expected);
+  });
+});
+
+describe('dnsResolver', () => {
+  const notFound = () => Object.assign(new Error('no records found'), { name: 'NotFound' });
+
+  test('gives the A and AAAA records together; a type with no records adds none', async () => {
+    const resolve = dnsResolver(async (host, type) => {
+      if (type === 'AAAA') throw notFound();
+      return host === 'cooking.example.com' ? ['93.184.216.34', '93.184.216.35'] : [];
+    });
+
+    expect(await resolve('cooking.example.com')).toEqual(['93.184.216.34', '93.184.216.35']);
+  });
+
+  test('a host with no records at all has none; a lookup that fails is thrown', async () => {
+    const none = dnsResolver(async () => {
+      throw notFound();
+    });
+    const broken = dnsResolver(async () => {
+      throw new Error('connection refused');
+    });
+
+    expect(await none('gone.example.com')).toEqual([]);
+    await expect(broken('cooking.example.com')).rejects.toThrow('connection refused');
   });
 });

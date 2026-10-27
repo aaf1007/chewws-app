@@ -242,3 +242,23 @@ export function createSafeFetch(options: SafeFetchOptions): SafeFetch {
   };
   return Object.assign(safeFetch, { [guarded]: true as const });
 }
+
+/** A DNS lookup of one record type, as `Deno.resolveDns` makes it. */
+export type ResolveDns = (hostname: string, type: 'A' | 'AAAA') => Promise<string[]>;
+
+/**
+ * `ResolveHost` from a DNS lookup: the host's A and AAAA records together. A type the host has no
+ * records of (`NotFound`) adds none; any other failure, with no records found, is thrown.
+ */
+export function dnsResolver(resolveDns: ResolveDns): ResolveHost {
+  return async (hostname) => {
+    const lookups = await Promise.allSettled([resolveDns(hostname, 'A'), resolveDns(hostname, 'AAAA')]);
+    const addresses = lookups.flatMap((lookup) => (lookup.status === 'fulfilled' ? lookup.value : []));
+    const failure = lookups.find(
+      (lookup): lookup is PromiseRejectedResult =>
+        lookup.status === 'rejected' && !(lookup.reason instanceof Error && lookup.reason.name === 'NotFound'),
+    );
+    if (addresses.length === 0 && failure) throw failure.reason;
+    return addresses;
+  };
+}
