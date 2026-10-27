@@ -21,10 +21,14 @@ insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_typ
 values ('recipe-images', 'recipe-images', false, 3145728, array['image/jpeg']);
 
 -- Owner-only: the first folder of the path is the user's id. Upload (insert, and update for a save
--- sent again), read (signed URLs) and delete (with the Recipe).
+-- sent again), read (signed URLs) and delete (with the Recipe). An upload is only ever a Recipe's
+-- screenshot, {user id}/{recipe id}.jpg, so a user can't keep other files in their folder.
 create policy "Users upload recipe images to their own folder"
   on storage.objects for insert to authenticated
-  with check (bucket_id = 'recipe-images' and (storage.foldername(name))[1] = (select auth.uid())::text);
+  with check (
+    bucket_id = 'recipe-images'
+    and name ~ ('^' || (select auth.uid())::text || '/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jpg$')
+  );
 
 create policy "Users read their own recipe images"
   on storage.objects for select to authenticated
@@ -33,7 +37,10 @@ create policy "Users read their own recipe images"
 create policy "Users replace their own recipe images"
   on storage.objects for update to authenticated
   using (bucket_id = 'recipe-images' and (storage.foldername(name))[1] = (select auth.uid())::text)
-  with check (bucket_id = 'recipe-images' and (storage.foldername(name))[1] = (select auth.uid())::text);
+  with check (
+    bucket_id = 'recipe-images'
+    and name ~ ('^' || (select auth.uid())::text || '/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jpg$')
+  );
 
 create policy "Users delete their own recipe images"
   on storage.objects for delete to authenticated

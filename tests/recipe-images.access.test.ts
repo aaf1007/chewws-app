@@ -147,3 +147,17 @@ test('a stranger can’t add a caption or screenshot to someone else’s Draft',
   expect(withShot).toMatchObject({ data: 'gone', error: null });
   expect(await owner.data.getRecipe(id)).toEqual(before);
 });
+
+test('a user can upload only {their id}/{a uuid}.jpg, nothing else in their folder', async () => {
+  const owner = await signInAttacker('owner');
+  const upload = (name: string) =>
+    owner.client.storage.from(BUCKET).upload(`${owner.userId}/${name}`, screenshotBytes(), { contentType: 'image/jpeg' });
+
+  for (const name of ['notes.jpg', 'a/b.jpg', `${owner.data.newDraftId()}.jpeg`, `${owner.data.newDraftId()}.jpg.jpg`, `x${owner.data.newDraftId()}.jpg`]) {
+    expect((await upload(name)).error, name).not.toBeNull();
+  }
+  const id = owner.data.newDraftId();
+  expect((await upload(`${id}.jpg`)).error).toBeNull();
+  const files = await owner.client.storage.from(BUCKET).list(owner.userId);
+  expect(files.data?.map((file) => file.name)).toEqual([`${id}.jpg`]);
+});
