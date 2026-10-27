@@ -10,8 +10,8 @@
 import { isMetaHost } from './detect-source.ts';
 import { SourceError } from './source-error.ts';
 
-/** Every address `hostname` resolves to (A and AAAA). Empty when it has none. */
-export type ResolveHost = (hostname: string) => Promise<string[]>;
+/** Every address `hostname` resolves to (A and AAAA). Empty when it has none. Stops when `signal` aborts. */
+export type ResolveHost = (hostname: string, signal?: AbortSignal) => Promise<string[]>;
 
 export type GuardedRequest = {
   signal: AbortSignal;
@@ -138,7 +138,12 @@ export function isPublicAddress(address: string): boolean {
 const refused = (message: string) => new SourceError('unreadable', message);
 
 /** Checks a link before it's requested. Throws `unreadable` for one the server won't fetch. */
-async function checkLink(url: URL, resolveHost: ResolveHost, onlyHosts?: (host: string) => boolean): Promise<void> {
+async function checkLink(
+  url: URL,
+  resolveHost: ResolveHost,
+  signal: AbortSignal,
+  onlyHosts?: (host: string) => boolean,
+): Promise<void> {
   if (url.protocol !== 'https:') throw refused(`Only https links are read, not ${url.protocol}.`);
   if (url.username || url.password) throw refused('A link with a user name or password is not read.');
   if (url.port !== '' && url.port !== '443') throw refused(`Port ${url.port} is not read.`);
@@ -151,8 +156,9 @@ async function checkLink(url: URL, resolveHost: ResolveHost, onlyHosts?: (host: 
   if (onlyHosts && !onlyHosts(host)) throw refused(`${host} is not a host this link may lead to.`);
   let addresses: string[];
   try {
-    addresses = await resolveHost(host);
+    addresses = await resolveHost(host, signal);
   } catch (e) {
+    if (signal.aborted) throw e;
     throw new SourceError('unreachable', `Couldn't look up ${host}.`, { cause: e });
   }
   if (addresses.length === 0) throw new SourceError('unavailable', `${host} doesn't exist.`);
@@ -202,7 +208,7 @@ export function createSafeFetch(options: SafeFetchOptions): SafeFetch {
     const signal = AbortSignal.any([request.signal, timeout]);
     try {
       for (let redirects = 0; ; redirects++) {
-        await checkLink(url, resolveHost, request.onlyHosts);
+        await checkLink(url, resolveHost, signal, request.onlyHosts);
         signal.throwIfAborted();
         let response: Response;
         try {
@@ -244,15 +250,19 @@ export function createSafeFetch(options: SafeFetchOptions): SafeFetch {
 }
 
 /** A DNS lookup of one record type, as `Deno.resolveDns` makes it. */
-export type ResolveDns = (hostname: string, type: 'A' | 'AAAA') => Promise<string[]>;
+export type ResolveDns = (hostname: string, type: 'A' | 'AAAA', options?: { signal?: AbortSignal }) => Promise<string[]>;
 
 /**
  * `ResolveHost` from a DNS lookup: the host's A and AAAA records together. A type the host has no
  * records of (`NotFound`) adds none; any other failure, with no records found, is thrown.
  */
 export function dnsResolver(resolveDns: ResolveDns): ResolveHost {
-  return async (hostname) => {
-    const lookups = await Promise.allSettled([resolveDns(hostname, 'A'), resolveDns(hostname, 'AAAA')]);
+  return async (hostname, signal) => {
+    const lookups = await Promise.allSettled([
+      resolveDns(hostname, 'A', { signal }),
+      resolveDns(hostname, 'AAAA', { signal }),
+    ]);
+    signal?.throwIfAborted();
     const addresses = lookups.flatMap((lookup) => (lookup.status === 'fulfilled' ? lookup.value : []));
     const failure = lookups.find(
       (lookup): lookup is PromiseRejectedResult =>

@@ -290,3 +290,42 @@ describe('dnsResolver', () => {
     await expect(broken('cooking.example.com')).rejects.toThrow('connection refused');
   });
 });
+
+describe('the time limit covers the DNS lookup', () => {
+  /** A lookup that answers only when its signal aborts (then it fails, as Deno.resolveDns does). */
+  const hangingLookup = (host: string, signal?: AbortSignal) =>
+    new Promise<string[]>((_, reject) => {
+      signal?.addEventListener('abort', () => reject(new DOMException(`Lookup of ${host} aborted`, 'AbortError')));
+    });
+
+  test('a lookup that never answers is given up after the time limit, as unreachable', async () => {
+    const requested: string[] = [];
+    const safeFetch = createSafeFetch({
+      timeoutMs: 50,
+      resolveHost: hangingLookup,
+      fetch: async (input) => {
+        requested.push(String(input));
+        return new Response('');
+      },
+    });
+
+    await expect(safeFetch('https://slow-dns.example.com/', page)).rejects.toMatchObject({
+      name: 'SourceError',
+      reason: 'unreachable',
+    });
+    expect(requested).toEqual([]);
+  });
+
+  test('dnsResolver hands the signal to each lookup', async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    const resolve = dnsResolver(async (_, __, options) => {
+      signals.push(options?.signal);
+      return ['93.184.216.34'];
+    });
+    const caller = new AbortController();
+
+    await resolve('cooking.example.com', caller.signal);
+
+    expect(signals).toEqual([caller.signal, caller.signal]);
+  });
+});
