@@ -1,7 +1,8 @@
 // POST /functions/v1/build-draft {recipeId}: builds one of the caller's Drafts in the background.
 // A thin Deno entry (docs/agents/verify.md): it checks the caller, answers 202 at once, and runs
 // buildDraft (supabase/functions/_shared/draft-builder.ts) with the real source reader (TikTok,
-// YouTube and web pages, every read through the guarded fetch) and Claude, or, with
+// YouTube and web pages, every read through the guarded fetch; Instagram never), the user's
+// screenshot from Storage and Claude, or, with
 // DRAFT_FIXTURES=1 on a local stack only, with the canned ones the tests use.
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -11,6 +12,7 @@ import { claudeExtractor, ExtractError, type Extract } from '../_shared/claude-e
 import { buildDraft, type Rpc } from '../_shared/draft-builder.ts';
 import { fixtureAdapters, fixtureExtract } from '../_shared/draft-fixtures.ts';
 import { createSafeFetch, dnsResolver } from '../_shared/safe-fetch.ts';
+import { screenshotLoader } from '../_shared/screenshot.ts';
 import { createSourceReader, realSourceAdapters } from '../_shared/source-reader.ts';
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
@@ -48,6 +50,14 @@ const extract: Extract = fixtures
     ? claudeExtractor(new Anthropic({ apiKey: anthropicKey, maxRetries: 2 }))
     : notSetUp;
 
+// A screenshot the user added, from the private bucket, as the service role. The path is the one
+// save_from_link made for the Draft's owner; this function checked the Draft is the caller's.
+const loadScreenshot = screenshotLoader(async (path) => {
+  const { data, error } = await admin.storage.from('recipe-images').download(path);
+  if (error) throw new Error(`Couldn't download the screenshot ${path}: ${error.message}`);
+  return data.arrayBuffer();
+});
+
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
@@ -79,7 +89,7 @@ Deno.serve(async (request) => {
   if (!draft) return json(404, { error: 'No such Draft.' });
 
   EdgeRuntime.waitUntil(
-    buildDraft(recipeId, { rpc, readSource, extract }).catch((e) => console.error('build-draft:', e)),
+    buildDraft(recipeId, { rpc, readSource, extract, loadScreenshot }).catch((e) => console.error('build-draft:', e)),
   );
   return json(202, { status: 'building' });
 });

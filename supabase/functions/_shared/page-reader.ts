@@ -255,8 +255,11 @@ const HTML = ['text/html', 'application/xhtml+xml'];
 
 /**
  * The page adapter: one guarded fetch of the page, HTML only. A page that isn't HTML (a PDF, an
- * image), or that won't show itself to the server (a 4xx: deleted, paywalled, or a site that turns
- * away anything but a browser), still saves, with no preview: an empty Draft to fill in by hand.
+ * image) still saves, with no preview: an empty Draft to fill in by hand. One that won't show
+ * itself to the server (a 4xx: paywalled, deleted, or a site that turns away anything but a
+ * browser, as big recipe sites do with 402) is `refused`: the app couldn't read it, and the user
+ * can paste the recipe or add a screenshot (decisions, "when a source can't be read"). It never
+ * pretends to be a browser to get past one.
  */
 export function pageAdapter(safeFetch: SafeFetch): (url: string, signal: AbortSignal) => Promise<PageInfo> {
   return async (url, signal) => {
@@ -264,6 +267,7 @@ export function pageAdapter(safeFetch: SafeFetch): (url: string, signal: AbortSi
     if (response.status >= 500 || response.status === 429) {
       throw new SourceError('unreachable', `${response.url} answered ${response.status}.`);
     }
+    if (response.status >= 400) throw new SourceError('refused', `${response.url} answered ${response.status}.`);
     if (response.status >= 300 || response.body === null) {
       return { url: response.url, title: null, imageUrl: null, siteRecipe: null };
     }

@@ -43,6 +43,7 @@ import {
   type RecipeInput,
   type RecipeSummary,
   type SaveFromLinkResult,
+  type CaptionInput,
   type SessionState,
   type ShoppingList,
   type ShoppingListId,
@@ -62,8 +63,9 @@ type ShoppingListAmountRow = Database['public']['Tables']['shopping_list_amounts
 type SourceVideoRow = Database['public']['Tables']['source_videos']['Row'];
 type BuildFailureRow = Database['public']['Enums']['draft_build_failure'];
 
-const SOURCE_VIDEO =
-  'source_video:source_videos(platform, original_url, creator_name, creator_url, thumbnail_url, fetched_at)';
+const SOURCE_VIDEO_COLUMNS = 'platform, original_url, creator_name, creator_url, thumbnail_url, fetched_at, screenshot_path';
+
+const SOURCE_VIDEO = `source_video:source_videos(${SOURCE_VIDEO_COLUMNS})`;
 
 const RECIPE_WITH_LINES = `*, recipe_lines(position, original_text, amount_text, ingredient:ingredients(id, name)), ${SOURCE_VIDEO}`;
 
@@ -79,6 +81,12 @@ const BUILD_ATTEMPTS = 3;
 const YOUTUBE_DATA_MAX_AGE_MS = 30 * 24 * 60 * 60_000;
 /** How long opening a Recipe waits for that refresh before showing what's stored. */
 const REFRESH_WAIT_MS = 5_000;
+/** The private bucket of the users' own images: the screenshots they add (decisions 05). */
+const RECIPE_IMAGES = 'recipe-images';
+/** How long a link to one of those images works (decisions 05). */
+const SCREENSHOT_URL_SECONDS = 60 * 60;
+/** The longest caption a user can paste (the 05 migration checks it too). */
+const MAX_CAPTION_LENGTH = 10_000;
 
 const FAILURES: Record<BuildFailureRow, DraftBuildFailure> = {
   source_unavailable: 'sourceUnavailable',
@@ -86,6 +94,8 @@ const FAILURES: Record<BuildFailureRow, DraftBuildFailure> = {
   unreadable: 'unreadable',
   timed_out: 'timedOut',
   not_set_up: 'notSetUp',
+  no_caption: 'noCaption',
+  source_refused: 'sourceRefused',
 };
 
 type BuildColumns = Pick<
@@ -109,8 +119,11 @@ function toDraftBuild(row: BuildColumns, now: number): DraftBuild {
 
 type SourceVideoColumns = Pick<
   SourceVideoRow,
-  'platform' | 'original_url' | 'creator_name' | 'creator_url' | 'thumbnail_url' | 'fetched_at'
+  'platform' | 'original_url' | 'creator_name' | 'creator_url' | 'thumbnail_url' | 'fetched_at' | 'screenshot_path'
 >;
+
+/** Links to the user's screenshots, by their path in the bucket. */
+type ScreenshotUrls = ReadonlyMap<string, string>;
 
 /** Whether a Source Video holds YouTube data read over 30 days ago, as of `now`. */
 function isStaleYouTube(row: SourceVideoColumns | null, now: number): boolean {
@@ -121,15 +134,26 @@ function isStaleYouTube(row: SourceVideoColumns | null, now: number): boolean {
   );
 }
 
-function toSourceVideo(row: SourceVideoColumns | null): SourceVideo | null {
+function toSourceVideo(row: SourceVideoColumns | null, screenshots: ScreenshotUrls = new Map()): SourceVideo | null {
   if (!row) return null;
+  const screenshotUrl = row.screenshot_path === null ? undefined : screenshots.get(row.screenshot_path);
   return {
     platform: row.platform,
     originalUrl: row.original_url,
     creatorName: row.creator_name,
     creatorUrl: row.creator_url,
     thumbnailUrl: row.thumbnail_url,
+    ...(screenshotUrl ? { screenshotUrl } : {}),
   };
+}
+
+/** A caption as pasted: trimmed, null when blank. Too long a caption is refused. */
+function toPastedCaption(caption: string | null | undefined): string | null {
+  const trimmed = caption?.trim() || null;
+  if (trimmed !== null && trimmed.length > MAX_CAPTION_LENGTH) {
+    throw new DataError('caption_too_long', `A caption can be at most ${MAX_CAPTION_LENGTH} characters.`);
+  }
+  return trimmed;
 }
 
 function toRecipe(
@@ -140,8 +164,9 @@ function toRecipe(
     source_video: SourceVideoColumns | null;
   },
   now: number,
+  screenshots: ScreenshotUrls,
 ): Recipe {
-  const sourceVideo = toSourceVideo(row.source_video);
+  const sourceVideo = toSourceVideo(row.source_video, screenshots);
   const fields = {
     id: parseRecipeId(row.id),
     ownerId: parseUserId(row.owner_id),
@@ -694,10 +719,49 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     if (!data) throw new DataError('recipe_not_found', 'That Recipe no longer exists.');
   }
 
+  /** Deletes the Recipe, and the screenshot the user added to it, if any. */
   async function deleteRecipe(id: RecipeId): Promise<void> {
-    const { data, error } = await client.from('recipes').delete().eq('id', id).select('id');
+    const { data, error } = await client
+      .from('recipes')
+      .delete()
+      .eq('id', id)
+      .select(`owner_id, ${SOURCE_VIDEO}`);
     if (error) fail(error);
-    if (data.length === 0) throw new DataError('recipe_not_found', 'That Recipe no longer exists.');
+    const deleted = data[0];
+    if (!deleted) throw new DataError('recipe_not_found', 'That Recipe no longer exists.');
+    const screenshot = deleted.source_video?.screenshot_path;
+    // Best effort: the Recipe is gone either way, and an image left behind is only ever the user's.
+    if (screenshot) await client.storage.from(RECIPE_IMAGES).remove([screenshot]).catch(() => {});
+  }
+
+  /**
+   * Links (an hour long) to the screenshots behind these Source Videos. A link that can't be made
+   * (no signal) is left out, and the screen shows the card without its picture.
+   */
+  async function screenshotUrlsOf(videos: (SourceVideoColumns | null)[]): Promise<ScreenshotUrls> {
+    const paths = videos.flatMap((video) => (video?.screenshot_path ? [video.screenshot_path] : []));
+    if (paths.length === 0) return new Map();
+    const { data, error } = await client.storage.from(RECIPE_IMAGES).createSignedUrls(paths, SCREENSHOT_URL_SECONDS);
+    if (error) return new Map();
+    return new Map(data.flatMap((signed) => (signed.path && signed.signedUrl ? [[signed.path, signed.signedUrl]] : [])));
+  }
+
+  /**
+   * Uploads a screenshot for one of the user's Recipes into their own folder, at
+   * `{user id}/{recipe id}.jpg`, the path `save_from_link` and `add_caption_to_draft` look for.
+   * Sent again (a save tried again), it replaces the first.
+   */
+  async function uploadScreenshot(recipeId: RecipeId, jpeg: ArrayBuffer): Promise<void> {
+    const me = await currentUserId();
+    const { error } = await client.storage
+      .from(RECIPE_IMAGES)
+      .upload(`${me}/${recipeId}.jpg`, jpeg, { contentType: 'image/jpeg', upsert: true });
+    if (!error) return;
+    const status: unknown = Reflect.get(error, 'status');
+    if (typeof status === 'number' && status > 0) {
+      throw new DataError('screenshot_not_saved', `The screenshot couldn't be saved: ${error.message}`, { cause: error });
+    }
+    throw new DataError('offline', "No connection. Try again when you're back online.", { cause: error });
   }
 
   async function readRecipe(id: RecipeId) {
@@ -730,7 +794,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       await waitAtMost(REFRESH_WAIT_MS, requestSourceRefresh(id));
       row = await readRecipe(id);
     }
-    return row ? toRecipe(row, now()) : null;
+    return row ? toRecipe(row, now(), await screenshotUrlsOf([row.source_video])) : null;
   }
 
   /**
@@ -746,11 +810,11 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     });
     const { data, error } = await client
       .from('source_videos')
-      .select('platform, original_url, creator_name, creator_url, thumbnail_url, fetched_at')
+      .select(SOURCE_VIDEO_COLUMNS)
       .eq('recipe_id', id)
       .maybeSingle();
     if (error) fail(error);
-    return toSourceVideo(data);
+    return toSourceVideo(data, await screenshotUrlsOf([data]));
   }
 
   /** The signed-in user's reviewed Recipes, newest first. */
@@ -790,29 +854,62 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   /**
    * Saves a shared link as a Draft and returns at once: the Draft builder fills it in in the
    * background. `url` or `text` (shared text with a link in it) names the link; the first link
-   * wins. TikTok and YouTube videos and any web page can be saved; Instagram can't yet (ticket
-   * 05), nor a YouTube link that isn't a video. `draftId` (from
+   * wins. TikTok and YouTube videos, Instagram Reels and posts, and any web page can be saved; a
+   * YouTube or Instagram link that isn't a video can't. The app never reads Instagram: a Reel is
+   * built from the `caption` the user pasted and the `screenshot` they added (uploaded first, as
+   * their own image), and with neither it's a Draft with no recipe in its caption. `draftId` (from
    * `newDraftId`) names the Draft: send the same one when a save is tried again, after no answer,
    * and it finds the Draft the first try made rather than making another.
    */
-  async function saveFromLink(shared: {
-    url?: string;
-    text?: string;
-    draftId?: RecipeId;
-  }): Promise<SaveFromLinkResult> {
+  async function saveFromLink(
+    shared: {
+      url?: string;
+      text?: string;
+      draftId?: RecipeId;
+    } & CaptionInput,
+  ): Promise<SaveFromLinkResult> {
     const checked = checkSharedLink([shared.url, shared.text].filter(Boolean).join(' '));
     if (checked.status === 'noLink') throw new DataError('no_link', 'There’s no link in what was shared.');
     if (checked.status === 'unsupported') throw new DataError('unsupported_link', checked.message);
     const detected = checked.link;
+    const caption = toPastedCaption(shared.caption);
     const recipeId = shared.draftId ?? newDraftId();
+    if (shared.screenshot) await uploadScreenshot(recipeId, shared.screenshot);
     const { error } = await client.rpc('save_from_link', {
       recipe_id: recipeId,
       url: detected.url,
       platform: detected.platform,
+      pasted_text: caption ?? undefined,
+      with_screenshot: Boolean(shared.screenshot),
     });
     if (error) fail(error);
     await kick(recipeId);
     return { status: 'saved', recipeId };
+  }
+
+  /**
+   * Builds a failed Draft again from a caption the user pasted, a screenshot they added, or both
+   * (in place of any added before): for a source the app couldn't read (`noCaption`,
+   * `sourceRefused`). It counts as a Retry, so only while the Draft has builds left.
+   */
+  async function addCaptionToDraft(id: RecipeId, input: CaptionInput): Promise<void> {
+    const caption = toPastedCaption(input.caption);
+    if (caption === null && !input.screenshot) {
+      throw new DataError('nothing_added', 'Paste the caption or add a screenshot first.');
+    }
+    if (input.screenshot) await uploadScreenshot(id, input.screenshot);
+    const { data, error } = await client.rpc('add_caption_to_draft', {
+      recipe_id: id,
+      pasted_text: caption ?? undefined,
+      with_screenshot: Boolean(input.screenshot),
+    });
+    if (error) fail(error);
+    if (data === 'gone') throw new DataError('recipe_not_found', 'That Draft no longer exists.');
+    if (data === 'noAttemptsLeft') {
+      throw new DataError('no_attempts_left', 'This Draft can’t be built again. Fill it in by hand.');
+    }
+    if (data === 'built') throw new DataError('draft_built', 'This Draft is already built.');
+    await kick(id);
   }
 
   /** The signed-in user's Drafts, in any build state, newest first. */
@@ -827,12 +924,13 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       .order('id');
     if (error) fail(error);
     const at = now();
+    const screenshots = await screenshotUrlsOf(data.map((row) => row.source_video));
     return data.map((row) => ({
       id: parseRecipeId(row.id),
       title: row.title,
       build: toDraftBuild(row, at),
       recipeFound: row.recipe_found,
-      sourceVideo: toSourceVideo(row.source_video),
+      sourceVideo: toSourceVideo(row.source_video, screenshots),
       createdAt: row.created_at,
     }));
   }
@@ -1457,6 +1555,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     listMyRecipes,
     newDraftId,
     saveFromLink,
+    addCaptionToDraft,
     listDrafts,
     resumeDraftBuilds,
     retryDraft,

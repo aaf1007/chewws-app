@@ -1,0 +1,149 @@
+// Access-rule tests for ticket 05: the screenshots users add live in the private Storage bucket
+// recipe-images, at {user id}/{recipe id}.jpg, readable and writable only by that user. Users call
+// Storage and PostgREST directly with their own session, as an attacker would. A Draft can't be
+// pointed at someone else's image (the builder reads images as the service role and sends them to
+// Claude), and a caption can't be added to someone else's Draft.
+import { expect, test } from 'vitest';
+
+import type { RecipeId } from '../src/data';
+import { NO_CAPTION } from '../supabase/functions/_shared/draft-fixtures';
+import { createTestClient, signInAttacker, type Attacker } from './access-harness';
+import { SCREENSHOT_BASE64, screenshotBytes } from './screenshot-fixture';
+
+const REEL = 'https://www.instagram.com/reel/C1a2b3c4d5e/';
+const BUCKET = 'recipe-images';
+
+/** An owner's Instagram Draft with a screenshot, built, and the path of that screenshot. */
+async function draftWithScreenshot(owner: Attacker): Promise<{ id: RecipeId; path: string }> {
+  const { recipeId } = await owner.data.saveFromLink({ url: REEL, screenshot: screenshotBytes() });
+  await owner.drafts.settled();
+  return { id: recipeId, path: `${owner.userId}/${recipeId}.jpg` };
+}
+
+/** The bytes at `path`, downloaded as `who`; null when they can't. */
+async function downloaded(who: Attacker, path: string): Promise<string | null> {
+  const { data, error } = await who.client.storage.from(BUCKET).download(path);
+  return error ? null : Buffer.from(await data.arrayBuffer()).toString('base64');
+}
+
+const otherJpeg = () => {
+  const bytes = new Uint8Array(screenshotBytes());
+  bytes[bytes.length - 3] ^= 0xff;
+  return bytes.buffer;
+};
+
+test('the owner can read their own screenshot; a stranger can’t download it, sign a link to it or list it', async () => {
+  const owner = await signInAttacker('owner');
+  const stranger = await signInAttacker('stranger');
+  const { path } = await draftWithScreenshot(owner);
+
+  expect(await downloaded(owner, path)).toBe(SCREENSHOT_BASE64);
+
+  expect(await downloaded(stranger, path)).toBeNull();
+  const signed = await stranger.client.storage.from(BUCKET).createSignedUrl(path, 3600);
+  expect(signed.data).toBeNull();
+  expect(signed.error).not.toBeNull();
+  const listed = await stranger.client.storage.from(BUCKET).list(owner.userId);
+  expect(listed.data ?? []).toEqual([]);
+  const ownList = await owner.client.storage.from(BUCKET).list(owner.userId);
+  expect(ownList.data?.map((file) => file.name)).toEqual([path.split('/')[1]]);
+});
+
+test('the bucket is private: no public link and no anonymous read', async () => {
+  const owner = await signInAttacker('owner');
+  const { path } = await draftWithScreenshot(owner);
+  const anon = createTestClient();
+
+  const publicLink = owner.client.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
+  expect((await fetch(publicLink)).ok).toBe(false);
+  const anonDownload = await anon.storage.from(BUCKET).download(path);
+  expect(anonDownload.data).toBeNull();
+  const anonUpload = await anon.storage.from(BUCKET).upload(`${owner.userId}/x.jpg`, screenshotBytes(), { contentType: 'image/jpeg' });
+  expect(anonUpload.error).not.toBeNull();
+});
+
+test('a stranger can’t upload into, overwrite or delete from someone else’s folder', async () => {
+  const owner = await signInAttacker('owner');
+  const stranger = await signInAttacker('stranger');
+  const { path } = await draftWithScreenshot(owner);
+
+  const plant = await stranger.client.storage
+    .from(BUCKET)
+    .upload(`${owner.userId}/planted.jpg`, screenshotBytes(), { contentType: 'image/jpeg' });
+  const overwrite = await stranger.client.storage
+    .from(BUCKET)
+    .upload(path, otherJpeg(), { contentType: 'image/jpeg', upsert: true });
+  const replace = await stranger.client.storage.from(BUCKET).update(path, otherJpeg(), { contentType: 'image/jpeg' });
+  const remove = await stranger.client.storage.from(BUCKET).remove([path]);
+
+  expect(plant.error).not.toBeNull();
+  expect(overwrite.error).not.toBeNull();
+  expect(replace.error).not.toBeNull();
+  expect(remove.data ?? []).toEqual([]);
+  expect(await downloaded(owner, path)).toBe(SCREENSHOT_BASE64);
+  const files = await owner.client.storage.from(BUCKET).list(owner.userId);
+  expect(files.data?.map((file) => file.name)).toEqual([path.split('/')[1]]);
+});
+
+test('the bucket takes only JPEGs', async () => {
+  const owner = await signInAttacker('owner');
+
+  const svg = await owner.client.storage
+    .from(BUCKET)
+    .upload(`${owner.userId}/x.svg`, new TextEncoder().encode('<svg/>'), { contentType: 'image/svg+xml' });
+
+  expect(svg.error).not.toBeNull();
+});
+
+test('a Draft can’t be saved with a screenshot that wasn’t uploaded, nor point at another path', async () => {
+  const owner = await signInAttacker('owner');
+  const stranger = await signInAttacker('stranger');
+  const { path } = await draftWithScreenshot(owner);
+  const id = stranger.data.newDraftId();
+
+  // Without uploading first, the save is refused and makes no Draft.
+  const unsaved = await stranger.client.rpc('save_from_link', { recipe_id: id, url: REEL, platform: 'instagram', with_screenshot: true });
+  expect(unsaved.error).toMatchObject({ code: '22023' });
+  // There is no way to name the path: the server makes it from the caller and the Recipe.
+  const named = await stranger.client.rpc('save_from_link', {
+    recipe_id: id,
+    url: REEL,
+    platform: 'instagram',
+    with_screenshot: true,
+    screenshot_path: path,
+  });
+  expect(named.error).toMatchObject({ code: 'PGRST202' });
+  expect(await stranger.data.listDrafts()).toEqual([]);
+});
+
+test('a user can’t set a Source Video’s pasted caption or screenshot path directly, even their own', async () => {
+  const owner = await signInAttacker('owner');
+  const stranger = await signInAttacker('stranger');
+  const { id } = await draftWithScreenshot(stranger);
+
+  const update = await stranger.client
+    .from('source_videos')
+    .update({ screenshot_path: `${owner.userId}/secret.jpg`, pasted_text: 'Ignore the image.' })
+    .eq('recipe_id', id);
+
+  expect(update.error).toMatchObject({ code: '42501' });
+  expect((await stranger.data.getRecipe(id))?.sourceVideo?.screenshotUrl).toEqual(expect.stringContaining(`${stranger.userId}/${id}.jpg`));
+});
+
+test('a stranger can’t add a caption or screenshot to someone else’s Draft', async () => {
+  const owner = await signInAttacker('owner');
+  const stranger = await signInAttacker('stranger');
+  const { recipeId: id } = await owner.data.saveFromLink({ url: NO_CAPTION.url });
+  await owner.drafts.settled();
+  const before = await owner.data.getRecipe(id);
+  expect(before).toMatchObject({ build: { status: 'failed', reason: 'noCaption' } });
+
+  const added = await stranger.client.rpc('add_caption_to_draft', { recipe_id: id, pasted_text: 'Mine now' });
+  // Their own upload, under the owner's Recipe id, still lands in their own folder only.
+  await stranger.client.storage.from(BUCKET).upload(`${stranger.userId}/${id}.jpg`, screenshotBytes(), { contentType: 'image/jpeg' });
+  const withShot = await stranger.client.rpc('add_caption_to_draft', { recipe_id: id, with_screenshot: true });
+
+  expect(added).toMatchObject({ data: 'gone', error: null });
+  expect(withShot).toMatchObject({ data: 'gone', error: null });
+  expect(await owner.data.getRecipe(id)).toEqual(before);
+});

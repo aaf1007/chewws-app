@@ -10,6 +10,7 @@ import type { Database } from '../src/data/database.types';
 import type { Extract } from '../supabase/functions/_shared/claude-extractor';
 import { buildDraft, type BuildOutcome, type Rpc } from '../supabase/functions/_shared/draft-builder';
 import { fixtureAdapters, fixtureExtract } from '../supabase/functions/_shared/draft-fixtures';
+import { screenshotLoader } from '../supabase/functions/_shared/screenshot';
 import { refreshSourceVideo } from '../supabase/functions/_shared/source-refresher';
 import { createSourceReader, type SourceAdapters } from '../supabase/functions/_shared/source-reader';
 
@@ -76,12 +77,19 @@ export function inProcessSourceRefresh(client: SupabaseClient<Database>, fakes: 
   };
 }
 
+/** A screenshot the user added, downloaded as the build-draft function does: as the service role. */
+const loadScreenshot = screenshotLoader(async (path) => {
+  const { data, error } = await admin.storage.from('recipe-images').download(path);
+  if (error) throw error;
+  return data.arrayBuffer();
+});
+
 export function inProcessDraftBuilds(fakes: DraftFakes = {}) {
   const readSource = createSourceReader(fakeAdapters(fakes)).read;
   const extract = fakes.extract ?? fixtureExtract;
   const running = new Set<Promise<unknown>>();
   const build = (recipeId: string) => {
-    const done = buildDraft(recipeId, { rpc: serviceRpc, readSource, extract });
+    const done = buildDraft(recipeId, { rpc: serviceRpc, readSource, extract, loadScreenshot });
     running.add(done);
     void done.finally(() => running.delete(done)).catch(() => {});
     return done;

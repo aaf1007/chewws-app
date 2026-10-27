@@ -1,4 +1,4 @@
-import type { DraftBuildFailure, DraftSummary, SourcePlatform, SourceVideo } from '@/data';
+import { couldNotReadSource, type DraftBuildFailure, type DraftSummary, type SourcePlatform, type SourceVideo } from '@/data';
 
 /** The platform's name as the app shows it; a web page's is its site ("cooking.example.com"). */
 export function platformName(platform: SourcePlatform, url?: string): string {
@@ -41,7 +41,43 @@ export function failureMessage(reason: DraftBuildFailure, video?: SourceVideo): 
       return 'This took too long.';
     case 'notSetUp':
       return "Drafts can't be built yet: the Draft builder isn't set up.";
+    case 'noCaption':
+      return `${platform} didn't share this video's caption.`;
+    case 'sourceRefused':
+      return `${platform} didn't let the app read this page.`;
   }
+}
+
+/** What the source is, in "Couldn't read this …": "TikTok", "YouTube video", "page". */
+function sourceNoun(video?: SourceVideo): string {
+  switch (video?.platform) {
+    case 'web':
+      return 'page';
+    case 'youtube':
+      return 'YouTube video';
+    case 'instagram':
+      return 'Reel';
+    default:
+      return 'TikTok';
+  }
+}
+
+/**
+ * The banner on a Draft whose source the app couldn't read (decisions, "when a source can't be
+ * read"): not "recipe not in caption", but what to add instead. `canAdd`: builds are left.
+ */
+export function couldNotReadCopy(
+  reason: DraftBuildFailure,
+  video: SourceVideo | undefined,
+  canAdd: boolean,
+): { title: string; message: string } {
+  const page = video?.platform === 'web';
+  const add = canAdd
+    ? page
+      ? 'Paste the recipe or add a screenshot of it, and the app reads it from that.'
+      : 'Paste the caption or add a screenshot of it, and the app reads the recipe from that.'
+    : 'Fill it in by hand.';
+  return { title: `Couldn't read this ${sourceNoun(video)}`, message: `${failureMessage(reason, video)} ${add}` };
 }
 
 /** The banner on a Draft the builder found no recipe in, worded for where it looked. */
@@ -65,7 +101,11 @@ export function notFoundCopy(platform: SourcePlatform | undefined): { title: str
 /** One line saying where a Draft is, for the Drafts list. */
 export function draftStatusLine(draft: Pick<DraftSummary, 'build' | 'recipeFound' | 'sourceVideo'>): string {
   if (draft.build.status === 'building') return 'Building…';
-  if (draft.build.status === 'failed') return "Couldn't build this Draft";
+  if (draft.build.status === 'failed') {
+    return couldNotReadSource(draft.build.reason)
+      ? `Couldn't read this ${sourceNoun(draft.sourceVideo ?? undefined)}`
+      : "Couldn't build this Draft";
+  }
   return draft.recipeFound ? 'Ready to review' : notFoundCopy(draft.sourceVideo?.platform).title;
 }
 

@@ -80,6 +80,28 @@ export function youtubeVideoId(link: string): string | null {
   return id && YOUTUBE_ID.test(id) ? id : null;
 }
 
+const INSTAGRAM_SHORTCODE = /^[\w-]{5,40}$/u;
+
+/**
+ * The shortcode of an Instagram Reel or post: `instagram.com/reel/{code}`, `/reels/{code}`,
+ * `/p/{code}` (also under a username, `instagram.com/{user}/reel/{code}`), or `instagr.am/p/{code}`.
+ * Null for any other link, such as a profile. Read from the link alone: the app never asks
+ * Instagram anything (decisions 05).
+ */
+export function instagramShortcode(link: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(link);
+  } catch {
+    return null;
+  }
+  if (!isInstagram(url.hostname.toLowerCase())) return null;
+  const path = url.pathname.split('/').filter(Boolean);
+  const at = path.findIndex((part) => part === 'reel' || part === 'reels' || part === 'p');
+  const code = at >= 0 && at <= 1 ? path[at + 1] : undefined;
+  return code && INSTAGRAM_SHORTCODE.test(code) ? code : null;
+}
+
 /**
  * The link in what was shared and its platform: tiktok.com and its short-link hosts (vm., vt.)
  * are TikTok, youtube.com and youtu.be are YouTube, instagram.com and instagr.am are Instagram;
@@ -96,8 +118,8 @@ export function detectSource(shared: string): DetectedSource | null {
 }
 
 /**
- * Whether what was shared can be saved, and if not, why, in words for the save screen: TikTok,
- * YouTube videos and any other web page can; Instagram can't yet (ticket 05).
+ * Whether what was shared can be saved, and if not, why, in words for the save screen: TikTok and
+ * YouTube videos, Instagram Reels and posts, and any other web page can.
  */
 export type SharedLinkCheck =
   | { status: 'saveable'; link: DetectedSource }
@@ -107,8 +129,8 @@ export type SharedLinkCheck =
 export function checkSharedLink(shared: string): SharedLinkCheck {
   const link = detectSource(shared);
   if (link === null) return { status: 'noLink' };
-  if (link.platform === 'instagram') {
-    return { status: 'unsupported', link, message: 'Instagram links can’t be saved yet.' };
+  if (link.platform === 'instagram' && instagramShortcode(link.url) === null) {
+    return { status: 'unsupported', link, message: 'That Instagram link isn’t a Reel or a post.' };
   }
   if (link.platform === 'youtube' && youtubeVideoId(link.url) === null) {
     return { status: 'unsupported', link, message: 'That YouTube link isn’t a video.' };

@@ -7,7 +7,7 @@
 
 import { ExtractError, type Extract, type Extraction } from './claude-extractor.ts';
 import { readPage } from './page-reader.ts';
-import { SourceError, type SourceAdapters, type SourceMaterial, type VideoInfo } from './source-reader.ts';
+import { SourceError, type SourceAdapters, type VideoInfo } from './source-reader.ts';
 
 /** A small striped picture, inline, so a Source Video's thumbnail loads with no network. */
 const THUMBNAIL =
@@ -228,7 +228,61 @@ export const EXPIRED_THUMBNAIL: Fixture = {
   },
 };
 
-const FIXTURES = [FULL_RECIPE, LINK_IN_BIO, UNREADABLE, SITE_LINK, YOUTUBE_SHORT, EXPIRED_THUMBNAIL];
+/**
+ * A TikTok whose oEmbed answers as TikTok's has since October 2026: no caption, creator or
+ * thumbnail. The app can't read it; the user pastes the caption or adds a screenshot.
+ */
+export const NO_CAPTION: Fixture = {
+  url: 'https://www.tiktok.com/@quietcook/video/7400000000000000005',
+  video: { externalId: '7400000000000000005', caption: null, creatorName: null, creatorUrl: null, thumbnailUrl: null },
+  extraction: { title: '', recipeFound: false, lines: [], steps: [] },
+};
+
+const FIXTURES = [FULL_RECIPE, LINK_IN_BIO, UNREADABLE, SITE_LINK, YOUTUBE_SHORT, EXPIRED_THUMBNAIL, NO_CAPTION];
+
+/** A caption the user pastes (an Instagram Reel's, or one TikTok didn't give), with Claude's answer. */
+export const PASTED_CAPTION = {
+  text: `Sticky honey garlic chicken 🍯🧄 Save this one!
+Ingredients:
+- 4 chicken thighs
+- 3 tbsp honey
+- 3 cloves garlic, minced
+- 2 tbsp soy sauce
+- 1 tbsp butter
+Sear the chicken skin-side down until crisp. Add the butter, garlic, honey and soy sauce and simmer until sticky.
+#dinner #chicken`,
+  extraction: {
+    title: 'Honey garlic chicken',
+    recipeFound: true,
+    lines: [
+      { text: '4 chicken thighs', amount: '4', ingredient: 'chicken thighs' },
+      { text: '3 tbsp honey', amount: '3 tbsp', ingredient: 'honey' },
+      { text: '3 cloves garlic, minced', amount: '3 cloves', ingredient: 'garlic' },
+      { text: '2 tbsp soy sauce', amount: '2 tbsp', ingredient: 'soy sauce' },
+      { text: '1 tbsp butter', amount: '1 tbsp', ingredient: 'butter' },
+    ],
+    steps: [
+      'Sear the chicken skin-side down until crisp.',
+      'Add the butter, garlic, honey and soy sauce and simmer until sticky.',
+    ],
+  } satisfies Extraction,
+};
+
+/** Claude's answer for any screenshot the user adds (with no caption pasted beside it). */
+export const SCREENSHOT_RECIPE: Extraction = {
+  title: 'Miso-glazed salmon',
+  recipeFound: true,
+  lines: [
+    { text: '2 salmon fillets', amount: '2', ingredient: 'salmon fillets' },
+    { text: '2 tbsp white miso', amount: '2 tbsp', ingredient: 'white miso' },
+    { text: '1 tbsp maple syrup', amount: '1 tbsp', ingredient: 'maple syrup' },
+    { text: '1 tsp sesame seeds', amount: '1 tsp', ingredient: 'sesame seeds' },
+  ],
+  steps: ['Brush the salmon with the miso and maple syrup.', 'Grill for 8 minutes and scatter over the sesame seeds.'],
+};
+
+/** A recipe site that turns the server away, as big ones do with 402: the app can't read it. */
+export const REFUSED_PAGE = { url: 'https://paywall.example.com/recipes/tonkotsu-ramen', status: 402 };
 
 const youtubeFixture = (videoId: string) =>
   FIXTURES.find((f) => f.video.externalId === videoId && !/tiktok\.com/u.test(f.url));
@@ -251,6 +305,8 @@ function adapters(later: boolean): SourceAdapters {
       return video(fixture);
     },
     async page(url) {
+      // What the real page adapter makes of a 4xx (page-reader.ts).
+      if (url === REFUSED_PAGE.url) throw new SourceError('refused', `${url} answered ${REFUSED_PAGE.status}.`);
       const page = PAGES.find((p) => p.url === url);
       if (!page) throw new SourceError('unavailable', `No fixture for ${url}.`);
       return { url, ...readPage(page.html, url) };
@@ -265,16 +321,21 @@ export const laterFixtureAdapters: SourceAdapters = adapters(true);
 const NOT_FOUND = (fixture: Fixture): Extraction => ({ title: fixture.extraction.title, recipeFound: false, lines: [], steps: [] });
 
 /**
- * Claude as the fixtures have it: the canned answer for each canned caption, or for a recipe
- * site's Recipe shared directly. A caption that only links to its recipe gives it only when the
- * site's Recipe came with it, as Claude would.
+ * Claude as the fixtures have it: the canned answer for each canned caption (or the same caption
+ * pasted by the user), for a recipe site's Recipe shared directly or linked from a pasted caption,
+ * and for any screenshot. A caption that only links to its recipe gives it only when the site's
+ * Recipe came with it, as Claude would.
  */
-export const fixtureExtract: Extract = async (material: SourceMaterial) => {
+export const fixtureExtract: Extract = async (material) => {
   if (material.caption === null && material.siteRecipe) {
     const page = PAGES.find((p) => p.url === material.recipeSiteUrl);
     if (page?.extraction) return page.extraction;
   }
-  const fixture = FIXTURES.find((f) => f.video.caption === material.caption);
+  const pasted = material.pastedText?.trim() || null;
+  if (material.caption === null && pasted === PASTED_CAPTION.text) return PASTED_CAPTION.extraction;
+  if (material.caption === null && pasted === null && material.screenshot) return SCREENSHOT_RECIPE;
+  const read = material.caption ?? pasted;
+  const fixture = read === null ? undefined : FIXTURES.find((f) => f.video.caption === read);
   if (!fixture || fixture === UNREADABLE) throw new ExtractError('unreadable', 'No canned answer for this caption.');
   if (fixture.recipeOnSite && material.siteRecipe === null) return NOT_FOUND(fixture);
   return fixture.extraction;
