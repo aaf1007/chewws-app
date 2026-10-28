@@ -41,6 +41,7 @@ net_control=$!
 # doesn't get canned answers.
 put_back() {
   local status=$?
+  [ -n "${maestro_pid:-}" ] && stop_maestro
   kill "$net_control" 2>/dev/null || true
   wait "$net_control" 2>/dev/null || true
   scripts/net.sh online >/dev/null || true
@@ -67,6 +68,20 @@ fi
 # The flows reach Edge Functions too; serve this worktree's (no-op when already served).
 scripts/functions.sh e2e
 
+# How long one flow may take (the longest take about 4 minutes). A flow past it is stopped and fails
+# the run: a hung simulator driver (an XCTest request that never answers) would otherwise hold
+# Maestro, and this run, for ever.
+flow_timeout="${E2E_FLOW_TIMEOUT:-600}"
+maestro_pid=""
+stop_maestro() {
+  pkill -TERM -P "$maestro_pid" 2>/dev/null || true
+  kill -TERM "$maestro_pid" 2>/dev/null || true
+  for _ in $(seq 50); do kill -0 "$maestro_pid" 2>/dev/null || break; sleep 0.1; done
+  pkill -KILL -P "$maestro_pid" 2>/dev/null || true
+  kill -KILL "$maestro_pid" 2>/dev/null || true
+  maestro_pid=""
+}
+
 failed=()
 for flow in "${flows[@]}"; do
   scripts/net.sh online >/dev/null
@@ -79,7 +94,23 @@ for flow in "${flows[@]}"; do
   # The reset restarts auth and the functions runtime, which Kong may still look for at their old
   # addresses; this waits until both answer through Kong (see scripts/stack-ready.sh).
   scripts/stack-ready.sh
-  maestro test "$flow" || failed+=("$flow")
+  maestro test "$flow" &
+  maestro_pid=$!
+  waited=0
+  while kill -0 "$maestro_pid" 2>/dev/null && [ "$waited" -lt "$flow_timeout" ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  if kill -0 "$maestro_pid" 2>/dev/null; then
+    stop_maestro
+    echo "== $flow: no result after ${flow_timeout}s (E2E_FLOW_TIMEOUT), so Maestro was stopped." >&2
+    echo "The simulator's driver may be hung; see the newest ~/.maestro/tests/*/maestro.log." >&2
+    echo "Terminate the app (xcrun simctl terminate booted com.ant1007.recipeapp) before running again." >&2
+    failed+=("$flow (timed out)")
+    break
+  fi
+  wait "$maestro_pid" || failed+=("$flow")
+  maestro_pid=""
 done
 
 if [ "${#failed[@]}" -gt 0 ]; then
