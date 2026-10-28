@@ -87,9 +87,15 @@ for flow in "${flows[@]}"; do
   scripts/net.sh online >/dev/null
   echo "== $flow: resetting the local database"
   if ! out="$(supabase db reset 2>&1)"; then
-    echo "$out" >&2
-    echo "supabase db reset failed. Is local Supabase running? npm run dev:up" >&2
-    exit 1
+    # The reset itself (migrations, seed) is done once it restarts the containers; on a busy Docker
+    # Storage can take longer to report healthy than the CLI waits. stack-ready.sh waits for it.
+    if [[ "$out" == *"Restarting containers..."* && "$out" == *"container is not ready"* ]]; then
+      echo "== the database is reset; a container is still starting (${out##*$'\n'}), waiting for it"
+    else
+      echo "$out" >&2
+      echo "supabase db reset failed. Is local Supabase running? npm run dev:up" >&2
+      exit 1
+    fi
   fi
   # The reset restarts auth and the functions runtime, which Kong may still look for at their old
   # addresses; this waits until both answer through Kong (see scripts/stack-ready.sh).
