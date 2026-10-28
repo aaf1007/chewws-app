@@ -168,3 +168,8 @@ onFlowStart:
 - assertVisible:
     id: "source-video-placeholder"
 - assertVisible: "Instagram, Instagram Reel, Watch on Instagram"
+# A caption or screenshot can still be added to it, from the banner.
+- tapOn: "Add caption or screenshot"
+- assertVisible:
+    id: "add-screenshot"
+- assertVisible: "Paste caption"

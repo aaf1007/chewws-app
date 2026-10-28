@@ -61,6 +61,9 @@ export default function ReviewDraft() {
   const [state, reload] = useWhileFocused(() => data.getRecipe(parseRecipeId(rawId)), {
     keepPolling: stillBuilding,
   });
+  // Where the app couldn't read the source, the caption inputs are the way on and show at once;
+  // on other failed Drafts, and ones with no recipe found, they open from the banner.
+  const [addOpened, setAddOpened] = useState(false);
 
   if (state.status !== 'loaded' || state.value === null) {
     return (
@@ -84,6 +87,10 @@ export default function ReviewDraft() {
   const notFound = notFoundCopy(recipe.sourceVideo?.platform);
   const readFrom = recipe.sourceVideo ? sourceText(recipe.sourceVideo.platform) : 'caption';
   const couldNotRead = build.status === 'failed' && couldNotReadSource(build.reason);
+  const openAdd =
+    recipe.canAddCaption && !couldNotRead && !addOpened
+      ? { label: 'Add caption or screenshot', onPress: () => setAddOpened(true) }
+      : null;
 
   const retry = () =>
     data
@@ -116,15 +123,24 @@ export default function ReviewDraft() {
           kind="failed"
           title="Couldn't build this Draft"
           message={`${failureMessage(build.reason, recipe.sourceVideo)} ${
-            recipe.canAddCaption ? 'Try again, or paste the caption or add a screenshot below.' : 'Fill it in by hand below.'
+            recipe.canAddCaption ? 'Try again, add the caption or a screenshot, or fill it in by hand below.' : 'Fill it in by hand below.'
           }`}
-          actions={build.canRetry ? [{ label: 'Try again', onPress: () => void retry() }] : []}
+          actions={[
+            ...(build.canRetry ? [{ label: 'Try again', onPress: () => void retry() }] : []),
+            ...(openAdd ? [openAdd] : []),
+          ]}
         />
       ) : null}
       {build.status === 'built' && !recipe.recipeFound ? (
-        <DraftBanner kind="notInCaption" title={notFound.title} message={notFound.message} testID="not-in-caption" />
+        <DraftBanner
+          kind="notInCaption"
+          title={notFound.title}
+          message={notFound.message}
+          actions={openAdd ? [openAdd] : []}
+          testID="not-in-caption"
+        />
       ) : null}
-      {recipe.canAddCaption ? (
+      {recipe.canAddCaption && (couldNotRead || addOpened) ? (
         <>
           <AddCaption recipeId={recipe.id} page={recipe.sourceVideo?.platform === 'web'} onAdded={reload} />
           <SectionHeader title="Or fill it in by hand" />
