@@ -36,7 +36,21 @@ done
 
 node scripts/net-control.mjs &
 net_control=$!
-trap 'kill "$net_control" 2>/dev/null || true; scripts/net.sh online >/dev/null' EXIT
+# Whatever happens (all passed, a failure, Ctrl-C), the gateway is back online and the functions are
+# served with the normal settings again (real adapters, supabase/.env), so a hand test afterwards
+# doesn't get canned answers.
+put_back() {
+  local status=$?
+  kill "$net_control" 2>/dev/null || true
+  wait "$net_control" 2>/dev/null || true
+  scripts/net.sh online >/dev/null || true
+  scripts/functions.sh >/dev/null \
+    || echo "Couldn't serve the functions with their normal settings again; run scripts/functions.sh." >&2
+  exit "$status"
+}
+trap put_back EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 for _ in $(seq 50); do
   if ! kill -0 "$net_control" 2>/dev/null; then
     echo "scripts/net-control.mjs didn't start (see above), so flows can't go offline." >&2
