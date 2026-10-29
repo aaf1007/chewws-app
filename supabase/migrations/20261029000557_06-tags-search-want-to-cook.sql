@@ -8,15 +8,16 @@
 -- A Tag's name is stored as the user first spelled it, composed (NFC), trimmed with each run of
 -- spaces made one, and with no control or format characters (Unicode Cc and Cf, listed below as
 -- JavaScript's Unicode 16 has them: a zero-width space or a right-to-left override would make two
--- names that look the same different Tags). The data layer's tag-name.ts tidies names so; these
--- checks refuse any other. Unique per user without regard to case.
+-- names that look the same different Tags), except the zero-width joiner (U+200D), which holds
+-- emoji such as 👨‍🍳 together. The data layer's tag-name.ts tidies names so; these checks refuse
+-- any other. Unique per user without regard to case.
 create table public.tags (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
   name text not null
     check (char_length(name) between 1 and 40 and name = btrim(name) and name !~ '\s\s')
     check (name is nfc normalized)
-    check (name !~ '[\u0001-\u001f\u007f-\u009f\u00ad\u0600-\u0605\u061c\u06dd\u070f\u0890-\u0891\u08e2\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb\U000110bd\U000110cd\U00013430-\U0001343f\U0001bca0-\U0001bca3\U0001d173-\U0001d17a\U000e0001\U000e0020-\U000e007f]'),
+    check (name !~ '[\u0001-\u001f\u007f-\u009f\u00ad\u0600-\u0605\u061c\u06dd\u070f\u0890-\u0891\u08e2\u180e\u200b-\u200c\u200e-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb\U000110bd\U000110cd\U00013430-\U0001343f\U0001bca0-\U0001bca3\U0001d173-\U0001d17a\U000e0001\U000e0020-\U000e007f]'),
   created_at timestamptz not null default now()
 );
 

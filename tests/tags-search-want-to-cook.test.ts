@@ -196,6 +196,20 @@ test('Tag names lose control and invisible format characters, and are stored com
   expect(tidyTagNames(['Italian', 'Ital\u200Bian', '\u200B'])).toEqual(['Italian']);
 });
 
+test('a Tag name keeps the zero-width joiner that holds an emoji together', () => {
+  const chef = '\u{1F468}\u200D\u{1F373}';
+  expect(normaliseTagName(`${chef} Chef's\u200B pick\u202E`)).toBe(`${chef} Chef's pick`);
+});
+
+test('a Tag with a joined emoji is saved whole', async () => {
+  const a = await signInTestUser('a');
+  const bread = await a.data.createRecipe(garlicBread);
+
+  expect(await a.data.addTag(bread, '\u{1F468}\u200D\u{1F373} Chef\u200B')).toMatchObject({
+    name: '\u{1F468}\u200D\u{1F373} Chef',
+  });
+});
+
 test('a Tag typed with an invisible character is the Tag without it', async () => {
   const a = await signInTestUser('a');
   const bread = await a.data.createRecipe(garlicBread);

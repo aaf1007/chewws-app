@@ -172,6 +172,10 @@ test('a Tag name with control or invisible format characters, or not composed, i
     expect([name, direct.error]).toMatchObject([name, checkViolation]);
   }
   expect(await owner.data.listTags()).toEqual([]);
+
+  // The zero-width joiner that holds an emoji together is allowed.
+  const chef = await owner.client.rpc('add_tag', { recipe_id: bread, name: '\u{1F468}\u200D\u{1F373} Chef' });
+  expect(chef).toMatchObject({ data: { name: '\u{1F468}\u200D\u{1F373} Chef' }, error: null });
 });
 
 test('nobody sets want_to_cook_at directly, not even on their own Recipe: only through set_want_to_cook', async () => {

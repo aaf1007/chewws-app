@@ -8,14 +8,15 @@ export const MAX_REVIEW_TAGS = 20;
  * A Tag's name as it's stored (decisions 06): accents composed (NFC); each run of spaces, tabs or
  * line breaks made one space; every other control or format character (Unicode Cc and Cf: a
  * zero-width space, a right-to-left override, a soft hyphen) removed, so two names that look the
- * same are the same Tag; trimmed. The 06 migration refuses a name that isn't like this. The case
+ * same are the same Tag, except the zero-width joiner (U+200D), which holds emoji such as 👨‍🍳
+ * together; trimmed. The 06 migration refuses a name that isn't like this. The case
  * is kept as typed: the first spelling of a Tag is the one it keeps. '' when nothing is left.
  */
 export function normaliseTagName(raw: string): string {
   return raw
     .normalize('NFC')
     .replace(/\s+/gu, ' ')
-    .replace(/[\p{Cc}\p{Cf}]/gu, '')
+    .replace(/(?!\u200D)[\p{Cc}\p{Cf}]/gu, '')
     .replace(/ {2,}/gu, ' ')
     .trim()
     .normalize('NFC');
