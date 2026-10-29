@@ -3,16 +3,16 @@
 # The __expo_* params skip the dev client's onboarding, keep its menu from opening at launch and
 # hide its floating tools button, so no dev-only chrome sits over the app while a flow runs.
 # Every permission is allowed up front, as Maestro does by default (with photos unset, the system
-# photo picker shows a banner over the newest photo). That includes notifications, so the prompt
-# the app shows after the first saved link (ticket 07) never stops a flow; a flow that wants the
-# prompt sets `NOTIFICATIONS: unset` in its env.
+# photo picker shows a banner over the newest photo), except notifications, which are denied: the
+# prompt the app shows after the first saved link (ticket 07) never stops a flow, and the app never
+# asks Expo for a push token. A flow that wants the prompt sets `NOTIFICATIONS: unset` in its env.
 appId: com.ant1007.recipeapp
 ---
 - launchApp:
     clearState: true
     permissions:
       all: allow
-      notifications: ${NOTIFICATIONS || 'allow'}
+      notifications: ${NOTIFICATIONS || 'deny'}
 - openLink: "recipeapp://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8081&__expo_disable_onboarding=1&__expo_disable_auto_launch=1&__expo_disable_fab=1"
 - extendedWaitUntil:
     visible: "Sign in as test user (dev)"
