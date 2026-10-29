@@ -1747,6 +1747,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
 
     function keep(cache: ListCache, list: ShoppingList) {
       if (discarded) return; // A read or change that finishes after its user signed out.
+      // A read of a Friend's list that finishes after the phone found it unshared keeps nothing.
+      if (cache !== own && shared.get(list.id) !== cache) return;
       cache.lastSeen = list;
       cache.lastError = null;
       const snapshot = JSON.stringify(list);
