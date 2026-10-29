@@ -34,6 +34,137 @@ export type Database = {
   }
   public: {
     Tables: {
+      cook_plan_members: {
+        Row: {
+          invited_by: string | null
+          joined_at: string
+          plan_id: string
+          user_id: string
+        }
+        Insert: {
+          invited_by?: string | null
+          joined_at?: string
+          plan_id: string
+          user_id: string
+        }
+        Update: {
+          invited_by?: string | null
+          joined_at?: string
+          plan_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cook_plan_members_invited_by_fkey"
+            columns: ["invited_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cook_plan_members_plan_id_fkey"
+            columns: ["plan_id"]
+            isOneToOne: false
+            referencedRelation: "cook_plans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cook_plan_members_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      cook_plan_recipes: {
+        Row: {
+          added_at: string
+          added_by: string | null
+          plan_id: string
+          recipe_id: string
+        }
+        Insert: {
+          added_at?: string
+          added_by?: string | null
+          plan_id: string
+          recipe_id: string
+        }
+        Update: {
+          added_at?: string
+          added_by?: string | null
+          plan_id?: string
+          recipe_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cook_plan_recipes_added_by_fkey"
+            columns: ["added_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cook_plan_recipes_plan_id_fkey"
+            columns: ["plan_id"]
+            isOneToOne: false
+            referencedRelation: "cook_plans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cook_plan_recipes_recipe_id_fkey"
+            columns: ["recipe_id"]
+            isOneToOne: false
+            referencedRelation: "recipes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      cook_plans: {
+        Row: {
+          cook_on: string | null
+          cooked_at: string | null
+          cooked_by: string | null
+          created_at: string
+          creator_id: string | null
+          id: string
+          status: Database["public"]["Enums"]["cook_plan_status"]
+        }
+        Insert: {
+          cook_on?: string | null
+          cooked_at?: string | null
+          cooked_by?: string | null
+          created_at?: string
+          creator_id?: string | null
+          id?: string
+          status?: Database["public"]["Enums"]["cook_plan_status"]
+        }
+        Update: {
+          cook_on?: string | null
+          cooked_at?: string | null
+          cooked_by?: string | null
+          created_at?: string
+          creator_id?: string | null
+          id?: string
+          status?: Database["public"]["Enums"]["cook_plan_status"]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cook_plans_cooked_by_fkey"
+            columns: ["cooked_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cook_plans_creator_id_fkey"
+            columns: ["creator_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       friendships: {
         Row: {
           addressee_id: string
@@ -265,6 +396,8 @@ export type Database = {
             | null
           build_started_at: string | null
           build_status: Database["public"]["Enums"]["draft_build_status"]
+          copied_from_recipe_id: string | null
+          copied_from_user_id: string | null
           created_at: string
           id: string
           owner_id: string
@@ -283,6 +416,8 @@ export type Database = {
             | null
           build_started_at?: string | null
           build_status?: Database["public"]["Enums"]["draft_build_status"]
+          copied_from_recipe_id?: string | null
+          copied_from_user_id?: string | null
           created_at?: string
           id?: string
           owner_id?: string
@@ -301,6 +436,8 @@ export type Database = {
             | null
           build_started_at?: string | null
           build_status?: Database["public"]["Enums"]["draft_build_status"]
+          copied_from_recipe_id?: string | null
+          copied_from_user_id?: string | null
           created_at?: string
           id?: string
           owner_id?: string
@@ -312,7 +449,22 @@ export type Database = {
           updated_at?: string
           want_to_cook_at?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "recipes_copied_from_recipe_id_fkey"
+            columns: ["copied_from_recipe_id"]
+            isOneToOne: false
+            referencedRelation: "recipes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recipes_copied_from_user_id_fkey"
+            columns: ["copied_from_user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       shopping_list_amounts: {
         Row: {
@@ -566,6 +718,28 @@ export type Database = {
       }
     }
     Views: {
+      cook_plan_people: {
+        Row: {
+          invited_by: string | null
+          joined_at: string | null
+          plan_id: string | null
+          user_id: string | null
+          username: string | null
+        }
+        Relationships: []
+      }
+      cook_plan_recipe_list: {
+        Row: {
+          added_at: string | null
+          added_by: string | null
+          owner_id: string | null
+          owner_username: string | null
+          plan_id: string | null
+          recipe_id: string | null
+          title: string | null
+        }
+        Relationships: []
+      }
       shopping_list_people: {
         Row: {
           is_owner: boolean | null
@@ -595,6 +769,10 @@ export type Database = {
         }
         Returns: string
       }
+      add_recipe_to_cook_plan: {
+        Args: { plan_id: string; recipe_id: string }
+        Returns: Json
+      }
       add_recipe_to_shopping_list: {
         Args: { lines: Json; recipe_id: string }
         Returns: string[]
@@ -607,12 +785,18 @@ export type Database = {
         Args: { changed_at?: string; item_id: string }
         Returns: string
       }
+      claim_cook_plan_invite_push: {
+        Args: { invitee: string; inviter: string; plan_id: string }
+        Returns: Json
+      }
       claim_draft_build: { Args: { recipe_id: string }; Returns: Json }
       claim_friend_request_push: {
         Args: { addressee: string; requester: string }
         Returns: Json
       }
       claim_source_refresh: { Args: { recipe_id: string }; Returns: Json }
+      copy_recipe: { Args: { recipe_id: string }; Returns: Json }
+      create_cook_plan: { Args: { cook_on?: string }; Returns: string }
       create_recipe: {
         Args: { lines: Json; steps: string[]; title: string }
         Returns: string
@@ -644,7 +828,30 @@ export type Database = {
       }
       has_ingredient: { Args: { ingredient_id: string }; Returns: boolean }
       ingredients_i_have: { Args: never; Returns: string[] }
+      invite_to_cook_plan: {
+        Args: { friend_id: string; plan_id: string }
+        Returns: Json
+      }
+      leave_cook_plan: { Args: { plan_id: string }; Returns: Json }
       leave_shared_shopping_list: { Args: { list_id: string }; Returns: Json }
+      list_cook_plans: {
+        Args: never
+        Returns: {
+          cook_on: string | null
+          cooked_at: string | null
+          cooked_by: string | null
+          created_at: string
+          creator_id: string | null
+          id: string
+          status: Database["public"]["Enums"]["cook_plan_status"]
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "cook_plans"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       list_friend_requests: {
         Args: never
         Returns: {
@@ -678,7 +885,19 @@ export type Database = {
           username: string
         }[]
       }
+      recipe_cook_plans: {
+        Args: { recipe_id: string }
+        Returns: {
+          cook_on: string
+          plan_id: string
+          with_usernames: string[]
+        }[]
+      }
       register_push_token: { Args: { token: string }; Returns: undefined }
+      remove_recipe_from_cook_plan: {
+        Args: { plan_id: string; recipe_id: string }
+        Returns: Json
+      }
       remove_recipe_from_shopping_list: {
         Args: { recipe_id: string }
         Returns: undefined
@@ -717,6 +936,8 @@ export type Database = {
             | null
           build_started_at: string | null
           build_status: Database["public"]["Enums"]["draft_build_status"]
+          copied_from_recipe_id: string | null
+          copied_from_user_id: string | null
           created_at: string
           id: string
           owner_id: string
@@ -744,12 +965,29 @@ export type Database = {
         }[]
       }
       send_friend_request: { Args: { user_id: string }; Returns: Json }
+      set_cook_plan_date: {
+        Args: { cook_on?: string; plan_id: string }
+        Returns: Json
+      }
       set_username: { Args: { name: string }; Returns: Json }
       set_want_to_cook: {
         Args: { recipe_id: string; want_to_cook: boolean }
         Returns: string
       }
       share_shopping_list: { Args: { friend_id: string }; Returns: Json }
+      shared_recipe: {
+        Args: { recipe_id: string }
+        Returns: {
+          created_at: string
+          id: string
+          owner_id: string
+          owner_username: string
+          recipe_found: boolean
+          steps: string[]
+          title: string
+          updated_at: string
+        }[]
+      }
       stop_sharing_shopping_list: { Args: { friend_id: string }; Returns: Json }
       store_source_refresh: {
         Args: { recipe_id: string; source: Json }
@@ -762,6 +1000,7 @@ export type Database = {
       unfriend: { Args: { user_id: string }; Returns: undefined }
     }
     Enums: {
+      cook_plan_status: "active" | "cooked"
       draft_build_failure:
         | "source_unavailable"
         | "source_unreachable"
@@ -904,6 +1143,7 @@ export const Constants = {
   },
   public: {
     Enums: {
+      cook_plan_status: ["active", "cooked"],
       draft_build_failure: [
         "source_unavailable",
         "source_unreachable",
