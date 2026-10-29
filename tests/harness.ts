@@ -360,6 +360,25 @@ export async function functionsRestatingTheFriendRule(): Promise<string[]> {
   return rows.map((r) => r.name);
 }
 
+/**
+ * The database functions (public and private) that decide for themselves who may use a shared
+ * Shopping List, reading `shopping_list_shares` and calling private.are_friends, instead of asking
+ * private.can_use_shopping_list (decisions 13: one rule for who may use a list).
+ */
+export async function functionsRestatingTheShareRule(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private')
+       and p.proname <> 'can_use_shopping_list'
+       and p.prosrc ~* $1
+       and p.prosrc ~* 'are_friends'
+     order by 1`,
+    ['(from|join)\\s+(public\\.)?shopping_list_shares'],
+  );
+  return rows.map((r) => r.name);
+}
+
 /** Runs the daily job that drops YouTube data over 30 days old, now (pg_cron runs it at 03:17). */
 export async function runYouTubeExpiryJob(): Promise<void> {
   await asDatabaseOwner('select private.expire_youtube_source_data()', []);

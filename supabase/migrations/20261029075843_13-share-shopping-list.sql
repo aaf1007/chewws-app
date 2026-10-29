@@ -24,8 +24,9 @@ revoke all on table public.shopping_list_shares from anon, authenticated;
 
 -- Who may use a list stays one rule (decisions 13): its owner, or a Friend it's shared with, while
 -- they're still Friends (private.are_friends). So unfriending cuts access at once, before the
--- trigger below has deleted the share.
-create or replace function private.can_use_shopping_list(list_id uuid)
+-- trigger below has deleted the share. This form says it for anyone (`who`), for the functions
+-- below that list who uses a list; nothing else restates it.
+create function private.can_use_shopping_list(list_id uuid, who uuid)
 returns boolean
 language sql
 stable
@@ -36,16 +37,30 @@ as $$
     select 1 from public.shopping_lists l
     where l.id = can_use_shopping_list.list_id
       and (
-        l.owner_id = (select auth.uid())
+        l.owner_id = can_use_shopping_list.who
         or (
           exists (
             select 1 from public.shopping_list_shares s
-            where s.list_id = l.id and s.friend_id = (select auth.uid())
+            where s.list_id = l.id and s.friend_id = can_use_shopping_list.who
           )
-          and private.are_friends(l.owner_id, (select auth.uid()))
+          and private.are_friends(l.owner_id, can_use_shopping_list.who)
         )
       )
   );
+$$;
+
+revoke execute on function private.can_use_shopping_list(uuid, uuid) from public, anon;
+grant execute on function private.can_use_shopping_list(uuid, uuid) to authenticated;
+
+-- The rule for the caller, as every policy and list function asks it.
+create or replace function private.can_use_shopping_list(list_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select private.can_use_shopping_list(can_use_shopping_list.list_id, (select auth.uid()));
 $$;
 
 -- The lock every change to a pair of users takes (as send_friend_request and unfriend do), so a
@@ -141,7 +156,7 @@ as $$
   from public.shopping_list_shares s
   join public.profiles p on p.id = s.friend_id
   where s.list_id = private.my_shopping_list()
-    and private.are_friends((select auth.uid()), s.friend_id)
+    and private.can_use_shopping_list(s.list_id, s.friend_id)
   order by p.username;
 $$;
 
@@ -158,7 +173,7 @@ as $$
   join public.shopping_lists l on l.id = s.list_id
   join public.profiles p on p.id = l.owner_id
   where s.friend_id = (select auth.uid())
-    and private.are_friends(l.owner_id, (select auth.uid()))
+    and private.can_use_shopping_list(l.id)
   order by p.username;
 $$;
 
@@ -177,7 +192,7 @@ as $$
     union all
     select l.id, l.owner_id
     from public.shopping_list_shares s join public.shopping_lists l on l.id = s.list_id
-    where s.friend_id = (select auth.uid()) and private.are_friends(l.owner_id, (select auth.uid()))
+    where s.friend_id = (select auth.uid()) and private.can_use_shopping_list(l.id)
   )
   select u.id, p.id, p.username, true
   from used u join public.profiles p on p.id = u.owner_id
@@ -186,7 +201,7 @@ as $$
   from used u
   join public.shopping_list_shares s on s.list_id = u.id
   join public.profiles p on p.id = s.friend_id
-  where private.are_friends(u.owner_id, s.friend_id);
+  where private.can_use_shopping_list(u.id, s.friend_id);
 $$;
 
 revoke execute on function private.shopping_list_people() from public, anon;

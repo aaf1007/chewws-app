@@ -7,7 +7,7 @@
 import { expect, inject, test } from 'vitest';
 
 import { createTestClient, signInAttacker, type Attacker } from './access-harness';
-import { countShares, endFriendshipBeforeCleanup, uniqueUsername } from './harness';
+import { countShares, endFriendshipBeforeCleanup, functionsRestatingTheShareRule, uniqueUsername } from './harness';
 
 const permissionDenied = { code: '42501' };
 
@@ -253,4 +253,8 @@ test('the private sharing rules are not exposed through the Data API, and signed
   for (const { error } of signedOut) expect(error).toMatchObject(permissionDenied);
   const people = await anon.from('shopping_list_people').select('*');
   expect(people.error).toMatchObject(permissionDenied);
+});
+
+test('who may use a shared list is decided only by private.can_use_shopping_list, never restated', async () => {
+  expect(await functionsRestatingTheShareRule()).toEqual([]);
 });
