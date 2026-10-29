@@ -4,10 +4,10 @@ import { router } from 'expo-router';
 import { useEffect } from 'react';
 import { AppState } from 'react-native';
 
-import { parseDraftReadyPush, type SessionState } from '@/data';
+import { parseDraftReadyPush, parseFriendRequestPush, type SessionState } from '@/data';
 import { data } from '@/data/app';
 
-// "Draft ready" shows as a banner even while the app is open.
+// "Draft ready" and "Friend request" show as a banner even while the app is open.
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowBanner: true,
@@ -46,11 +46,40 @@ export async function registerForDraftReady({ ask }: { ask: boolean }): Promise<
 }
 
 /**
- * While someone is signed in: registers the phone again on sign-in and each foreground (if
- * notifications are allowed), and a tapped "Draft ready" opens that Draft, whether the tap
- * started the app or came while it ran.
+ * Whether the user has decided about notifications: `undecided` while the system can still ask.
+ * `denied` too when it can't be told (no native module), so nothing offers to ask.
  */
-export function useDraftReadyNotifications(session: SessionState) {
+export type NotificationPermission = 'undecided' | 'allowed' | 'denied';
+
+export async function notificationPermission(): Promise<NotificationPermission> {
+  try {
+    const current = await Notifications.getPermissionsAsync();
+    if (current.granted) return 'allowed';
+    return current.canAskAgain ? 'undecided' : 'denied';
+  } catch {
+    return 'denied';
+  }
+}
+
+/**
+ * After the user sends or accepts a friend request (decisions 11): while notifications are
+ * undecided, `explain` gives the one-line reason (how they'll hear about friend requests) and
+ * answers whether the user goes on; then the system asks, and an allowed phone is registered as
+ * for "Draft ready". Once decided, it does nothing, so it asks only after the first. Never throws.
+ */
+export async function askAfterFriendRequest(explain: () => Promise<boolean>): Promise<void> {
+  if ((await notificationPermission()) !== 'undecided') return;
+  if (!(await explain().catch(() => false))) return;
+  await registerForDraftReady({ ask: true });
+}
+
+/**
+ * While someone is signed in: registers the phone again on sign-in and each foreground (if
+ * notifications are allowed). A tapped notification opens its screen once the app can show it
+ * (`canOpen`: signed in, with a username), whether the tap started the app or came while it ran:
+ * "Draft ready" that Draft, "Friend request" Friends, where Requests are listed first.
+ */
+export function useNotifications(session: SessionState, { canOpen }: { canOpen: boolean }) {
   const signedIn = session.status === 'signedIn';
 
   useEffect(() => {
@@ -64,10 +93,12 @@ export function useDraftReadyNotifications(session: SessionState) {
 
   const response = Notifications.useLastNotificationResponse();
   useEffect(() => {
-    if (!signedIn || !response) return;
+    if (!canOpen || !response) return;
     Notifications.clearLastNotificationResponse();
     if (response.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return;
-    const id = parseDraftReadyPush(response.notification.request.content.data);
-    if (id) router.push({ pathname: '/draft/[id]', params: { id } });
-  }, [signedIn, response]);
+    const pushed = response.notification.request.content.data;
+    const draftId = parseDraftReadyPush(pushed);
+    if (draftId) router.push({ pathname: '/draft/[id]', params: { id: draftId } });
+    else if (parseFriendRequestPush(pushed)) router.push('/friends');
+  }, [canOpen, response]);
 }

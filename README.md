@@ -33,7 +33,7 @@ npm run db:types   # regenerate src/data/database.types.ts after changing a migr
 
 The ports are the CLI defaults plus 100 (API on `http://127.0.0.1:54421`, Studio on `http://127.0.0.1:54423`) so this stack can run next to another local Supabase project. `supabase status` prints the URLs and keys.
 
-The seed creates a dev user, `dev@example.com` / `password123`.
+The seed creates a dev user, `dev@example.com` / `password123` (username `dev`), and two more to be Friends with, `sam@example.com` (`sam`) and `alex@example.com` (`alex_cooks`), with the same password.
 
 ## Tests
 

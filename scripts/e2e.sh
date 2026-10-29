@@ -68,10 +68,16 @@ fi
 # The flows reach Edge Functions too; serve this worktree's (no-op when already served).
 scripts/functions.sh e2e
 
-# How long one flow may take (the longest take about 4 minutes). A flow past it is stopped and fails
-# the run: a hung simulator driver (an XCTest request that never answers) would otherwise hold
-# Maestro, and this run, for ever.
-flow_timeout="${E2E_FLOW_TIMEOUT:-600}"
+# How long Maestro waits for its iOS driver (an XCTest runner that xcodebuild starts on the
+# simulator for each flow) to answer. Maestro's own default is 2 minutes; after the simulator has
+# sat idle a while, xcodebuild has taken over 4 minutes to start it, and the flow failed before it
+# began ("iOS driver not ready in time"). Set here so every flow gets it.
+export MAESTRO_DRIVER_STARTUP_TIMEOUT="${MAESTRO_DRIVER_STARTUP_TIMEOUT:-360000}"
+
+# How long one flow may take, the driver's start included (the longest flows take about 4 minutes,
+# and the driver up to 6 more). A flow past it is stopped and fails the run: a hung simulator driver
+# (an XCTest request that never answers) would otherwise hold Maestro, and this run, for ever.
+flow_timeout="${E2E_FLOW_TIMEOUT:-900}"
 maestro_pid=""
 stop_maestro() {
   pkill -TERM -P "$maestro_pid" 2>/dev/null || true

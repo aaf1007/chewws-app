@@ -1,9 +1,12 @@
+import { randomUUID } from 'node:crypto';
+
 import pg from 'pg';
 import { inject } from 'vitest';
 
 import {
   createDataLayer,
   createSessionStorage,
+  parseUserId,
   type DataLayer,
   type IngredientId,
   type KeyValueStorage,
@@ -14,16 +17,18 @@ import {
   createTestAccount,
   createTestClient,
   inProcessDraftBuilds,
+  inProcessNotifications,
   inProcessSourceRefresh,
   signInAttacker,
   type DraftBuilds,
   type DraftFakes,
+  type Notifications,
   type TestAccount,
 } from './access-harness';
 
-export type { DraftBuilds, DraftFakes };
+export type { DraftBuilds, DraftFakes, Notifications };
 
-export type TestUser = { userId: UserId; data: DataLayer; drafts: DraftBuilds };
+export type TestUser = { userId: UserId; data: DataLayer; drafts: DraftBuilds; notifications: Notifications };
 
 /**
  * A fresh signed-in user. Behaviour tests reach the app only through `data`, its data-layer
@@ -31,8 +36,27 @@ export type TestUser = { userId: UserId; data: DataLayer; drafts: DraftBuilds };
  * answers by default), with no network; `drafts.settled()` waits for those builds.
  */
 export async function signInTestUser(label = 'user', fakes: DraftFakes = {}): Promise<TestUser> {
-  const { userId, data, drafts } = await signInAttacker(label, fakes);
-  return { userId, data, drafts };
+  const { userId, data, drafts, notifications } = await signInAttacker(label, fakes);
+  return { userId, data, drafts, notifications };
+}
+
+/**
+ * A username no other test, nor an earlier run on the same database, has: `stem` (at most 10
+ * characters, lowercase letters, digits or _) and 9 random hex digits.
+ */
+export function uniqueUsername(stem = 'user'): string {
+  return `${stem.slice(0, 10)}_${randomUUID().replaceAll('-', '').slice(0, 9)}`;
+}
+
+/** A fresh signed-in user who has chosen a username (`uniqueUsername(stem)`). */
+export async function signInWithUsername(
+  stem: string,
+  fakes: DraftFakes = {},
+): Promise<TestUser & { username: string }> {
+  const user = await signInTestUser(stem, fakes);
+  const result = await user.data.setUsername(uniqueUsername(stem));
+  if (result.status !== 'set') throw new Error(`Couldn't choose a username: ${result.status}`);
+  return { ...user, username: result.username };
 }
 
 /** Sessions waiting, directly or through others, on the session with this pid. Live, never cached. */
@@ -131,6 +155,42 @@ export async function holdLinkSave(user: Pick<TestUser, 'userId'>, url: string):
   return { waitForWaiting, commit };
 }
 
+/**
+ * For race tests only: a second database session that makes one call as the user, signed in, as
+ * the app would, and doesn't commit yet. Until `commit()`, whatever waits on what it holds (a row,
+ * a lock) shows up in `waitForWaiting`.
+ */
+async function holdCallAs(user: Pick<TestUser, 'userId'>, sql: string, params: unknown[]): Promise<HeldRemoval> {
+  const claims = JSON.stringify({ sub: user.userId, role: 'authenticated' });
+  const { waitForWaiting, commit } = await holdInTransaction(sql, params, [
+    ["select set_config('request.jwt.claims', $1, true)", [claims]],
+    ['set local role authenticated', []],
+  ]);
+  return { waitForWaiting, commit };
+}
+
+type Someone = Pick<TestUser, 'userId'>;
+
+/** For race tests only: `user` choosing `username` on another phone, not committed yet. */
+export const holdUsernameChoice = (user: Someone, username: string) =>
+  holdCallAs(user, 'select public.set_username($1)', [username]);
+
+/** For race tests only: `user` asking `other` to be Friends on another phone, not committed yet. */
+export const holdFriendRequest = (user: Someone, other: Someone) =>
+  holdCallAs(user, 'select public.send_friend_request($1)', [other.userId]);
+
+/** For race tests only: `user` answering `requester`'s request on another phone, not committed yet. */
+export const holdFriendRequestAnswer = (user: Someone, requester: Someone, accept: boolean) =>
+  holdCallAs(user, 'select public.respond_to_friend_request($1, $2)', [requester.userId, accept]);
+
+/** For race tests only: `user` withdrawing their request to `other` on another phone, not committed yet. */
+export const holdFriendRequestCancel = (user: Someone, other: Someone) =>
+  holdCallAs(user, 'select public.cancel_friend_request($1)', [other.userId]);
+
+/** For race tests only: `user` unfriending `other` on another phone, not committed yet. */
+export const holdUnfriend = (user: Someone, other: Someone) =>
+  holdCallAs(user, 'select public.unfriend($1)', [other.userId]);
+
 /** Runs one statement on the database as its owner, for the few things no action can reach. */
 async function asDatabaseOwner<T extends pg.QueryResultRow>(sql: string, params: unknown[]) {
   const db = new pg.Client({ connectionString: inject('supabase').dbUrl });
@@ -193,6 +253,61 @@ export async function backdateSourceRefresh(recipeId: string, minutes: number): 
     `update public.source_videos set refresh_requested_at = now() - make_interval(mins => $2) where recipe_id = $1`,
     [recipeId, minutes],
   );
+}
+
+/**
+ * `count` fresh users, not signed in anywhere, who have chosen usernames starting with `stem`
+ * (`uniqueUsername`); quicker than signing each in. For tests that need many people to ask.
+ */
+export async function seedUsersWithUsernames(
+  stem: string,
+  count: number,
+): Promise<{ userId: UserId; username: string; account: TestAccount }[]> {
+  const accounts = await Promise.all(Array.from({ length: count }, () => createTestAccount(stem)));
+  const rows = await asDatabaseOwner<{ id: string; username: string; email: string }>(
+    `update public.profiles p set username = n.username
+     from unnest($1::text[], $2::text[]) as n (email, username)
+     join auth.users u on u.email = n.email
+     where p.id = u.id
+     returning p.id, p.username, u.email`,
+    [accounts.map((a) => a.email), accounts.map(() => uniqueUsername(stem))],
+  );
+  return accounts.map((account) => {
+    const row = rows.find((r) => r.email === account.email);
+    if (!row) throw new Error(`No Profile for ${account.email}`);
+    return { userId: parseUserId(row.id), username: row.username, account };
+  });
+}
+
+/** Every "Friend request" push between the two (either way) was sent `days` earlier than it was. */
+export async function backdateFriendRequestPushes(
+  a: Pick<TestUser, 'userId'>,
+  b: Pick<TestUser, 'userId'>,
+  days: number,
+): Promise<void> {
+  await asDatabaseOwner(
+    `update private.friend_request_pushes set sent_at = sent_at - make_interval(days => $3)
+     where (requester_id, addressee_id) in (($1, $2), ($2, $1))`,
+    [a.userId, b.userId, days],
+  );
+}
+
+/**
+ * The database functions (public and private) that decide for themselves whether a friendship is
+ * accepted, comparing its status with 'accepted' instead of asking private.are_friends or
+ * private.friend_ids (decisions 11: one Friend rule). Setting a status is not deciding.
+ */
+export async function functionsRestatingTheFriendRule(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private')
+       and p.proname <> 'are_friends'
+       and p.prosrc ~* $1
+     order by 1`,
+    ["(?<!set )status\\s*(=\\s*'accepted'|in\\s*\\([^)]*'accepted')"],
+  );
+  return rows.map((r) => r.name);
 }
 
 /** Runs the daily job that drops YouTube data over 30 days old, now (pg_cron runs it at 03:17). */
@@ -435,16 +550,19 @@ export async function signInOnPhones(
         };
         const client = createTestClient(fetchThroughSignal, authClientStorage, { autoRefreshToken });
         const { drafts, startDraftBuild } = inProcessDraftBuilds(fakes);
+        const { notifications, sendNotification } = inProcessNotifications(client, fakes);
         const data = createDataLayer(client, {
           storage,
           sessionStorage,
           now: () => (clock === null ? Date.now() : clock),
           startDraftBuild,
           refreshSourceVideo: inProcessSourceRefresh(client, fakes),
+          sendNotification,
         });
         return {
           data,
           drafts,
+          notifications,
           ...network,
           setClock: (at) => void (clock = at.getTime()),
           saved: () => new Map(items),

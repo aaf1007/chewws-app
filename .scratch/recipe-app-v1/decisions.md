@@ -110,3 +110,162 @@ TikTok's oEmbed stopped returning `title`, `author_name` and `thumbnail_url` aro
 - No scraping of TikTok's internal page data (`__FRONTITY_CONNECT_STATE__`, `__UNIVERSAL_DATA_FOR_REHYDRATION__`), and no browser User-Agent to get past a site's refusal.
 - ADR-0004 gets a dated note recording this.
 - (Ticket 05 review, 2026-10-27) "Paste caption" and "Add screenshot" are offered on any failed Draft and on a built one with no recipe found (an Instagram Reel saved with nothing), each counted toward the 3 builds.
+
+Defaults chosen where the tickets leave things open. Override any by editing this file before the ticket starts. Implementers follow these; a reviewer treats a deviation as a finding. "Flag" bullets note where a ticket and the spec or the existing code disagree; the default given is what to build.
+
+## 11 Usernames and Friends
+
+- **Usernames** (spec L23, L25, L199): `profiles.username` stays nullable (null = not chosen yet) and gets `check (username ~ '^[a-z0-9_]{3,20}$' and username ~ '[a-z]')`: 3–20 characters, lowercase ASCII letters, digits and `_`, with at least one letter. The phone trims the input, drops one leading `@` and lowercases it before sending. Anything else is refused with "Use 3–20 letters, numbers or _". Because the stored value is always lowercase, the existing `unique` is case-insensitive in effect. Reserved names are refused like taken ones: `private.is_reserved_username(name)` holds a fixed list (admin, administrator, support, help, root, system, staff, team, official, moderator, mod, me, you, friend, friends, invite, api, www, app, settings, profile, account, login, signup, null, undefined) plus any name starting with `recipeapp`. `setUsername(name)` is the security-definer RPC `set_username`. It answers `{ status: 'set' | 'taken' | 'reserved' | 'invalid' }` and never raises on a clash. A username can be changed any number of times, and the old one is free at once. Friendships, requests and invite links refer to user ids, so nothing breaks. A user with no username (new, or anyone from before this ticket) sees a "Choose a username" screen after sign-in, before the tabs. Until they choose one, they can't be found and can't send requests.
+- **Friendship** (spec L200): `friendships (requester_id, addressee_id, status friendship_status ('pending', 'accepted', 'declined'), created_at, responded_at)`, with one row per pair: a unique index on `(least(requester_id, addressee_id), greatest(…))` and `check (requester_id <> addressee_id)`. Accepted is mutual. **Users get no table grants on `friendships`.** Every read and write goes through security-definer RPCs: `send_friend_request(user_id)`, `respond_to_friend_request(requester_id, accept)`, `cancel_friend_request(user_id)`, `unfriend(user_id)`, `list_friends()` and `list_friend_requests()`. The table can't show the requester a `declined` status, so a decline is never revealed. Data-layer actions: `setUsername`, `searchUsers`, `sendFriendRequest`, `respondToFriendRequest`, `cancelFriendRequest`, `unfriend`, `listFriends`, `listFriendRequests` (incoming and outgoing).
+- **The one rule for "is a Friend"** is `private.are_friends(a uuid, b uuid) returns boolean`: stable, security definer, `search_path = ''`, true only for an `accepted` row. `private.friend_ids(who uuid) returns setof uuid` wraps it for lists. Every later visibility rule calls one of these and nothing restates them, the same way decision 08 treats `private.ingredients_had`. The private schema isn't exposed through the Data API, so nobody can probe arbitrary pairs.
+- **Request states**:
+  - Sending to someone who already has a pending request to you accepts it. Both of you chose.
+  - Sending while your own request is still pending or declined changes nothing and answers `requested`. You see it as "Requested" either way, so a decline is silent (spec L87).
+  - Cancelling deletes your request, whether it's pending or was declined. You can then send a new one, but the push is limited (below).
+  - Declining sets `declined`. The request leaves the addressee's list.
+  - Accepting sets `accepted`.
+  - Unfriending deletes the row, so neither side sees the other as a Friend (spec L89, L233). Either can send a new request later.
+  - At most 50 outgoing pending requests per user (`{ status: 'tooMany' }`).
+- **Profiles** become readable beyond your own: `private.can_see_profile(id)` is true for you, your Friends, both sides of a pending request, and co-members of any Cook Plan (14). Anyone else gets "not found", the same answer as an id that doesn't exist. A Profile shows only `id` and `username`.
+- **Search** (spec L85, L193): `search_users(query)` is a security-definer RPC. It normalises the query like a username and returns nothing for under 3 characters. It returns up to 10 `{ id, username, relationship: 'none' | 'requestSent' | 'requestReceived' | 'friends' }` whose username starts with the query, exact match first, then alphabetical. It leaves out the caller and users with no username. A declined request still reads `requestSent`. It shows nothing but the username, there's no "list everyone", and the 3-character minimum and 10-result cap stop cheap enumeration. A per-user rate limit is a before-going-public item, not built now (see Questions 1).
+- **Blocking**: no Block in v1. Moderation tools are out of scope (spec L284). Declining and unfriending are the tools, and the push limit below caps repeat requests (see Questions 3). Unfriending ends Shopping List sharing both ways (13) through a trigger on deleting a `friendships` row. Cook Plan memberships stay (spec L235).
+- **Friend request push** (spec L88, L238) reuses the 07 sender:
+  - `PushMessage.data` in `supabase/functions/_shared/push-sender.ts` widens to a union: `DraftReadyData | { kind: 'friendRequest'; fromUserId } | { kind: 'cookPlanInvite'; cookPlanId }` (14). It gets `friendRequestMessages(...)` beside `draftReadyMessages`.
+  - A new thin Deno entry `supabase/functions/notify` (`POST {kind: 'friendRequest', toUserId}`) checks the caller's JWT. It then calls the service-role RPC `claim_friend_request_push(requester, addressee)`, which returns the requester's username and the addressee's tokens only if a pending request exists from the caller and no push went to that pair in the last 7 days. It records the push in `private.friend_request_pushes`. The entry sends through `expoPushSender` and forgets `DeviceNotRegistered` tokens with `forget_push_tokens`.
+  - The data layer *kicks* it after `send_friend_request` answers `requested`, through a new `DataLayerOptions.sendNotification`, the way it kicks `build-draft`. Tests run it in-process with `recordingPushSender`. No pg_net trigger, for the reason in decision 03.
+  - The push says title "Friend request", body "@{username} wants to be Friends". Tapping it opens Friends > Requests. A failed kick or send never fails the request: the in-app Requests list is the source of truth, with no retry. Accepting sends no push (spec L238).
+- **Notifications from Friends** (ticket 11 review, 2026-10-29): ticket 07 asks for notification permission only after the first saved link, so someone who only adds Friends was never asked. Now, right after the user's first friend request sent or accepted, while permission is undecided, the app gives a one-line reason ("Notifications are how you hear when someone asks to be Friends.", with "Not now" or "Continue") and then the system asks. The Friends screen also shows a "Turn on notifications" row while permission is undecided. Once decided, neither appears again.
+- **Before going public** (ticket 11 review):
+  - A requester whose request was declined keeps seeing the addressee's current username (in their Sent list, search and `get_profile`), since a decline is never revealed. Block, when it comes, is how someone stops that.
+  - `search_users` can still be walked by extending prefixes, 10 results at a time (`aaa`, `aab`, …). The per-user rate limit (user decisions 11–19, 1) is what stops it.
+  - If `needsUsername` can't reach the server (no signal, a server error), the gate lets the user into the app without a username. The server still refuses everything that needs one (`send_friend_request` answers `noUsername`), and the next launch asks again.
+- **Flag:** profiles are owner-read-only (`20261022235947_profiles.sql`) and `username` is nullable with a case-sensitive `unique`. This ticket adds the check and the wider read policy; it doesn't edit the old migration.
+
+## 12 Invite links
+
+- **Token**: `invite_links (token text primary key, inviter_id, created_at, expires_at, max_uses int default 20, uses int default 0, revoked_at)`. The server makes the token in `create_invite_link()` as 16 random bytes (`extensions.gen_random_bytes`), base64url, 22 characters. It lasts **7 days** and up to **20 redemptions**, one per redeemer, so it works in a group chat. Each user may have at most 5 live links and create at most 20 a day. `revoke_invite_link(token)` stops one. Users have no direct grants; only the inviter can list their own links, through the RPC.
+- **URL**: a universal link `https://{INVITE_HOST}/i/{token}`. The app gets the Associated Domains entitlement `applinks:{INVITE_HOST}` (a new EAS build). The host serves an `apple-app-site-association` file that covers only `/i/*`, and a small static fallback page for people without the app. Both are plain files on a free static host. `recipeapp://invite/{token}` is accepted too, for Maestro and the fallback page's "Open in the app" button, but it's never what gets shared: WhatsApp and many chats don't make custom schemes tappable. Both routes open `src/app/invite/[token].tsx`. `INVITE_HOST` is an `EXPO_PUBLIC_*` value. **Blocked on a domain** (see Questions 2; the app name isn't decided, spec L296).
+- **Sharing** uses React Native's `Share.share({ message: 'Add me on Recipe App: {url}' })`, with no new native module.
+- **Redeeming** (spec L201): `redeemInvite(token)` calls `redeem_invite(token)`, which answers one of:
+  - `requested`: a pending request from the redeemer to the inviter, plus the ticket 11 push to the inviter, body "@{username} opened your invite".
+  - `accepted`: the inviter had already asked the redeemer, so they're now Friends.
+  - `alreadyFriends`.
+  - `own`: your own link does nothing.
+  - `invalid`: unknown, expired, revoked and used up all give this one answer, so tokens can't be probed.
+
+  It needs the redeemer to have a username. A user may redeem at most 20 invites a day; after that every answer is `invalid`. Redeeming the same link twice counts once.
+- **Signed out, or no app**: with the app installed but signed out, the route keeps the token in AsyncStorage (`recipeapp.pendingInvite`, with its time). It's redeemed once after sign-in and the username step, then cleared, and the screen says "Friend request sent to @alex". A kept token over 7 days old is dropped. Only the latest is kept. Without the app, the fallback page links to TestFlight and says "Once it's installed, tap this link again". The Add Friend screen also has "Paste an invite link". We use no third-party deferred-deep-link SDK: they work by fingerprinting.
+- **Flag:** ticket 12's "the friend request is created after first sign-in" can't happen with no action from the user. iOS passes no link through an App Store or TestFlight install. The default above (tap again, or paste) is the honest version.
+- **Flag:** ticket 12 and spec L201 make the redeemer *request* the inviter, so the inviter still accepts. That's kept: links get forwarded, and spec L87 says only people I choose become Friends.
+
+## 13 Share your Shopping List
+
+- **Shares** (spec L215, L77–L81): `shopping_list_shares (list_id, friend_id, created_at)`, primary key `(list_id, friend_id)`. The owner shares with a Friend (`are_friends` checked in the RPC) and stops sharing. The Friend can leave (`leaveSharedShoppingList`). Actions: `shareShoppingList(friendId)` (spec L154), `stopSharingShoppingList(friendId)`, `listShoppingListShares()`, `listSharedShoppingLists()`. There's at most one list per owner (spec L215), so a Friend sees "Sam's list" beside their own in a switcher on the Shopping List tab.
+- **Who may use a list** stays one rule. `private.can_use_shopping_list(list_id)` widens to: owner, **or** a share row for the caller **and** `private.are_friends(owner, caller)`. Unfriending therefore cuts access at once, even before the trigger from 11 deletes the share rows.
+- **What a shared Friend can do**: read the list, add hand items, check off and uncheck any item, and remove hand-added items. Only the owner removes Ingredient lines or adds and removes Recipes: those come from the owner's Recipes and Pantry, and `add_recipe_to_shopping_list` and `remove_recipe_from_shopping_list` stay on `private.my_shopping_list()`. The item delete policy narrows to owner, or a Friend on a hand-added item. A Friend's check-off goes to the **owner's** Pantry (spec L79, L256). `check_off` already does this.
+- **Recipe titles for Friends** (decision 09's "for ticket 13"): `shopping_list_amounts` gains `recipe_title text not null`, written when a Recipe is added. A trigger on `recipes` keeps it in step when `title` is updated. `toShoppingListItem` reads it in place of the `recipe:recipes(…)` join, which a Friend can't read (spec L190 keeps Recipes owner-only).
+- **Offline** (spec L182, decision 10):
+  - Every `ListChange` now names its list: `list: { kind: 'shoppingList'; id } | { kind: 'cookPlan'; id }` (15). Queued changes from before this ticket that don't name one are for the user's own list, read back first, as decision 10 handled older hand-adds.
+  - There's still one queue per user (`recipeapp.listChanges.${me}`), across all their lists, in order. Each list gets its own cached copy (`recipeapp.shoppingList.${me}.${listId}`; the old key is read as the user's own list).
+  - Decision 10's rule becomes "a queued change goes out only as the user who made it (`asSignedIn` unchanged), and only to a list the server says that user can use when it arrives". The rule isn't weakened, only widened from "their list" to "a list they can use".
+  - `fetchShoppingList` reads by list id, not `.eq('owner_id', me)`.
+  - A change to a list that's no longer shared with the user comes back `gone` and is dropped. When the next read finds the list gone, the phone says "Sam's list isn't shared with you any more. N changes weren't saved." and drops the cache.
+- **Conflicts**: unchanged from decision 10. The later phone change wins by `phone_changed_at`, whichever phone made it, owner's or Friend's, with clock skew between phones accepted. Two people checking the same item: the first check keeps `checked_by` and is the only one that writes the Pantry.
+- **Live** (spec L81, L238): Realtime Broadcast, not `postgres_changes`, because DELETE events can't be filtered and aren't checked by RLS. A statement trigger on `shopping_list_items`, `shopping_list_amounts` and `shopping_list_shares` calls `realtime.send('{}', 'changed', 'shopping_list:' || list_id, true)` (a private channel). A policy on `realtime.messages` lets a user receive a topic only when `private.can_use_shopping_list` passes for its id. The message carries no content. The phone re-reads the list (debounced 300 ms) while the list screen is open. There's no push for list changes (spec L282). If `realtime.send` is missing on the local stack, stop and ask.
+- **When the friendship ends**: shares go both ways (spec L234). Items the Friend added stay, because the list is the owner's. `checked_by` stays, shown as "a former Friend" when their Profile can't be read.
+- **Flag:** decision 09's note on the global `ingredients` table (any signed-in user can insert) is left as it is here, because sharing doesn't change who writes Ingredients. Moving those inserts into security-definer RPCs is a before-going-public item.
+
+## 14 Start a Cook Plan
+
+- **Model** (spec L216):
+  - `cook_plans (id, creator_id, cook_on date null, status cook_plan_status ('active', 'cooked'), cooked_at, cooked_by, created_at)`. There's no title. A plan shows as its Recipe titles plus "with @sam, @jo · Sat 2 Nov".
+  - `cook_on` is an optional calendar date with no time or zone (spec L100). Any member can set or clear it, and past dates are allowed. Nobody is notified.
+  - `cook_plan_members (plan_id, user_id, invited_by, joined_at)`. `cook_plan_recipes (plan_id, recipe_id, added_by, added_at)`.
+  - Caps: 8 members and 10 Recipes per plan.
+  - The one membership rule is `private.is_cook_plan_member(plan_id, who)`, security definer.
+- **Invites** (spec L94–L95, L111, L236): any member can invite **their own Friends** (`are_friends(inviter, invitee)` at invite time) to an active plan. Invitees don't have to be Friends with every other member. An invited Friend is a member at once and the plan appears for them (ticket 14). They can `leaveCookPlan`. When the last member leaves, the plan is deleted. Nobody removes anyone else in v1 (see Questions 4). Unfriended co-members both stay (spec L235). `are_friends` fails, so neither can invite the other into any plan: a new one, or one the other isn't in yet.
+- **Invite push**: the same `notify` function as 11, `{ kind: 'cookPlanInvite', cookPlanId }`. The service-role `claim_cook_plan_invite_push(plan, invitee)` sends once per member per plan. Title "Cook Plan invite", body "@alex invited you to cook" plus the Recipe titles, if any. Tapping it opens the plan.
+- **Recipes in a plan** (spec L96–L99, L192): a member adds one of their own **reviewed** Recipes. Any member removes any Recipe (spec L97). Members read every plan Recipe: one helper, `private.can_read_recipe(recipe_id)`, true for the owner or a member of any plan (active or cooked) the Recipe is in. It's used by the select policies on `recipes`, `recipe_lines` and `source_videos`. Ticket 19 extends the same helper. Writes stay owner-only. Tags, Want to Cook and Drafts never show. Another member's Instagram screenshot isn't readable (the owner-folder Storage policy, decision 05), so members see the plain Instagram card.
+- **Your own copy** (spec L99, L204–L205, ADR-0002): `copyRecipe(recipeId)` calls the security-definer RPC `copy_recipe`, allowed when `private.can_read_recipe` passes. It makes a reviewed Recipe owned by the caller with the same title, steps and lines (the same Ingredient ids). Its Source Video row copies platform, URL, external id, creator, caption and thumbnail with the **original's `fetched_at`**, so decision 04's 30-day YouTube job still clears it on time. The screenshot isn't copied. Tags, Want to Cook, Cook Logs and Ranking aren't copied. New columns `copied_from_recipe_id` and `copied_from_user_id` (both `on delete set null`) are for display only: "Saved from @sam" while the Profile can still be read. Copying the same Recipe again makes another copy, but the screen offers "Open your copy" when one exists.
+- **Deleting a Recipe that's in a plan** (spec L229–L232, L59): `deleteRecipe` stays as it is. A new `recipeCookPlans(recipeId)` lists the **active** plans it's in, so the screen can warn "It'll leave your Cook Plan with @sam" before deleting. Line handling is in 15.
+- **Flag:** spec L231 says the Recipe leaves *every* Cook Plan, so it also disappears from cooked (archived) plans, and their history loses it. Built as written; the warning names only active plans.
+
+## 15 The Cook Plan list
+
+- **Items** (spec L216): `cook_plan_items (id, plan_id, ingredient_id, claimed_by, claimed_at, claim_changed_at, checked_at, checked_by, check_changed_at, created_at, updated_at)`, unique `(plan_id, ingredient_id)`. `cook_plan_amounts (item_id, recipe_id null, recipe_title, amount_texts, created_at)`, with `recipe_id` `on delete set null` and a title snapshot. There are **no hand-added items** on a Cook Plan list: spec L216 says an item is an Ingredient line.
+- **Building it**: adding a Recipe runs the list engine's `toListLines([recipe])` with **no** `skip` (spec L178–L180). `add_recipe_to_cook_plan(plan, recipe, lines)` refuses Ingredients that aren't on the Recipe's lines (22023), as `add_recipe_to_shopping_list` does, and merges into existing lines. Amounts are never added together.
+- **Who has it** (spec L102, decision 08): `cook_plan_who_has(plan_id)` is a security-definer wrapper that returns `(ingredient_id, user_id)` for every member, from `private.ingredients_had(member)`, **limited to the Ingredients on that plan's lines**. Only members may call it. It's computed on every read, never stored. No other part of anyone's Pantry is exposed. Unfriended co-members still see each other here (spec L235).
+- **Claims** (spec L103–L104):
+  - One claimer per item.
+  - `claim` sets the caller as claimer, taking over a claim already there.
+  - `unclaim` clears only the caller's own claim; anyone else's answers `gone`.
+  - Claims show the claimer's username to every member.
+- **Checking off** (spec L105, L181, L256): the checker is the buyer, and the Ingredient goes into **their** Pantry on the unchecked-to-checked change. Unchecking leaves the Pantry alone (decision 09). Checking off doesn't change the Claim.
+- **Offline** (spec L106, L182): the same per-user queue as 13, with `{ kind: 'checkOff' | 'uncheck' | 'claim' | 'unclaim'; list: { kind: 'cookPlan', id }; itemId }`. The cache key is `recipeapp.cookPlanList.${me}.${planId}`. Each RPC takes `changed_at` and answers `applied | superseded | gone` as in decision 10, checking membership at send time. **Claims and checks keep separate phone timestamps** (`claim_changed_at`, `check_changed_at`), so one member's claim never beats another's later check-off. Last write wins within each. Adding or removing Recipes needs a connection.
+- **Deleting or removing a Recipe** (spec L110, L229–L232, L259): a trigger on deleting a `cook_plan_recipes` row (from removing the Recipe, or the Recipe's deletion cascading) deletes that Recipe's amounts from items that are **unclaimed and unchecked**, and then deletes such items left with no amounts. On claimed or checked items the amount row stays, with `recipe_id` null and its title, shown as "{title} (removed)".
+- **Live**: the Broadcast pattern from 13, topic `cook_plan:{id}`, on items, amounts, `cook_plan_recipes`, members and the plan row. The phone re-reads the plan.
+- **After "We cooked it"** (18): Claim and unclaim answer `gone`. Check and uncheck still work, so a check made offline in the store still fills the buyer's Pantry.
+- **Flag:** spec L182 lists "add" among queued Cook Plan changes, but the schema (spec L216) has no hand-added Cook Plan items. No add is built.
+- **Flag:** editing a Recipe that's in a plan leaves its plan lines as they were, as ticket 21 found for Shopping Lists. Whatever 21 decides applies to both.
+
+## 16 Cook Logs and the Saved/Cooked filter
+
+- **Model** (spec L217, L115–L118):
+  - `cook_logs (id, user_id, recipe_id, cooked_on date not null, notes text null check (length ≤ 2000), cook_plan_id null on delete set null, created_at, updated_at)`. The Recipe must be the logger's own and reviewed; `recipe_id` cascades on delete.
+  - `cooked_on` defaults to the phone's local today and can't be later than tomorrow.
+  - `cook_log_companions (cook_log_id, user_id)`: each must be a Friend of the logger, or a co-member of the log's Cook Plan when it came from one (18, spec L237). A companion stays on the log after an unfriend.
+  - Actions: `addCookLog` (spec L157), `editCookLog`, `deleteCookLog`, `listCookLogs(recipeId)`.
+  - A Recipe can have any number of Cook Logs (spec L117).
+- **Photos** (spec L115): at most 4 per log, stored as the user's own images (ticket 16).
+  - They live in a private bucket `cook-log-photos` at `{user_id}/{cook_log_id}/{photo_id}.jpg`, downscaled and saved as in decision 05 (1568 px, JPEG 0.8), and uploaded before the log is saved.
+  - Storage select is allowed when the first path segment is the caller **or** `private.are_friends(segment, caller)`. Writes are owner-only.
+  - Signed URLs last 1 hour.
+  - Deleting a log removes its photos, best effort, as `removeScreenshot` does.
+- **Who sees them** (spec L191, L258): the owner and their Friends, through `owner = caller or private.are_friends(owner, caller)` on `cook_logs`, `cook_log_companions` and the photos. Strangers and unfriended users see nothing. Friends see companions' usernames (spec L135) through a security-definer read. Companion usernames are already findable through search.
+- **Saved/Cooked** (spec L55, L116): **Cooked** means a reviewed Recipe with at least one Cook Log. **Saved** means a reviewed Recipe with none, so deleting the last log makes it Saved again (ticket 16). Want to Cook stays its own list. `search_recipes` gains `cooked boolean default null` (null means all). The Library's `recipesFor` passes `cooked: filter === 'cooked'` for the two tiles, so the "Cooked" tile stops being visual-only (`src/app/(tabs)/index.tsx` line 105). Searching searches within the selected tile. `RecipeSummary` gains `cookCount` and `lastCookedOn`.
+- **Flag:** the Library today shows *every* Recipe under Saved. Making Saved mean "not cooked yet" (ticket 16) hides cooked Recipes from the default tile (see Questions 6).
+
+## 17 Ranking
+
+- **What is ranked** (spec L218, L122–L130): the user's own Cooked Recipes (17's first criterion). There's one entry per Recipe: `ranking_entries (user_id, recipe_id unique, band ranking_band ('liked', 'fine', 'disliked'), position int, ranked_at)`, with positions 1…n contiguous in each band (1 = best) and a deferrable unique `(user_id, band, position)`. The Score is never stored.
+- **Score** (spec L184, L187, L295) is one pure function, `scoreOf(band, position, bandSize)` in `src/data/ranking-engine.ts`, worked in integer tenths. Liked is 100 to 67, Fine 66 to 34, Didn't like 33 to 0: `round_half_up(hi10 − (hi10 − lo10) × i / (n + 1)) / 10`. So a lone Liked Recipe is 8.4, a lone Fine one 5.0 and a lone Didn't like one 1.7. The server returns band, position and band size; the engine makes every Score, mine and Friends' (19).
+- **Comparisons** (spec L185, L79–L81): `startRanking(recipeId, band)` reads that band (best first, without this Recipe) and returns a `RankingSession`, which is pure state on the phone. The search is binary over the n+1 gaps: compare with the Recipe at `floor((lo + hi) / 2)`. "Better" moves up, "worse" moves down, and there is no "same", so there are no ties in order. That's at most `ceil(log2(n + 1))` comparisons, 7 for a band of 100 (17's criterion). `answerComparison(session, 'better' | 'worse')` returns the next session. `skipComparisons(session)` places the Recipe at gap `floor(n / 2)`, the middle (spec L186). The finished session calls `place_in_ranking(recipe_id, band, position, band_size_seen)`, which holds an advisory lock on the user. If the band's size changed meanwhile (another phone), it answers `bandChanged` and the phone restarts the comparisons. A session left half-way ranks nothing.
+- **Ties in Score**: two neighbours in a big band can round to the same one-decimal Score. Order is still position. The badge shows the same number.
+- **Re-ranking** (spec L188, L127): allowed any time from the Recipe screen, offered again after each new Cook Log. It removes the entry and inserts it again in one transaction, renumbering both bands.
+- **Deleting** (spec L130, L188): deleting the Recipe cascades its entry, and a trigger renumbers that band. Deleting a Recipe's last Cook Log also removes its entry, after a warning, because only Cooked Recipes are ranked (see Questions 7).
+- **Visibility** (spec L191): `owner = caller or private.are_friends(owner, caller)` on `ranking_entries`. Actions: `getRanking()` (spec L159) returns the three bands with Recipe title, thumbnail and Score.
+- **Flag:** spec L80 says "about 3–5 comparisons with 100 cooked Recipes" and ticket 17 says "a band of 100 needs at most 7". They agree only if the 100 Recipes spread over three bands (about 33 per band means at most 6). Build to the binary-search bound.
+
+## 18 "We cooked it"
+
+- **Marking** (spec L107, L237): `markCookPlanCooked(planId)` (spec L156) lets any member set `status = 'cooked'`, `cooked_at` and `cooked_by`. Doing it twice is the same as once. There's no undo, so the screen confirms first. There's no push (spec L238).
+- **Prompts** (spec L108): each member sees an in-app prompt card on the plan, and at the top of the Cook Plans tab, until they've logged every Recipe or tapped "Not now". The dismissal is `cook_plan_members.prompt_dismissed_at`. For each Recipe:
+  - If the member owns it, they log it directly.
+  - If not, they're offered "Save your copy first" (`copyRecipe`, or "Use your copy" when a copy with `copied_from_recipe_id` exists). The Cook Log and Ranking then attach to that copy (ticket 18).
+  - The log form is pre-filled with `cooked_on` = the plan's `cook_on` if it's set and not in the future, else the local date of `cooked_at`; companions = every other member, including unfriended co-members (spec L237); and `cook_plan_id`.
+  - After saving, "Rank it" opens 17's band picker, with Skip.
+  - Every step can be dismissed (spec L108).
+- **Archive** (spec L109): the Cook Plans tab has Active and Cooked sections, the Cooked ones newest first. Cooked plans are read-only except check and uncheck (15). Their Recipes stay readable to members through `private.can_read_recipe`.
+
+## 19 Friend profiles
+
+- **What it shows** (spec L134–L136): `getFriendProfile(userId)` (spec L159) returns:
+  - username
+  - "Friends since" (`responded_at`)
+  - their Ranking by band with Scores, drawn in `friendAccent` (docs/design.md)
+  - their Cook Logs newest first, 20 at a time: date, Recipe title, notes, photos, companions
+
+  It never shows their Pantry, Staples, Shopping List, Want to Cook, Tags, Drafts, Recipes they haven't ranked or logged, or their Friends list.
+- **Who can open it**: Friends only. A stranger, an unfriended user and an id that doesn't exist all get the same `not_found`, so a profile reveals nothing about who exists. A stranger can do no more than username search (spec L193).
+- **Recipes on it** (spec L134, L136): `private.can_read_recipe` (14) widens to Recipes that have a Cook Log, or a Ranking entry, owned by a Friend of the caller. That covers title, lines, steps and Source Video link, but not the owner's screenshot. `copyRecipe` works on any of them (spec L136). Unfriending ends it at once (spec L234).
+- **Flag:** spec L190 says Recipes are visible only to their owner (plus plan members, L192). Stories 87–89 need Friends to see and copy ranked and logged Recipes. The widening above is the default (see Questions 5).
+
+## User decisions for 11–19 (2026-10-28)
+
+1. **Username search:** matches the start of a username, from 3 characters, with at most 10 results. A rate limit comes before a public launch. (Default, not asked.)
+2. **Invite links:** the user buys a neutral domain for universal links and the fallback page. `INVITE_HOST` is that domain, and ticket 12 waits until the user names it. There's no deferred-link SDK: after installing, people tap the link again or paste it.
+3. **Block:** none in the TestFlight version. Declining stays silent, and a pair gets at most one request push every 7 days. Add Block before a public launch.
+4. **Cook Plan invites:** invited Friends join at once and can always leave. (Default, not asked.)
+5. **Recipe access:** Friends may read the full Recipe (lines, steps, video link) for anything in your Ranking or Cook Logs, and copy it. They never see Tags, Want to Cook, Drafts or Instagram screenshots. This widens spec L190, as §19 describes.
+6. **Saved tile:** shows reviewed Recipes not cooked yet; Cooked shows those with at least one Cook Log.
+7. **Last Cook Log:** deleting a Recipe's last Cook Log takes it out of your Ranking, after a warning. (Default, not asked.)

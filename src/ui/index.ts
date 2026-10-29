@@ -11,6 +11,7 @@ export { IngredientLineRow } from './ingredient-line-row';
 export { IngredientRow } from './ingredient-row';
 export { ListRow } from './list-row';
 export { NavRow } from './nav-row';
+export { PersonRow, type PersonAction } from './person-row';
 export { ScoreBadge, formatScore, type ScoreTone } from './score-badge';
 export { Screen } from './screen';
 export { ScreenshotField } from './screenshot-field';
