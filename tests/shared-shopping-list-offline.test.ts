@@ -305,3 +305,21 @@ test('changes an older version queued without naming a list go to the user\'s ow
   ]);
   expect(view(await friendOwner.data.getShoppingList())).toEqual(unchanged);
 });
+
+test("a removal that changed nothing, whose check of why gets no signal, fails as offline, never as removed", async () => {
+  const owner = await signInWithUsername('owner');
+  const friend = await phoneWithUsername('friend');
+  const { listId } = await shareWith(owner, friend);
+  const garlic = itemId(await friend.data.getShoppingList({ listId }), 'garlic');
+  await owner.data.stopSharingShoppingList(friend.userId);
+
+  // The delete reaches the server and removes nothing; the signal drops before the phone can ask why.
+  const check = friend.holdNextRequest(`select=id&id=eq.${garlic}`);
+  const removing = friend.data.removeFromShoppingList(garlic, { listId });
+  await check.reached;
+  friend.goOffline();
+  check.release();
+
+  await expect(removing).rejects.toMatchObject({ code: 'offline' });
+  expect(view(await owner.data.getShoppingList())).toEqual(unchanged);
+});

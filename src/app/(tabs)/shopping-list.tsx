@@ -169,7 +169,7 @@ export default function ShoppingList() {
           checked,
           onPress: changeFromRow(() => (checked ? data.uncheck(item.id, { listId }) : data.checkOff(item.id, { listId }))),
         }}
-        action={removable ? { label: 'Remove', onPress: changeFromRow(() => data.removeFromShoppingList(item.id)) } : undefined}
+        action={removable ? { label: 'Remove', onPress: changeFromRow(() => data.removeFromShoppingList(item.id, { listId })) } : undefined}
       />
     );
   };

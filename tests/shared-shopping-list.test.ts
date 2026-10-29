@@ -198,10 +198,30 @@ test("a Friend the list isn't shared with can't read it, nor change it", async (
   await expect(other.data.getShoppingList({ listId })).rejects.toMatchObject({ code: 'shopping_list_not_shared' });
   await expect(other.data.checkOff(garlic.id, { listId })).rejects.toMatchObject({ code: 'shopping_list_item_not_found' });
   await expect(other.data.addManualItem('Snacks', { listId })).rejects.toMatchObject({ code: 'shopping_list_not_shared' });
-  await other.data.removeFromShoppingList(garlic.id);
+  await expect(other.data.removeFromShoppingList(garlic.id, { listId })).rejects.toMatchObject({
+    code: 'shopping_list_not_shared',
+  });
 
   expect(view(await owner.data.getShoppingList())).toEqual([butterLine(false), garlicLine(false), towels(false)]);
   expect(await pantryNames(owner)).toEqual([]);
+});
+
+test("removing from a Friend's list that stopped being shared fails, even an item the phone still holds", async () => {
+  const { owner, friend, listId } = await sharedList();
+  const snacks = await friend.data.addManualItem('Snacks', { listId });
+  const towelsId = named(await friend.data.getShoppingList({ listId }), 'Paper towels').id;
+
+  // Gone already from a list still shared: fine.
+  await owner.data.removeFromShoppingList(snacks);
+  await friend.data.removeFromShoppingList(snacks, { listId });
+
+  await owner.data.stopSharingShoppingList(friend.userId);
+  // The phone still holds the item on its copy of the list: no listId needed to find it.
+  await expect(friend.data.removeFromShoppingList(towelsId)).rejects.toMatchObject({ code: 'shopping_list_not_shared' });
+  await expect(friend.data.removeFromShoppingList(towelsId, { listId })).rejects.toMatchObject({
+    code: 'shopping_list_not_shared',
+  });
+  expect(view(await owner.data.getShoppingList())).toEqual([butterLine(false), garlicLine(false), towels(false)]);
 });
 
 test('the owner stops sharing: the Friend loses the list at once; stopping again says it was not shared', async () => {

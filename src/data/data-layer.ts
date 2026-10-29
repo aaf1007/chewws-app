@@ -2281,14 +2281,18 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   }
 
   /**
-   * Takes one item off the Shopping List (or a Friend's shared with the user: only items added by
-   * hand; the lines from their Recipes are theirs to remove). Already gone is fine. Needs a
-   * connection: the changes waiting on the phone are sent first, so an item added with no signal
-   * is there to remove. A change waiting for its next try after a server error doesn't hold it up:
-   * the item is removed, and the changes to it still waiting are dropped (one adding it would put
-   * it back).
+   * Takes one item off the Shopping List, or with `listId` (or when the phone holds it on one) a
+   * Friend's shared with the user: only items added by hand there; the lines from their Recipes are
+   * theirs to remove. Already gone from a list the user can still use is fine; a Friend's list that
+   * isn't shared with them any more fails with `shopping_list_not_shared`. Needs a connection: the
+   * changes waiting on the phone are sent first, so an item added with no signal is there to
+   * remove. A change waiting for its next try after a server error doesn't hold it up: the item is
+   * removed, and the changes to it still waiting are dropped (one adding it would put it back).
    */
-  async function removeFromShoppingList(itemId: ShoppingListItemId): Promise<void> {
+  async function removeFromShoppingList(
+    itemId: ShoppingListItemId,
+    options: { listId?: ShoppingListId } = {},
+  ): Promise<void> {
     const me = await requireListOwner();
     const lists = shoppingListOf(me);
     await lists.ready;
@@ -2309,13 +2313,26 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     }
     if (error) fail(error);
     if (data?.length === 0) {
-      // Nothing removed: gone already, or a line the user may see but not remove.
-      const still = await asSignedIn(me, (token) =>
-        client.from('shopping_list_items').select('id').eq('id', itemId).setHeader('Authorization', bearer(token)),
+      // Nothing removed: a line the user may see but not remove, gone already, or on a Friend's
+      // list they can't use any more. Never an answer of success unless it's gone from a list
+      // they can still use.
+      const still = await readAs(me, (token) =>
+        client.from('shopping_list_items').select('id').eq('id', itemId).retry(false).setHeader('Authorization', bearer(token)),
       );
-      if (typeof still !== 'string' && still.data?.length) {
+      if (still.status === 'unreachable') {
+        lists.queue.markUnreachable();
+        throw needsConnection('Removing');
+      }
+      if (still.status === 'serverFailed') {
+        throw new DataError('server_error', "Couldn't remove it: the server had a problem. Try again in a moment.");
+      }
+      if (still.data?.length) {
         throw new DataError('shopping_list_item_not_yours', "Only the list's owner can remove the lines from their Recipes.");
       }
+      const list = options.listId ?? lists.listHolding(itemId)?.id;
+      // Reading a Friend's list that isn't shared any more forgets it, and fails with
+      // `shopping_list_not_shared`; one that is, has the item gone already.
+      if (list !== undefined && !lists.isOwnList(list)) await loadShoppingList(me, list);
     }
     await lists.queue.withdraw(({ change }) => change.itemId === itemId);
     lists.forget(itemId);
