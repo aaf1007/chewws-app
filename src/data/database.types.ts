@@ -34,6 +34,122 @@ export type Database = {
   }
   public: {
     Tables: {
+      cook_plan_amounts: {
+        Row: {
+          amount_texts: string[]
+          created_at: string
+          id: string
+          item_id: string
+          plan_id: string
+          recipe_id: string | null
+          recipe_title: string
+        }
+        Insert: {
+          amount_texts?: string[]
+          created_at?: string
+          id?: string
+          item_id: string
+          plan_id: string
+          recipe_id?: string | null
+          recipe_title: string
+        }
+        Update: {
+          amount_texts?: string[]
+          created_at?: string
+          id?: string
+          item_id?: string
+          plan_id?: string
+          recipe_id?: string | null
+          recipe_title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cook_plan_amounts_item"
+            columns: ["item_id", "plan_id"]
+            isOneToOne: false
+            referencedRelation: "cook_plan_items"
+            referencedColumns: ["id", "plan_id"]
+          },
+          {
+            foreignKeyName: "cook_plan_amounts_recipe"
+            columns: ["plan_id", "recipe_id"]
+            isOneToOne: false
+            referencedRelation: "cook_plan_recipes"
+            referencedColumns: ["plan_id", "recipe_id"]
+          },
+        ]
+      }
+      cook_plan_items: {
+        Row: {
+          check_changed_at: string | null
+          checked_at: string | null
+          checked_by: string | null
+          claim_changed_at: string | null
+          claimed_at: string | null
+          claimed_by: string | null
+          created_at: string
+          id: string
+          ingredient_id: string
+          plan_id: string
+          updated_at: string
+        }
+        Insert: {
+          check_changed_at?: string | null
+          checked_at?: string | null
+          checked_by?: string | null
+          claim_changed_at?: string | null
+          claimed_at?: string | null
+          claimed_by?: string | null
+          created_at?: string
+          id?: string
+          ingredient_id: string
+          plan_id: string
+          updated_at?: string
+        }
+        Update: {
+          check_changed_at?: string | null
+          checked_at?: string | null
+          checked_by?: string | null
+          claim_changed_at?: string | null
+          claimed_at?: string | null
+          claimed_by?: string | null
+          created_at?: string
+          id?: string
+          ingredient_id?: string
+          plan_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cook_plan_items_checked_by_fkey"
+            columns: ["checked_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cook_plan_items_claimed_by_fkey"
+            columns: ["claimed_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cook_plan_items_ingredient_id_fkey"
+            columns: ["ingredient_id"]
+            isOneToOne: false
+            referencedRelation: "ingredients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cook_plan_items_plan_id_fkey"
+            columns: ["plan_id"]
+            isOneToOne: false
+            referencedRelation: "cook_plans"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       cook_plan_members: {
         Row: {
           invited_by: string | null
@@ -770,7 +886,7 @@ export type Database = {
         Returns: string
       }
       add_recipe_to_cook_plan: {
-        Args: { plan_id: string; recipe_id: string }
+        Args: { lines?: Json; plan_id: string; recipe_id: string }
         Returns: Json
       }
       add_recipe_to_shopping_list: {
@@ -789,12 +905,31 @@ export type Database = {
         Args: { invitee: string; inviter: string; plan_id: string }
         Returns: Json
       }
+      claim_cook_plan_item: {
+        Args: { changed_at?: string; item_id: string; plan_id: string }
+        Returns: string
+      }
       claim_draft_build: { Args: { recipe_id: string }; Returns: Json }
       claim_friend_request_push: {
         Args: { addressee: string; requester: string }
         Returns: Json
       }
       claim_source_refresh: { Args: { recipe_id: string }; Returns: Json }
+      cook_plan_check_off: {
+        Args: { changed_at?: string; item_id: string; plan_id: string }
+        Returns: string
+      }
+      cook_plan_uncheck: {
+        Args: { changed_at?: string; item_id: string; plan_id: string }
+        Returns: string
+      }
+      cook_plan_who_has: {
+        Args: { plan_id: string }
+        Returns: {
+          ingredient_id: string
+          user_id: string
+        }[]
+      }
       copy_recipe: { Args: { recipe_id: string }; Returns: Json }
       create_cook_plan: { Args: { cook_on?: string }; Returns: string }
       create_recipe: {
@@ -1002,6 +1137,10 @@ export type Database = {
       }
       uncheck: {
         Args: { changed_at?: string; item_id: string }
+        Returns: string
+      }
+      unclaim_cook_plan_item: {
+        Args: { changed_at?: string; item_id: string; plan_id: string }
         Returns: string
       }
       unfriend: { Args: { user_id: string }; Returns: undefined }
