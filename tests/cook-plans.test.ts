@@ -14,6 +14,7 @@ import {
   holdCookPlanLeave,
   holdCookPlanRecipeAdd,
   holdRecipeEdit,
+  holdUnfriend,
   runYouTubeExpiryJob,
   seedFriendships,
   seedUsersWithUsernames,
@@ -515,6 +516,23 @@ test('unfriended co-members both stay and keep reading the plan, but neither can
   expect(await sam.data.inviteToCookPlan(kims.planId, jo.userId)).toEqual({ status: 'notFriends' });
   expect(await kim.data.inviteToCookPlan(kims.planId, jo.userId)).toEqual({ status: 'invited' });
   expect((await jo.data.listCookPlans()).map((p) => p.id).sort()).toEqual([planId, josNew.planId, kims.planId].sort());
+});
+
+test('an invite made while the two are being unfriended waits for it, and then invites nobody', async () => {
+  const sam = await signInWithUsername('sam');
+  const jo = await signInWithUsername('jo');
+  await befriend(sam, jo);
+  const { planId } = await sam.data.createCookPlan({ cookOn: null, friends: [] });
+
+  // jo unfriends sam on their phone, not committed yet.
+  const held = await holdUnfriend(jo, sam);
+  const inviting = sam.data.inviteToCookPlan(planId, jo.userId);
+  await held.waitForWaiting(1);
+  await held.commit();
+
+  expect(await inviting).toEqual({ status: 'notFriends' });
+  expect((await sam.data.getCookPlan(planId))?.members.map((m) => m.id)).toEqual([sam.userId]);
+  expect(await jo.data.listCookPlans()).toEqual([]);
 });
 
 /** `inviter` and `count` Friends of theirs who have never signed in, for filling a plan. */
