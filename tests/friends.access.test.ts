@@ -221,9 +221,11 @@ test('a pair gets at most one "Friend request" push in 7 days, however often the
     expect((await requester.client.rpc('cancel_friend_request', { user_id: addressee.userId })).error).toBeNull();
     await requester.data.sendFriendRequest(addressee.userId);
   }
-  const { sendNotification } = inProcessNotifications(requester.client);
-  await sendNotification({ kind: 'friendRequest', toUserId: addressee.userId });
+  // Calling the notify function directly, past the app, sends nothing more either.
+  const direct = inProcessNotifications(requester.client);
+  await direct.sendNotification({ kind: 'friendRequest', toUserId: addressee.userId });
 
+  expect(direct.notifications.pushesSent()).toEqual([]);
   expect(requester.notifications.pushesSent()).toHaveLength(1);
   expect(requester.notifications.pushesSent()[0]).toMatchObject({ to: TOKEN, title: 'Friend request' });
 
