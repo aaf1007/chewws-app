@@ -53,6 +53,7 @@ export const FULL_RECIPE: Fixture = {
       'Melt the butter and fry the garlic for a minute.',
       'Add the tomatoes, then the cream and parmesan, and toss with the pasta.',
     ],
+    tags: ['Italian', 'Dinner', 'quick'],
   },
 };
 
@@ -71,6 +72,7 @@ export const LINK_IN_BIO: Fixture = {
     recipeFound: false,
     lines: [{ text: 'beef', amount: null, ingredient: 'beef' }],
     steps: ['Smash the burgers.'],
+    tags: ['American', 'Dinner'],
   },
 };
 
@@ -105,6 +107,7 @@ const SHAKSHUKA: Extraction = {
     'Make four wells, crack in the eggs, cover and cook until set.',
     'Crumble over the feta.',
   ],
+  tags: ['Middle Eastern', 'Breakfast'],
 };
 
 /** A canned web page; `extraction` is Claude's canned answer for its Recipe. */
@@ -191,6 +194,7 @@ export const YOUTUBE_SHORT: Fixture = {
       { text: 'black pepper', amount: null, ingredient: 'black pepper' },
     ],
     steps: ['Cook the linguine.', 'Toss it with the lemon, oil and parmesan.', 'Season with pepper.'],
+    tags: ['Italian', 'Dinner', 'quick'],
   },
 };
 
@@ -225,6 +229,7 @@ export const EXPIRED_THUMBNAIL: Fixture = {
       { text: '3 cloves garlic', amount: '3 cloves', ingredient: 'garlic' },
     ],
     steps: ['Cook the rice, then stir in the garlic butter.'],
+    tags: ['Side'],
   },
 };
 
@@ -264,6 +269,7 @@ Sear the chicken skin-side down until crisp. Add the butter, garlic, honey and s
       'Sear the chicken skin-side down until crisp.',
       'Add the butter, garlic, honey and soy sauce and simmer until sticky.',
     ],
+    tags: ['Asian', 'Dinner'],
   } satisfies Extraction,
 };
 
@@ -280,6 +286,7 @@ export const TYPED_CAPTION = {
       { text: '1 tbsp soy sauce', amount: '1 tbsp', ingredient: 'soy sauce' },
     ],
     steps: ['Fry the garlic in the butter.', 'Toss in the noodles and soy sauce.'],
+    tags: ['Asian', 'Dinner'],
   } satisfies Extraction,
 };
 
@@ -296,6 +303,7 @@ export const SCREENSHOT_RECIPE: Extraction = {
     { text: '1 tsp sesame seeds', amount: '1 tsp', ingredient: 'sesame seeds' },
   ],
   steps: ['Brush the salmon with the miso and maple syrup.', 'Grill for 8 minutes and scatter over the sesame seeds.'],
+  tags: ['Japanese', 'Dinner'],
 };
 
 /** A recipe site that turns the server away, as big ones do with 402: the app can't read it. */

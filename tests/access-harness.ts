@@ -41,6 +41,8 @@ export type DraftFakes = {
   extract?: Extract;
   /** This many of the app's kicks are lost on the way (no signal), starting no build. */
   loseKicks?: number;
+  /** For race tests only: a build waits for this before it downloads the user's screenshot. */
+  beforeScreenshotDownload?: () => Promise<void>;
 };
 
 /** The Draft builds a user's app started, run in-process with the fakes instead of build-draft. */
@@ -78,15 +80,18 @@ export function inProcessSourceRefresh(client: SupabaseClient<Database>, fakes: 
 }
 
 /** A screenshot the user added, downloaded as the build-draft function does: as the service role. */
-const loadScreenshot = screenshotLoader(async (path) => {
-  const { data, error } = await admin.storage.from('recipe-images').download(path);
-  if (error) throw error;
-  return data.arrayBuffer();
-});
+const screenshotLoaderFor = (fakes: DraftFakes) =>
+  screenshotLoader(async (path) => {
+    await fakes.beforeScreenshotDownload?.();
+    const { data, error } = await admin.storage.from('recipe-images').download(path);
+    if (error) throw error;
+    return data.arrayBuffer();
+  });
 
 export function inProcessDraftBuilds(fakes: DraftFakes = {}) {
   const readSource = createSourceReader(fakeAdapters(fakes)).read;
   const extract = fakes.extract ?? fixtureExtract;
+  const loadScreenshot = screenshotLoaderFor(fakes);
   const running = new Set<Promise<unknown>>();
   const build = (recipeId: string) => {
     const done = buildDraft(recipeId, { rpc: serviceRpc, readSource, extract, loadScreenshot });

@@ -1,0 +1,199 @@
+# Ticket 06: Tags, search and Want to Cook. Saves a TikTok and a YouTube Short whose Drafts come with
+# suggested Tags, already selected; leaves one out and adds one before marking the TikTok's Draft
+# reviewed, then takes a Tag off and puts another on the Recipe, and marks it Want to Cook. In the
+# Library it searches by title, linked Ingredient and Tag, and opens the Want to Cook list.
+# Run with `npm run e2e -- .maestro/06-tags-search-want-to-cook.yaml`. The functions run with
+# DRAFT_FIXTURES=1: canned captions and Claude answers (with their suggested Tags), no network.
+appId: com.ant1007.recipeapp
+---
+- runFlow: subflows/sign-in-dev.yaml
+
+# A TikTok with the whole recipe: its Draft suggests Italian, Dinner and quick, all selected.
+- openLink: "recipeapp://save?url=https%3A%2F%2Fwww.tiktok.com%2F%40pastaqueen%2Fvideo%2F7400000000000000001"
+- extendedWaitUntil:
+    visible: "Save Recipe"
+    timeout: 10000
+- tapOn:
+    id: "save-link"
+- tapOn: "View Drafts"
+- extendedWaitUntil:
+    visible: "Creamy garlic pasta, Ready to review, TikTok · Pasta Queen"
+    timeout: 15000
+- tapOn: "Creamy garlic pasta, Ready to review, TikTok · Pasta Queen"
+- extendedWaitUntil:
+    visible: "Review Draft"
+    timeout: 10000
+- scrollUntilVisible:
+    element:
+      id: "add-tag"
+    direction: DOWN
+- assertVisible:
+    text: "Italian"
+    selected: true
+- assertVisible:
+    text: "Dinner"
+    selected: true
+- assertVisible:
+    text: "quick"
+    selected: true
+
+# Leave Dinner out, add one of the user's own, and mark it reviewed.
+- tapOn: "Dinner"
+- assertVisible:
+    text: "Dinner"
+    selected: false
+- tapOn:
+    id: "add-tag"
+- inputText: "Date night"
+- tapOn:
+    id: "add-tag-submit"
+- assertVisible:
+    text: "Date night"
+    selected: true
+- hideKeyboard
+- scrollUntilVisible:
+    element: "Mark reviewed"
+    direction: DOWN
+- tapOn: "Mark reviewed"
+- extendedWaitUntil:
+    notVisible: "Review Draft"
+    timeout: 10000
+
+# The Recipe has the Tags kept on review, not Dinner.
+- assertVisible: "Creamy garlic pasta"
+- assertVisible: "Date night"
+- assertVisible: "Italian"
+- assertVisible: "quick"
+- assertNotVisible: "Dinner"
+
+# Take quick off, put Weeknight on, and mark it Want to Cook.
+- tapOn: "Remove quick"
+- extendedWaitUntil:
+    notVisible: "quick"
+    timeout: 10000
+- tapOn:
+    id: "add-tag"
+- inputText: "Weeknight"
+- tapOn:
+    id: "add-tag-submit"
+- extendedWaitUntil:
+    visible: "Weeknight"
+    timeout: 10000
+- hideKeyboard
+- assertVisible:
+    id: "want-to-cook"
+    selected: false
+- tapOn:
+    id: "want-to-cook"
+- extendedWaitUntil:
+    visible:
+      id: "want-to-cook"
+      selected: true
+    timeout: 10000
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "No Drafts"
+    timeout: 10000
+- tapOn: "Back"
+
+# A YouTube Short, reviewed with all its suggested Tags kept.
+- openLink: "recipeapp://save?url=https%3A%2F%2Fwww.youtube.com%2Fshorts%2FLemonPasta1"
+- extendedWaitUntil:
+    visible: "Save Recipe"
+    timeout: 10000
+- tapOn:
+    id: "save-link"
+- tapOn: "View Drafts"
+- extendedWaitUntil:
+    visible: "Lemon pasta, Ready to review, YouTube · Lemon Kitchen"
+    timeout: 15000
+- tapOn: "Lemon pasta, Ready to review, YouTube · Lemon Kitchen"
+- extendedWaitUntil:
+    visible: "Review Draft"
+    timeout: 10000
+- scrollUntilVisible:
+    element: "Mark reviewed"
+    direction: DOWN
+- assertVisible:
+    text: "Dinner"
+    selected: true
+- tapOn: "Mark reviewed"
+- extendedWaitUntil:
+    notVisible: "Review Draft"
+    timeout: 10000
+- assertVisible: "Dinner"
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "No Drafts"
+    timeout: 10000
+- tapOn: "Back"
+
+# Search, at the top of the Library: by title, by a linked Ingredient, by Tag.
+- extendedWaitUntil:
+    visible: "Lemon pasta, 5 ingredients · 3 steps"
+    timeout: 10000
+- assertVisible: "Creamy garlic pasta, 7 ingredients · 3 steps"
+- tapOn: "Search your Recipes"
+- inputText: "lemon"
+- extendedWaitUntil:
+    notVisible: "Creamy garlic pasta, 7 ingredients · 3 steps"
+    timeout: 10000
+- assertVisible: "Lemon pasta, 5 ingredients · 3 steps"
+- eraseText: 10
+# "tomatoes" finds the Recipe whose line is linked to the Ingredient "cherry tomato".
+- inputText: "tomatoes"
+- extendedWaitUntil:
+    visible: "Creamy garlic pasta, 7 ingredients · 3 steps"
+    timeout: 10000
+- assertNotVisible: "Lemon pasta, 5 ingredients · 3 steps"
+- eraseText: 10
+- inputText: "dinner"
+- extendedWaitUntil:
+    visible: "Lemon pasta, 5 ingredients · 3 steps"
+    timeout: 10000
+- assertNotVisible: "Creamy garlic pasta, 7 ingredients · 3 steps"
+- eraseText: 10
+- inputText: "weeknight"
+- extendedWaitUntil:
+    visible: "Creamy garlic pasta, 7 ingredients · 3 steps"
+    timeout: 10000
+- assertNotVisible: "Lemon pasta, 5 ingredients · 3 steps"
+- eraseText: 10
+- inputText: "chicken"
+- extendedWaitUntil:
+    visible: "No matches\\..*"
+    timeout: 10000
+- eraseText: 10
+- hideKeyboard
+- extendedWaitUntil:
+    visible: "Lemon pasta, 5 ingredients · 3 steps"
+    timeout: 10000
+
+# The Want to Cook list: only the Recipe marked. Unmarked, the list is empty.
+- tapOn: "Want to Cook"
+- extendedWaitUntil:
+    notVisible: "Lemon pasta, 5 ingredients · 3 steps"
+    timeout: 10000
+- assertVisible: "Creamy garlic pasta, 7 ingredients · 3 steps"
+- tapOn: "Creamy garlic pasta, 7 ingredients · 3 steps"
+- extendedWaitUntil:
+    visible:
+      id: "want-to-cook"
+      selected: true
+    timeout: 10000
+- tapOn:
+    id: "want-to-cook"
+- extendedWaitUntil:
+    visible:
+      id: "want-to-cook"
+      selected: false
+    timeout: 10000
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "Nothing to cook yet"
+    timeout: 10000
+- tapOn: "Saved"
+- extendedWaitUntil:
+    visible: "Lemon pasta, 5 ingredients · 3 steps"
+    timeout: 10000
+- assertVisible: "Creamy garlic pasta, 7 ingredients · 3 steps"

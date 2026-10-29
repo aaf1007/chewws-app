@@ -167,6 +167,36 @@ export type Database = {
           },
         ]
       }
+      recipe_tags: {
+        Row: {
+          recipe_id: string
+          tag_id: string
+        }
+        Insert: {
+          recipe_id: string
+          tag_id: string
+        }
+        Update: {
+          recipe_id?: string
+          tag_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recipe_tags_recipe_id_fkey"
+            columns: ["recipe_id"]
+            isOneToOne: false
+            referencedRelation: "recipes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recipe_tags_tag_id_fkey"
+            columns: ["tag_id"]
+            isOneToOne: false
+            referencedRelation: "tags"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       recipes: {
         Row: {
           build_attempts: number
@@ -181,8 +211,10 @@ export type Database = {
           recipe_found: boolean
           status: Database["public"]["Enums"]["recipe_status"]
           steps: string[]
+          suggested_tags: string[]
           title: string
           updated_at: string
+          want_to_cook_at: string | null
         }
         Insert: {
           build_attempts?: number
@@ -197,8 +229,10 @@ export type Database = {
           recipe_found?: boolean
           status?: Database["public"]["Enums"]["recipe_status"]
           steps?: string[]
+          suggested_tags?: string[]
           title: string
           updated_at?: string
+          want_to_cook_at?: string | null
         }
         Update: {
           build_attempts?: number
@@ -213,8 +247,10 @@ export type Database = {
           recipe_found?: boolean
           status?: Database["public"]["Enums"]["recipe_status"]
           steps?: string[]
+          suggested_tags?: string[]
           title?: string
           updated_at?: string
+          want_to_cook_at?: string | null
         }
         Relationships: []
       }
@@ -411,6 +447,27 @@ export type Database = {
           },
         ]
       }
+      tags: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          owner_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          owner_id?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          owner_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -439,6 +496,7 @@ export type Database = {
         Returns: string[]
       }
       add_staple: { Args: { ingredient_name: string }; Returns: string }
+      add_tag: { Args: { name: string; recipe_id: string }; Returns: Json }
       add_to_pantry: { Args: { ingredient_name: string }; Returns: string }
       check_off: {
         Args: { changed_at?: string; item_id: string }
@@ -473,7 +531,13 @@ export type Database = {
       }
       retry_draft: { Args: { recipe_id: string }; Returns: string }
       review_draft: {
-        Args: { lines: Json; recipe_id: string; steps: string[]; title: string }
+        Args: {
+          lines: Json
+          recipe_id: string
+          steps: string[]
+          tags?: string[]
+          title: string
+        }
         Returns: string
       }
       save_from_link: {
@@ -485,6 +549,37 @@ export type Database = {
           with_screenshot?: boolean
         }
         Returns: Json
+      }
+      search_recipes: {
+        Args: { want_to_cook_only?: boolean; words?: Json }
+        Returns: {
+          build_attempts: number
+          build_failure:
+            | Database["public"]["Enums"]["draft_build_failure"]
+            | null
+          build_started_at: string | null
+          build_status: Database["public"]["Enums"]["draft_build_status"]
+          created_at: string
+          id: string
+          owner_id: string
+          recipe_found: boolean
+          status: Database["public"]["Enums"]["recipe_status"]
+          steps: string[]
+          suggested_tags: string[]
+          title: string
+          updated_at: string
+          want_to_cook_at: string | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "recipes"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      set_want_to_cook: {
+        Args: { recipe_id: string; want_to_cook: boolean }
+        Returns: string
       }
       store_source_refresh: {
         Args: { recipe_id: string; source: Json }

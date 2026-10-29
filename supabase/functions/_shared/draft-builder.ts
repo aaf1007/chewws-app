@@ -3,6 +3,7 @@
 // wires the real source reader, Claude and a service-role `rpc`; tests wire fakes.
 
 import { normaliseIngredientName } from '../../../src/data/ingredient-matcher.ts';
+import { tidyTagNames } from '../../../src/data/tag-name.ts';
 import { ExtractError, type Extract, type Extraction, type Screenshot } from './claude-extractor.ts';
 import {
   SourceError,
@@ -122,10 +123,14 @@ async function extractionOf(material: SourceMaterial, deps: DraftBuilderDeps, si
   return deps.extract({ ...material, screenshot }, signal);
 }
 
+/** The most Tag names a Draft keeps from the builder (decisions 06). */
+const MAX_SUGGESTED_TAGS = 5;
+
 /**
  * Builds the Draft `recipeId` once: a second kick while it builds, or after it's built, finds
  * nothing to claim. Ingredient names go through the Ingredient matcher; a line whose name
- * normalises to nothing is dropped. Never throws for a failed build: it marks the Draft failed.
+ * normalises to nothing is dropped. Suggested Tag names are tidied as Tag names are (blank, too
+ * long and repeated ones dropped), at most 5. Never throws for a failed build: it marks the Draft failed.
  */
 export async function buildDraft(recipeId: string, deps: DraftBuilderDeps): Promise<BuildOutcome> {
   const shared = toSharedLink(await deps.rpc('claim_draft_build', { recipe_id: recipeId }));
@@ -150,6 +155,7 @@ export async function buildDraft(recipeId: string, deps: DraftBuilderDeps): Prom
         recipeFound: extraction.recipeFound,
         lines,
         steps: extraction.steps,
+        tags: tidyTagNames(extraction.tags ?? [], MAX_SUGGESTED_TAGS),
         source: {
           platform: material.platform,
           external_id: material.externalId,
