@@ -20,7 +20,7 @@ import { toListLines, withItems, withListChanges, type ListChange } from './list
 import { parseListChange, parseSavedShoppingList } from './list-storage';
 import { validateRecipeInput } from './recipe-input';
 import { searchWords } from './search-words';
-import { MAX_TAG_NAME_LENGTH, normaliseTagName, tagKey, tagNameLength, tidyTagNames } from './tag-name';
+import { checkTagName, normaliseTagName, tagKey, tidyTagNames } from './tag-name';
 import { sessionIdOf, type SessionStorage } from './session-storage';
 import {
   DataError,
@@ -947,14 +947,11 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     }
   }
 
-  /** A Tag name as typed, ready to save. Fails when it's blank or too long. */
+  /** A Tag name as typed, ready to save. Fails with the rule `checkTagName` reports broken. */
   function toTagName(typed: string): string {
-    const name = normaliseTagName(typed);
-    if (!name) throw new DataError('tag_required', 'Type the name of a Tag.');
-    if (tagNameLength(name) > MAX_TAG_NAME_LENGTH) {
-      throw new DataError('tag_too_long', `A Tag can be at most ${MAX_TAG_NAME_LENGTH} characters.`);
-    }
-    return name;
+    const check = checkTagName(typed);
+    if (check.status === 'invalid') throw new DataError(check.code, check.message);
+    return check.name;
   }
 
   /**

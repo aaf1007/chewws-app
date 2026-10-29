@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { View } from 'react-native';
 
 import { hasCode, messageOf } from '@/auth/errors';
@@ -51,10 +51,13 @@ export function RecipeForm({
   initial,
   submitLabel,
   onSubmit,
+  beforeSubmit,
 }: {
   initial?: Recipe;
   submitLabel: string;
   onSubmit: (input: RecipeInput) => Promise<void>;
+  /** Drawn after the steps, above the error and the submit button (a Draft's Tags). */
+  beforeSubmit?: ReactNode;
 }) {
   const [title, setTitle] = useState(initial?.title ?? '');
   const [lines, setLines] = useState<Keyed<IngredientLineFields>[]>(() =>
@@ -132,6 +135,7 @@ export function RecipeForm({
         ))}
       </View>
 
+      {beforeSubmit}
       {shownError ? <Text tone="danger">{shownError}</Text> : null}
       <Button label={submitLabel} icon="checkmark" disabled={saving} onPress={save} />
     </>

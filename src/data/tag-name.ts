@@ -18,6 +18,21 @@ export function tagKey(name: string): string {
 /** How many characters a name has, as the database counts them (an emoji is one, not two). */
 export const tagNameLength = (name: string) => [...name].length;
 
+/** A Tag name as typed, checked: the name to save, or the rule it breaks (its `DataError` code). */
+export type TagNameCheck =
+  | { status: 'valid'; name: string }
+  | { status: 'invalid'; code: 'tag_required' | 'tag_too_long'; message: string };
+
+/** Checks and tidies a Tag name as typed, without saving it, so a screen can show the same error. */
+export function checkTagName(typed: string): TagNameCheck {
+  const name = normaliseTagName(typed);
+  if (!name) return { status: 'invalid', code: 'tag_required', message: 'Type the name of a Tag.' };
+  if (tagNameLength(name) > MAX_TAG_NAME_LENGTH) {
+    return { status: 'invalid', code: 'tag_too_long', message: `A Tag can be at most ${MAX_TAG_NAME_LENGTH} characters.` };
+  }
+  return { status: 'valid', name };
+}
+
 /**
  * Tag names tidied for saving: normalised, blank and over-long ones dropped, and each Tag once,
  * spelled as it first appears. Keeps the first `max` of them.

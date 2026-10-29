@@ -8,7 +8,7 @@ export { memoryStorage, type KeyValueStorage } from './change-queue';
 export { createDataLayer, type DataLayer, type DataLayerOptions } from './data-layer';
 export { normaliseIngredientName } from './ingredient-matcher';
 export { searchWords, type SearchWord } from './search-words';
-export { MAX_TAG_NAME_LENGTH, normaliseTagName, tagKey, tidyTagNames } from './tag-name';
+export { checkTagName, normaliseTagName, tagKey, tidyTagNames, type TagNameCheck } from './tag-name';
 export { validateRecipeInput, type RecipeInputError } from './recipe-input';
 export { createSessionStorage, type AuthStorage, type SessionStorage } from './session-storage';
 export {

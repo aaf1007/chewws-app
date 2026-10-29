@@ -11,11 +11,13 @@ export type RecipeState =
   | { status: 'missing'; message: string };
 
 /**
- * Loads a Recipe each time the screen comes into focus, so it's fresh after an edit. Takes the raw
- * route param: an id that isn't a Recipe id reads as a missing Recipe rather than throwing.
+ * Loads a Recipe each time the screen comes into focus, so it's fresh after an edit, and again on
+ * `reload()` (after a change made on the screen). Takes the raw route param: an id that isn't a
+ * Recipe id reads as a missing Recipe rather than throwing.
  */
-export function useRecipe(rawId: string): RecipeState {
+export function useRecipe(rawId: string): RecipeState & { reload: () => void } {
   const [state, setState] = useState<RecipeState>({ status: 'loading' });
+  const [round, setRound] = useState(0);
   useFocusEffect(
     useCallback(() => {
       let live = true;
@@ -39,7 +41,9 @@ export function useRecipe(rawId: string): RecipeState {
       return () => {
         live = false;
       };
-    }, [rawId]),
+      // `round` reloads on demand.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [rawId, round]),
   );
-  return state;
+  return { ...state, reload: () => setRound((r) => r + 1) };
 }
