@@ -80,3 +80,10 @@ appId: com.ant1007.recipeapp
     direction: DOWN
     timeout: 60000
 - assertVisible: "Map"
+# The last primitives, at the end of the gallery.
+- scrollUntilVisible:
+    element: "@a_username_twenty_ch"
+    direction: DOWN
+    timeout: 120000
+- assertVisible: "Accept: @sam"
+- assertVisible: "Add: @alex_cooks"

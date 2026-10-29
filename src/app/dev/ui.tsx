@@ -15,6 +15,7 @@ import {
   IngredientRow,
   ListRow,
   NavRow,
+  PersonRow,
   ScoreBadge,
   Screen,
   ScreenshotField,
@@ -332,6 +333,21 @@ export default function UiGallery() {
       <SectionHeader title="Steps" />
       <StepRow number={1} text="Mash the garlic into the butter." />
       <StepRow number={2} text="Spread on the bread and bake for 10 minutes, until the edges are golden." />
+
+      <SectionHeader title="Person rows" />
+      <View>
+        <PersonRow
+          username="sam"
+          detail="Wants to be Friends"
+          actions={[
+            { label: 'Accept', onPress: noop },
+            { label: 'Decline', onPress: noop, tone: 'muted' },
+          ]}
+        />
+        <PersonRow username="alex_cooks" actions={[{ label: 'Add', onPress: noop }]} />
+        <PersonRow username="rosa_2024" detail="Requested" actions={[{ label: 'Cancel', onPress: noop, tone: 'muted' }]} />
+        <PersonRow username="a_username_twenty_ch" detail="Friends since 28 Oct 2026" />
+      </View>
     </Screen>
   );
 }
