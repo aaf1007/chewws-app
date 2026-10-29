@@ -277,6 +277,22 @@ begin
 end;
 $$;
 
+-- fail_draft (ticket 03) now also clears the suggested Tag names, so a build that fails after an
+-- earlier one suggested some doesn't leave that build's suggestions on the Draft.
+create or replace function public.fail_draft(recipe_id uuid, reason public.draft_build_failure)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  update public.recipes r
+  set build_status = 'failed', build_failure = fail_draft.reason, suggested_tags = '{}', updated_at = now()
+  where r.id = fail_draft.recipe_id and r.status = 'draft' and r.build_status = 'building';
+  return found;
+end;
+$$;
+
 -- review_draft (ticket 03) now also takes the Tag names the user kept or added (`tags`, already
 -- tidied by the data layer), at most 20: it finds or makes each of their Tags and puts it on the
 -- Recipe, then clears the suggestions. A review refused, or sent again, attaches nothing.

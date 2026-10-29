@@ -3,8 +3,8 @@
 import { expect, test } from 'vitest';
 
 import { normaliseTagName, searchWords, tidyTagNames, type Recipe, type RecipeId, type RecipeInput } from '../src/data';
-import { EXTRACTION_SCHEMA, parseExtraction, type Extract } from '../supabase/functions/_shared/claude-extractor';
-import { FULL_RECIPE, PLAIN_PAGE, fixtureExtract } from '../supabase/functions/_shared/draft-fixtures';
+import { EXTRACTION_SCHEMA, ExtractError, parseExtraction, type Extract } from '../supabase/functions/_shared/claude-extractor';
+import { FULL_RECIPE, LINK_IN_BIO, PLAIN_PAGE, fixtureExtract } from '../supabase/functions/_shared/draft-fixtures';
 import { signInTestUser, type TestUser } from './harness';
 
 const tagNames = (recipe: Recipe | null) => (recipe?.status === 'reviewed' ? recipe.tags.map((t) => t.name) : null);
@@ -99,6 +99,27 @@ test('suggested Tags take the spelling of the user’s own Tag of that name, and
     { id: mine.id, name: 'ITALIAN' },
   ]);
   expect((await a.data.listTags()).map((t) => t.name)).toEqual(['Dinner', 'ITALIAN']);
+});
+
+test('a Draft whose build fails after an earlier one suggested Tags suggests none', async () => {
+  // Claude reads the first build, and can't read the second.
+  let builds = 0;
+  const extract: Extract = async (material, signal) => {
+    builds += 1;
+    if (builds > 1) throw new ExtractError('unreadable', 'No recipe here.');
+    return fixtureExtract(material, signal);
+  };
+  const a = await signInTestUser('a', { extract });
+  const id = await savedAndBuilt(a, LINK_IN_BIO.url);
+  expect(suggestedOf(await a.data.getRecipe(id))).toEqual(['American', 'Dinner']);
+
+  // Built again from a pasted caption: that build fails.
+  await a.data.addCaptionToDraft(id, { caption: 'Smash the burgers.' });
+  await a.drafts.settled();
+
+  const draft = await a.data.getRecipe(id);
+  expect(draft).toMatchObject({ status: 'draft', build: { status: 'failed', reason: 'unreadable' } });
+  expect(suggestedOf(draft)).toEqual([]);
 });
 
 test('Claude is asked for Tags, and an answer with Tags of the wrong shape is unreadable', () => {
