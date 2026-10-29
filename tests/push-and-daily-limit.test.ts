@@ -17,6 +17,7 @@ import {
   backdateDraftBuild,
   backdateLinkSaves,
   countLinkSaves,
+  holdLinkSave,
   seedLinkSaves,
   signInOnPhones,
   signInTestUser,
@@ -174,6 +175,21 @@ test('two saves at once cannot both be the 30th', async () => {
   expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
   const rejected = results.find((r) => r.status === 'rejected');
   expect(rejected?.reason).toBeInstanceOf(DailyLimitError);
+  expect(await countLinkSaves(a)).toBe(30);
+  expect(await a.data.listDrafts()).toHaveLength(1);
+});
+
+test('a save made while another is saving the 30th waits for it, then is refused', async () => {
+  const a = await signInTestUser('a');
+  await seedLinkSaves(a, savesAt(29, 2));
+  const held = await holdLinkSave(a, LINK_IN_BIO.url); // the 30th, not committed yet
+
+  const refused = expect(a.data.saveFromLink({ url: FULL_RECIPE.url })).rejects.toBeInstanceOf(DailyLimitError);
+  await held.waitForWaiting(1);
+  await held.commit();
+
+  await refused;
+  await a.drafts.settled();
   expect(await countLinkSaves(a)).toBe(30);
   expect(await a.data.listDrafts()).toHaveLength(1);
 });

@@ -57,10 +57,11 @@ export type HeldRemoval = Omit<HeldLine, 'release'> & {
 };
 
 /** A second database session that runs `sql` in a transaction it doesn't end until told to. */
-async function holdInTransaction(sql: string, params: unknown[]) {
+async function holdInTransaction(sql: string, params: unknown[], before: [string, unknown[]][] = []) {
   const session = new pg.Client({ connectionString: inject('supabase').dbUrl });
   await session.connect();
   await session.query('begin');
+  for (const [first, firstParams] of before) await session.query(first, firstParams);
   await session.query(sql, params);
   const { rows } = await session.query<{ pid: number }>('select pg_backend_pid() as pid');
   const pid = rows[0].pid;
@@ -108,6 +109,24 @@ export async function holdShoppingListRemoval(itemId: ShoppingListItemId): Promi
   const { waitForWaiting, commit } = await holdInTransaction(
     'delete from public.shopping_list_items where id = $1',
     [itemId],
+  );
+  return { waitForWaiting, commit };
+}
+
+/**
+ * For race tests only: a second database session that saves a link as the user, through
+ * save_from_link as the app calls it, and doesn't commit yet. Until `commit()`, another save of
+ * theirs that waits for it shows up in `waitForWaiting`; one that doesn't wait doesn't.
+ */
+export async function holdLinkSave(user: Pick<TestUser, 'userId'>, url: string): Promise<HeldRemoval> {
+  const claims = JSON.stringify({ sub: user.userId, role: 'authenticated' });
+  const { waitForWaiting, commit } = await holdInTransaction(
+    `select public.save_from_link(gen_random_uuid(), $1, 'tiktok')`,
+    [url],
+    [
+      ["select set_config('request.jwt.claims', $1, true)", [claims]],
+      ['set local role authenticated', []],
+    ],
   );
   return { waitForWaiting, commit };
 }
