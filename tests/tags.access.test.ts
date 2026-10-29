@@ -1,6 +1,7 @@
 // Access-rule tests for Tags, search and Want to Cook (ticket 06): a stranger skips the data layer
 // and calls PostgREST directly with their own session, as an attacker would. RLS is what has to stop
-// them. Each test was checked to fail with the policy that guards it loosened to `true`.
+// them. Each test was checked to fail with the policy that guards it loosened to `true`, and the
+// Want to Cook ones with set_want_to_cook's owner check taken out.
 import { expect, test } from 'vitest';
 
 import type { RecipeId, Tag } from '../src/data';
@@ -114,14 +115,10 @@ test("a stranger cannot mark or unmark someone else's Recipe Want to Cook", asyn
   const before = await ownersView(setup);
 
   const unmark = await stranger.client.rpc('set_want_to_cook', { recipe_id: recipeId, want_to_cook: false });
-  const direct = await stranger.client
-    .from('recipes')
-    .update({ want_to_cook_at: null })
-    .eq('id', recipeId)
-    .select('id');
+  const direct = await stranger.client.from('recipes').update({ want_to_cook_at: null }).eq('id', recipeId);
 
   expect(unmark).toMatchObject({ data: 'gone', error: null });
-  expect(direct).toMatchObject({ data: [], error: null });
+  expect(direct.error).toMatchObject(permissionDenied);
   expect(await ownersView(setup)).toEqual(before);
 });
 
@@ -158,7 +155,7 @@ test('a user cannot put a Tag on, or mark Want to Cook, their own Draft before r
 
   expect(attach.error).toMatchObject(permissionDenied);
   expect(viaRpc).toMatchObject({ data: null, error: null });
-  expect(mark.error).toMatchObject({ code: '23514' });
+  expect(mark.error).toMatchObject(permissionDenied);
   expect(await owner.data.getRecipe(recipeId)).toEqual(before);
 });
 
@@ -175,4 +172,19 @@ test('a Tag name with control or invisible format characters, or not composed, i
     expect([name, direct.error]).toMatchObject([name, checkViolation]);
   }
   expect(await owner.data.listTags()).toEqual([]);
+});
+
+test('nobody sets want_to_cook_at directly, not even on their own Recipe: only through set_want_to_cook', async () => {
+  const owner = await signInAttacker('owner');
+  const bread = await owner.data.createRecipe({ title: 'Garlic bread', lines: [], steps: [] });
+  const before = await owner.data.getRecipe(bread);
+
+  // A time of their choosing would put it anywhere in the Want to Cook list.
+  const backdate = await owner.client
+    .from('recipes')
+    .update({ want_to_cook_at: '2001-01-01T00:00:00Z' })
+    .eq('id', bread);
+
+  expect(backdate.error).toMatchObject(permissionDenied);
+  expect(await owner.data.getRecipe(bread)).toEqual(before);
 });

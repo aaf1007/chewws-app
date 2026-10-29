@@ -90,8 +90,7 @@ alter table public.recipes
   add constraint recipes_suggested_tags_count check (cardinality(suggested_tags) <= 5),
   add constraint recipes_want_to_cook_reviewed check (status = 'reviewed' or want_to_cook_at is null);
 
--- set_want_to_cook runs as the caller, so the owner's update policy decides.
-grant update (want_to_cook_at) on table public.recipes to authenticated;
+-- Nobody writes want_to_cook_at directly: only set_want_to_cook, which stamps the time itself.
 
 create index recipes_owner_want_to_cook_idx on public.recipes (owner_id, want_to_cook_at desc)
   where want_to_cook_at is not null;
@@ -145,12 +144,14 @@ $$;
 revoke execute on function public.add_tag(uuid, text) from public, anon;
 grant execute on function public.add_tag(uuid, text) to authenticated;
 
--- Marks or unmarks one of the caller's reviewed Recipes Want to Cook. Marking it again keeps the
--- time it was first marked. Returns 'set', 'notReviewed' (a Draft) or 'gone'.
+-- Marks or unmarks one of the caller's reviewed Recipes Want to Cook, at the server's time.
+-- Marking it again keeps the time it was first marked. Returns 'set', 'notReviewed' (a Draft) or
+-- 'gone' (not the caller's, or no such Recipe). Runs as its owner, since the column isn't the
+-- caller's to write, so it checks the owner itself.
 create function public.set_want_to_cook(recipe_id uuid, want_to_cook boolean)
 returns text
 language plpgsql
-security invoker
+security definer
 set search_path = ''
 as $$
 declare
@@ -158,12 +159,13 @@ declare
 begin
   update public.recipes r
   set want_to_cook_at = case when set_want_to_cook.want_to_cook then coalesce(r.want_to_cook_at, now()) end
-  where r.id = set_want_to_cook.recipe_id and r.status = 'reviewed';
+  where r.id = set_want_to_cook.recipe_id and r.owner_id = (select auth.uid()) and r.status = 'reviewed';
 
   if found then
     return 'set';
   end if;
-  select r.status into current_status from public.recipes r where r.id = set_want_to_cook.recipe_id;
+  select r.status into current_status from public.recipes r
+  where r.id = set_want_to_cook.recipe_id and r.owner_id = (select auth.uid());
   return case when current_status is null then 'gone' else 'notReviewed' end;
 end;
 $$;
