@@ -161,3 +161,18 @@ test('a user cannot put a Tag on, or mark Want to Cook, their own Draft before r
   expect(mark.error).toMatchObject({ code: '23514' });
   expect(await owner.data.getRecipe(recipeId)).toEqual(before);
 });
+
+test('a Tag name with control or invisible format characters, or not composed, is refused however it is sent', async () => {
+  const owner = await signInAttacker('owner');
+  const bread = await owner.data.createRecipe({ title: 'Garlic bread', lines: [], steps: [] });
+  const checkViolation = { code: '23514' };
+
+  const names = ['Ital\u200Bian', '\u202Eevil', 'bell\u0007', 'tag\u{E0041}', 'cre\u0300me', 'soft\u00ADhyphen'];
+  for (const name of names) {
+    const viaRpc = await owner.client.rpc('add_tag', { recipe_id: bread, name });
+    const direct = await owner.client.from('tags').insert({ name });
+    expect([name, viaRpc.error]).toMatchObject([name, checkViolation]);
+    expect([name, direct.error]).toMatchObject([name, checkViolation]);
+  }
+  expect(await owner.data.listTags()).toEqual([]);
+});

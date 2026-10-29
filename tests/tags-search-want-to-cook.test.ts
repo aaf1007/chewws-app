@@ -2,7 +2,7 @@
 // build in-process with the canned sources and Claude answers (draft-fixtures.ts): no network.
 import { expect, test } from 'vitest';
 
-import { searchWords, tidyTagNames, type Recipe, type RecipeId, type RecipeInput } from '../src/data';
+import { normaliseTagName, searchWords, tidyTagNames, type Recipe, type RecipeId, type RecipeInput } from '../src/data';
 import { EXTRACTION_SCHEMA, parseExtraction, type Extract } from '../supabase/functions/_shared/claude-extractor';
 import { FULL_RECIPE, PLAIN_PAGE, fixtureExtract } from '../supabase/functions/_shared/draft-fixtures';
 import { signInTestUser, type TestUser } from './harness';
@@ -161,6 +161,28 @@ test('Tag names are tidied, and the same name in any case is the same Tag', () =
   expect(tidyTagNames([' ', '\n', ''])).toEqual([]);
   // 40 characters is the most: an emoji counts as one.
   expect(tidyTagNames(['🍝'.repeat(40), 'y'.repeat(41)])).toEqual(['🍝'.repeat(40)]);
+});
+
+test('Tag names lose control and invisible format characters, and are stored composed', () => {
+  // A zero-width space, a right-to-left override, a byte-order mark, a soft hyphen, a bell.
+  expect(normaliseTagName('Ital\u200Bian')).toBe('Italian');
+  expect(normaliseTagName('\u202Elove\uFEFF')).toBe('love');
+  expect(normaliseTagName('qu\u00ADick\u0007')).toBe('quick');
+  expect(normaliseTagName('cre\u0300me')).toBe('crème');
+  // Spacing characters still become one space.
+  expect(normaliseTagName('Street\t\n food')).toBe('Street food');
+  expect(normaliseTagName('\u200B\u2060')).toBe('');
+  expect(tidyTagNames(['Italian', 'Ital\u200Bian', '\u200B'])).toEqual(['Italian']);
+});
+
+test('a Tag typed with an invisible character is the Tag without it', async () => {
+  const a = await signInTestUser('a');
+  const bread = await a.data.createRecipe(garlicBread);
+
+  const italian = await a.data.addTag(bread, 'Italian');
+  expect(await a.data.addTag(bread, 'Ital\u200Bian\u202E')).toEqual(italian);
+  await expect(a.data.addTag(bread, '\u200B\uFEFF')).rejects.toMatchObject({ code: 'tag_required' });
+  expect(await a.data.listTags()).toEqual([italian]);
 });
 
 test('the user adds, removes and creates Tags on any Recipe; a removed Tag stays theirs until they delete it', async () => {
