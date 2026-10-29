@@ -338,6 +338,7 @@ test('search copes with accents, apostrophes and characters a pattern would trea
   await a.data.createRecipe(shakshuka);
   await a.data.createRecipe(cremeBrulee);
   await a.data.createRecipe({ ...garlicBread, title: '100% rye_bread' });
+  await a.data.createRecipe({ ...tomatoSoup, title: 'Mac & cheese' });
 
   expect(titles(await a.data.searchRecipes('CRÈME'))).toEqual(['Crème brûlée']);
   expect(titles(await a.data.searchRecipes('crème'))).toEqual(['Crème brûlée']);
@@ -350,8 +351,9 @@ test('search copes with accents, apostrophes and characters a pattern would trea
   expect(titles(await a.data.searchRecipes('%'))).toEqual(['100% rye_bread']);
   expect(titles(await a.data.searchRecipes('e_b'))).toEqual(['100% rye_bread']);
   expect(titles(await a.data.searchRecipes('_'))).toEqual(['100% rye_bread']);
-  // A word the matcher leaves nothing of still matches a title.
-  expect(titles(await a.data.searchRecipes('&'))).toEqual([]);
+  // A word the matcher leaves nothing of ("&" is no Ingredient) still matches a title.
+  expect(titles(await a.data.searchRecipes('&'))).toEqual(['Mac & cheese']);
+  expect(titles(await a.data.searchRecipes('mac &'))).toEqual(['Mac & cheese']);
 });
 
 test('search words are what the user typed, split on spaces, each also read as an Ingredient', () => {
