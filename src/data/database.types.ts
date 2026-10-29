@@ -320,18 +320,21 @@ export type Database = {
           created_at: string
           item_id: string
           recipe_id: string
+          recipe_title: string
         }
         Insert: {
           amount_texts?: string[]
           created_at?: string
           item_id: string
           recipe_id: string
+          recipe_title?: string
         }
         Update: {
           amount_texts?: string[]
           created_at?: string
           item_id?: string
           recipe_id?: string
+          recipe_title?: string
         }
         Relationships: [
           {
@@ -394,6 +397,39 @@ export type Database = {
           },
           {
             foreignKeyName: "shopping_list_items_list_id_fkey"
+            columns: ["list_id"]
+            isOneToOne: false
+            referencedRelation: "shopping_lists"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      shopping_list_shares: {
+        Row: {
+          created_at: string
+          friend_id: string
+          list_id: string
+        }
+        Insert: {
+          created_at?: string
+          friend_id: string
+          list_id: string
+        }
+        Update: {
+          created_at?: string
+          friend_id?: string
+          list_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "shopping_list_shares_friend_id_fkey"
+            columns: ["friend_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "shopping_list_shares_list_id_fkey"
             columns: ["list_id"]
             isOneToOne: false
             referencedRelation: "shopping_lists"
@@ -530,7 +566,15 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      shopping_list_people: {
+        Row: {
+          is_owner: boolean | null
+          list_id: string | null
+          user_id: string | null
+          username: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       add_caption_to_draft: {
@@ -600,6 +644,7 @@ export type Database = {
       }
       has_ingredient: { Args: { ingredient_id: string }; Returns: boolean }
       ingredients_i_have: { Args: never; Returns: string[] }
+      leave_shared_shopping_list: { Args: { list_id: string }; Returns: Json }
       list_friend_requests: {
         Args: never
         Returns: {
@@ -614,6 +659,22 @@ export type Database = {
         Returns: {
           id: string
           since: string
+          username: string
+        }[]
+      }
+      list_shared_shopping_lists: {
+        Args: never
+        Returns: {
+          list_id: string
+          owner_id: string
+          owner_username: string
+        }[]
+      }
+      list_shopping_list_shares: {
+        Args: never
+        Returns: {
+          friend_id: string
+          shared_at: string
           username: string
         }[]
       }
@@ -688,6 +749,8 @@ export type Database = {
         Args: { recipe_id: string; want_to_cook: boolean }
         Returns: string
       }
+      share_shopping_list: { Args: { friend_id: string }; Returns: Json }
+      stop_sharing_shopping_list: { Args: { friend_id: string }; Returns: Json }
       store_source_refresh: {
         Args: { recipe_id: string; source: Json }
         Returns: boolean
