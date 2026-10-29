@@ -10,9 +10,11 @@ import {
   PLAIN_PAGE,
   UNREADABLE,
   YOUTUBE_SHORT,
+  fixtureAdapters,
   fixtureExtract,
 } from '../supabase/functions/_shared/draft-fixtures';
 import {
+  backdateDraftBuild,
   backdateLinkSaves,
   countLinkSaves,
   seedLinkSaves,
@@ -226,6 +228,33 @@ test('two kicks at once send one push', async () => {
   const outcomes = await Promise.all([a.drafts.build(recipeId), a.drafts.build(recipeId)]);
 
   expect(outcomes.map((o) => o.status).sort()).toEqual(['built', 'notClaimed']);
+  expect(a.drafts.pushesSent()).toEqual([draftReady(TOKEN_1, 'Creamy garlic pasta', recipeId)]);
+});
+
+test('a build claimed again after 3 minutes and the stuck first build both finish, and one push goes out', async () => {
+  const reached = Promise.withResolvers<void>();
+  const stuck = Promise.withResolvers<void>();
+  let reads = 0;
+  const a = await signInTestUser('a', {
+    tiktok: async (url, signal) => {
+      reads += 1;
+      if (reads === 1) {
+        reached.resolve();
+        await stuck.promise;
+      }
+      return fixtureAdapters.tiktok(url, signal);
+    },
+  });
+  await a.data.registerPushToken(TOKEN_1);
+  const { recipeId } = await a.data.saveFromLink({ url: FULL_RECIPE.url });
+  await reached.promise; // the first build claimed it, and is stuck reading TikTok
+
+  await backdateDraftBuild(recipeId, 4);
+  expect(await a.drafts.build(recipeId)).toEqual({ status: 'built', changed: true });
+  stuck.resolve();
+  await a.drafts.settled();
+
+  expect(reads).toBe(2);
   expect(a.drafts.pushesSent()).toEqual([draftReady(TOKEN_1, 'Creamy garlic pasta', recipeId)]);
 });
 
