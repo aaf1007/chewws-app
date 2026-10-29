@@ -9,7 +9,7 @@
 appId: com.ant1007.recipeapp
 env:
   # The push shows only once the app has asked for notifications and they were allowed; the app
-  # asks after the first saved link (ticket 07), so this flow saves one and answers the prompt.
+  # asks after the first friend request sent (decisions 11), and this flow answers the prompt.
   NOTIFICATIONS: unset
 ---
 # A new user, as far as the app can tell: the dev user, with no username.
@@ -49,20 +49,6 @@ env:
       id: "tab-library"
     timeout: 15000
 
-# A first saved link, so the app asks for notifications (ticket 07), which are allowed.
-- openLink: "recipeapp://save?url=https%3A%2F%2Fwww.tiktok.com%2F%40pastaqueen%2Fvideo%2F7400000000000000001"
-- extendedWaitUntil:
-    visible: "Save Recipe"
-    timeout: 10000
-- tapOn:
-    id: "save-link"
-- extendedWaitUntil:
-    visible: ".*Would Like to Send You Notifications.*"
-    timeout: 10000
-- tapOn: "Allow"
-- assertVisible: "Saved as a Draft"
-- tapOn: "Done"
-
 # Profile shows the username; Friends is empty.
 - tapOn:
     id: "tab-profile"
@@ -74,6 +60,9 @@ env:
 - extendedWaitUntil:
     visible: "No Friends yet"
     timeout: 10000
+# Notifications aren't decided yet, so Friends offers them.
+- assertVisible:
+    id: "turn-on-notifications"
 
 # Search by username: too short says so; then alex_cooks is found and asked.
 - tapOn: "Find by username"
@@ -84,9 +73,21 @@ env:
     visible: "Add: @alex_cooks"
     timeout: 10000
 - tapOn: "Add: @alex_cooks"
+# The first request sent: the app says why it wants notifications, then the system asks.
+- extendedWaitUntil:
+    visible: "Hear about friend requests"
+    timeout: 10000
+- assertVisible: "Notifications are how you hear when someone asks to be Friends."
+- tapOn: "Continue"
+- extendedWaitUntil:
+    visible: ".*Would Like to Send You Notifications.*"
+    timeout: 10000
+- tapOn: "Allow"
 - extendedWaitUntil:
     visible: "Cancel: @alex_cooks"
     timeout: 10000
+- assertNotVisible:
+    id: "turn-on-notifications"
 - assertVisible: "Requested"
 - eraseText: 10
 - extendedWaitUntil:

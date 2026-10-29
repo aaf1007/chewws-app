@@ -1,11 +1,23 @@
-import { useEffect, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
 import { Alert, View } from 'react-native';
 
 import { messageOf } from '@/auth/errors';
 import { useWhileFocused } from '@/components/use-while-focused';
 import { usernameSearchQuery, type FoundUser, type FriendRequestResult } from '@/data';
 import { data } from '@/data/app';
-import { EmptyState, PersonRow, Screen, SearchField, SectionHeader, Text, spacing, type PersonAction } from '@/ui';
+import { askAfterFriendRequest, notificationPermission, registerForDraftReady, type NotificationPermission } from '@/notifications';
+import {
+  EmptyState,
+  NavRow,
+  PersonRow,
+  Screen,
+  SearchField,
+  SectionHeader,
+  Text,
+  spacing,
+  type PersonAction,
+} from '@/ui';
 
 /** How long typing pauses before the search goes out. */
 const SEARCH_DELAY_MS = 250;
@@ -17,6 +29,18 @@ async function loadFriends() {
 
 const since = (iso: string) =>
   new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+
+/** Why the app asks for notifications, in one line, before the system does (decisions 11). */
+const NOTIFICATIONS_REASON = 'Notifications are how you hear when someone asks to be Friends.';
+
+/** The reason, as an alert: true if the user goes on to the system's question. */
+const explainNotifications = () =>
+  new Promise<boolean>((resolve) =>
+    Alert.alert('Hear about friend requests', NOTIFICATIONS_REASON, [
+      { text: 'Not now', style: 'cancel', onPress: () => resolve(false) },
+      { text: 'Continue', onPress: () => resolve(true) },
+    ]),
+  );
 
 /** What the screen says after "Add", when it didn't simply send. */
 function sendMessage({ status }: FriendRequestResult, username: string): string | null {
@@ -41,6 +65,17 @@ export default function Friends() {
   const [query, setQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [round, setRound] = useState(0);
+
+  // "Turn on notifications" shows while they're undecided.
+  const [permission, setPermission] = useState<NotificationPermission | null>(null);
+  const checkPermission = useCallback(() => {
+    void notificationPermission().then(setPermission);
+  }, []);
+  useFocusEffect(checkPermission);
+  /** After a request sent or accepted: the reason, then the system's question, once. */
+  const askForNotifications = () => {
+    void askAfterFriendRequest(explainNotifications).then(checkPermission);
+  };
 
   // The users found for the query as typed; a search for an older query, answering late, is dropped.
   const [found, setFound] = useState<{ query: string; users: FoundUser[] } | null>(null);
@@ -74,7 +109,9 @@ export default function Friends() {
 
   const accept = (id: FoundUser['id']): PersonAction => ({
     label: 'Accept',
-    onPress: change(async () => void (await data.respondToFriendRequest(id, true))),
+    onPress: change(async () => {
+      if ((await data.respondToFriendRequest(id, true)).status === 'accepted') askForNotifications();
+    }),
   });
   const decline = (id: FoundUser['id']): PersonAction => ({
     label: 'Decline',
@@ -106,7 +143,11 @@ export default function Friends() {
             actions={[
               {
                 label: 'Add',
-                onPress: change(async () => sendMessage(await data.sendFriendRequest(user.id), user.username)),
+                onPress: change(async () => {
+                  const result = await data.sendFriendRequest(user.id);
+                  if (result.status === 'requested' || result.status === 'accepted') askForNotifications();
+                  return sendMessage(result, user.username);
+                }),
               },
             ]}
           />
@@ -138,6 +179,15 @@ export default function Friends() {
   return (
     <Screen title="Friends" scroll>
       <SearchField value={query} onChangeText={setQuery} placeholder="Find by username" />
+      {permission === 'undecided' ? (
+        <NavRow
+          icon="notifications-outline"
+          label="Turn on notifications"
+          detail="Hear when someone asks to be Friends"
+          onPress={() => void registerForDraftReady({ ask: true }).then(checkPermission)}
+          testID="turn-on-notifications"
+        />
+      ) : null}
       {error ? <Text tone="danger">{error}</Text> : null}
       {state.status === 'error' ? <Text tone="danger">{state.message}</Text> : null}
 

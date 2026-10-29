@@ -46,6 +46,34 @@ export async function registerForDraftReady({ ask }: { ask: boolean }): Promise<
 }
 
 /**
+ * Whether the user has decided about notifications: `undecided` while the system can still ask.
+ * `denied` too when it can't be told (no native module), so nothing offers to ask.
+ */
+export type NotificationPermission = 'undecided' | 'allowed' | 'denied';
+
+export async function notificationPermission(): Promise<NotificationPermission> {
+  try {
+    const current = await Notifications.getPermissionsAsync();
+    if (current.granted) return 'allowed';
+    return current.canAskAgain ? 'undecided' : 'denied';
+  } catch {
+    return 'denied';
+  }
+}
+
+/**
+ * After the user sends or accepts a friend request (decisions 11): while notifications are
+ * undecided, `explain` gives the one-line reason (how they'll hear about friend requests) and
+ * answers whether the user goes on; then the system asks, and an allowed phone is registered as
+ * for "Draft ready". Once decided, it does nothing, so it asks only after the first. Never throws.
+ */
+export async function askAfterFriendRequest(explain: () => Promise<boolean>): Promise<void> {
+  if ((await notificationPermission()) !== 'undecided') return;
+  if (!(await explain().catch(() => false))) return;
+  await registerForDraftReady({ ask: true });
+}
+
+/**
  * While someone is signed in: registers the phone again on sign-in and each foreground (if
  * notifications are allowed). A tapped notification opens its screen once the app can show it
  * (`canOpen`: signed in, with a username), whether the tap started the app or came while it ran:
