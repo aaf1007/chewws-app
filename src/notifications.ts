@@ -4,10 +4,10 @@ import { router } from 'expo-router';
 import { useEffect } from 'react';
 import { AppState } from 'react-native';
 
-import { parseDraftReadyPush, parseFriendRequestPush, type SessionState } from '@/data';
+import { parseCookPlanInvitePush, parseDraftReadyPush, parseFriendRequestPush, type SessionState } from '@/data';
 import { data } from '@/data/app';
 
-// "Draft ready" and "Friend request" show as a banner even while the app is open.
+// "Draft ready", "Friend request" and "Cook Plan invite" show as a banner even while the app is open.
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowBanner: true,
@@ -77,7 +77,8 @@ export async function askAfterFriendRequest(explain: () => Promise<boolean>): Pr
  * While someone is signed in: registers the phone again on sign-in and each foreground (if
  * notifications are allowed). A tapped notification opens its screen once the app can show it
  * (`canOpen`: signed in, with a username), whether the tap started the app or came while it ran:
- * "Draft ready" that Draft, "Friend request" Friends, where Requests are listed first.
+ * "Draft ready" that Draft, "Friend request" Friends, where Requests are listed first, "Cook Plan
+ * invite" that plan.
  */
 export function useNotifications(session: SessionState, { canOpen }: { canOpen: boolean }) {
   const signedIn = session.status === 'signedIn';
@@ -98,7 +99,9 @@ export function useNotifications(session: SessionState, { canOpen }: { canOpen: 
     if (response.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return;
     const pushed = response.notification.request.content.data;
     const draftId = parseDraftReadyPush(pushed);
+    const cookPlanId = parseCookPlanInvitePush(pushed);
     if (draftId) router.push({ pathname: '/draft/[id]', params: { id: draftId } });
+    else if (cookPlanId) router.push({ pathname: '/cook-plan/[id]', params: { id: cookPlanId } });
     else if (parseFriendRequestPush(pushed)) router.push('/friends');
   }, [canOpen, response]);
 }
