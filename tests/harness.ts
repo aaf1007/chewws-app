@@ -191,6 +191,56 @@ export const holdFriendRequestCancel = (user: Someone, other: Someone) =>
 export const holdUnfriend = (user: Someone, other: Someone) =>
   holdCallAs(user, 'select public.unfriend($1)', [other.userId]);
 
+/** For race tests only: `owner` sharing their Shopping List with `friend` on another phone, not committed yet. */
+export const holdShare = (owner: Someone, friend: Someone) =>
+  holdCallAs(owner, 'select public.share_shopping_list($1)', [friend.userId]);
+
+/** For race tests only: `owner` stopping sharing with `friend` on another phone, not committed yet. */
+export const holdStopSharing = (owner: Someone, friend: Someone) =>
+  holdCallAs(owner, 'select public.stop_sharing_shopping_list($1)', [friend.userId]);
+
+/** For race tests only: `friend` leaving a list shared with them on another phone, not committed yet. */
+export const holdLeave = (friend: Someone, listId: string) =>
+  holdCallAs(friend, 'select public.leave_shared_shopping_list($1)', [listId]);
+
+/** For race tests only: `user` checking an item off on another phone, not committed yet. */
+export const holdCheckOff = (user: Someone, itemId: string) =>
+  holdCallAs(user, 'select public.check_off($1)', [itemId]);
+
+/**
+ * The two stop being Friends, as `unfriend` does, but with the database's own triggers held back,
+ * as if the one that ends their Shopping List shares hadn't run yet: the share rows are still
+ * there. For proving access ends with the Friendship itself.
+ */
+export async function endFriendshipBeforeCleanup(a: Someone, b: Someone): Promise<void> {
+  const db = new pg.Client({ connectionString: inject('supabase').dbUrl });
+  await db.connect();
+  try {
+    await db.query('begin');
+    await db.query('set local session_replication_role = replica');
+    const { rowCount } = await db.query(
+      `delete from public.friendships
+       where least(requester_id, addressee_id) = least($1::uuid, $2::uuid)
+         and greatest(requester_id, addressee_id) = greatest($1::uuid, $2::uuid)`,
+      [a.userId, b.userId],
+    );
+    if (rowCount !== 1) throw new Error(`No Friendship between ${a.userId} and ${b.userId} to end.`);
+    await db.query('commit');
+  } finally {
+    await db.end();
+  }
+}
+
+/** How many share rows a Shopping List has, whatever the rules say about them. */
+export async function countShares(owner: Someone): Promise<number> {
+  const rows = await asDatabaseOwner<{ count: number }>(
+    `select count(*)::int as count from public.shopping_list_shares s
+     join public.shopping_lists l on l.id = s.list_id where l.owner_id = $1`,
+    [owner.userId],
+  );
+  return rows[0].count;
+}
+
 /** Runs one statement on the database as its owner, for the few things no action can reach. */
 async function asDatabaseOwner<T extends pg.QueryResultRow>(sql: string, params: unknown[]) {
   const db = new pg.Client({ connectionString: inject('supabase').dbUrl });
