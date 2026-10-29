@@ -188,3 +188,22 @@ test('nobody sets want_to_cook_at directly, not even on their own Recipe: only t
   expect(backdate.error).toMatchObject(permissionDenied);
   expect(await owner.data.getRecipe(bread)).toEqual(before);
 });
+
+test('review_draft refuses more than 20 Tag names, sent however they are', async () => {
+  const owner = await signInAttacker('owner');
+  const { recipeId } = await owner.data.saveFromLink({ url: FULL_RECIPE.url });
+  await owner.drafts.settled();
+  const before = await owner.data.getRecipe(recipeId);
+
+  const review = await owner.client.rpc('review_draft', {
+    recipe_id: recipeId,
+    title: 'Pasta',
+    steps: [],
+    lines: [],
+    tags: Array.from({ length: 21 }, (_, i) => `Tag ${i + 1}`),
+  });
+
+  expect(review.error).toMatchObject({ code: '22023' });
+  expect(await owner.data.getRecipe(recipeId)).toEqual(before);
+  expect(await owner.data.listTags()).toEqual([]);
+});

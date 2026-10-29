@@ -1,6 +1,9 @@
 /** The longest a Tag's name can be, in characters (the 06 migration checks it too). */
 export const MAX_TAG_NAME_LENGTH = 40;
 
+/** The most Tag names a Draft can be reviewed with (review_draft checks it too). */
+export const MAX_REVIEW_TAGS = 20;
+
 /**
  * A Tag's name as it's stored (decisions 06): accents composed (NFC); each run of spaces, tabs or
  * line breaks made one space; every other control or format character (Unicode Cc and Cf: a

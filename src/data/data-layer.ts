@@ -20,7 +20,7 @@ import { toListLines, withItems, withListChanges, type ListChange } from './list
 import { parseListChange, parseSavedShoppingList } from './list-storage';
 import { validateRecipeInput } from './recipe-input';
 import { searchWords } from './search-words';
-import { checkTagName, normaliseTagName, tagKey, tidyTagNames } from './tag-name';
+import { MAX_REVIEW_TAGS, checkTagName, normaliseTagName, tagKey, tidyTagNames } from './tag-name';
 import { sessionIdOf, type SessionStorage } from './session-storage';
 import {
   DataError,
@@ -1164,12 +1164,16 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   /**
    * Saves the user's reviewed version of a Draft (its title, lines and steps, as `editRecipe`
    * does) and makes it a Recipe in the library, with `tags`: the suggested Tag names the user kept
-   * and any they added, each made or found as `addTag` does (blank ones are dropped). A failed
+   * and any they added, each made or found as `addTag` does (blank ones are dropped; at most 20,
+   * `too_many_tags` past that). A failed
    * Draft can be filled in by hand; one still building can't be reviewed yet. A Recipe that is no
    * longer a Draft is left as it is, its Tags too.
    */
   async function reviewDraft(id: RecipeId, input: RecipeInput, tags: readonly string[] = []): Promise<void> {
     const names = tags.map(normaliseTagName).filter(Boolean).map(toTagName);
+    if (names.length > MAX_REVIEW_TAGS) {
+      throw new DataError('too_many_tags', `A Recipe can be reviewed with at most ${MAX_REVIEW_TAGS} Tags.`);
+    }
     const { data, error } = await client.rpc('review_draft', { recipe_id: id, ...toRecipeArgs(input), tags: names });
     if (error) fail(error);
     if (data === 'gone') throw new DataError('recipe_not_found', 'That Draft no longer exists.');

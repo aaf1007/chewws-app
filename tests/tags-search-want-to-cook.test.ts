@@ -234,6 +234,20 @@ test('a Tag needs a name of at most 40 characters, and a Draft gets its Tags onl
   expect((await a.data.getRecipe(draft))?.status).toBe('draft');
 });
 
+test('a Draft is reviewed with at most 20 Tags', async () => {
+  const a = await signInTestUser('a');
+  const id = await savedAndBuilt(a, FULL_RECIPE.url);
+  const input = asBuilt(await a.data.getRecipe(id));
+  const names = (n: number) => Array.from({ length: n }, (_, i) => `Tag ${i + 1}`);
+
+  await expect(a.data.reviewDraft(id, input, names(21))).rejects.toMatchObject({ code: 'too_many_tags' });
+  expect((await a.data.getRecipe(id))?.status).toBe('draft');
+  expect(await a.data.listTags()).toEqual([]);
+
+  await a.data.reviewDraft(id, input, names(20));
+  expect(tagNames(await a.data.getRecipe(id))).toHaveLength(20);
+});
+
 test('two adds of one Tag at once make one Tag, on the Recipe once; on two Recipes, one Tag on both', async () => {
   const a = await signInTestUser('a');
   const bread = await a.data.createRecipe(garlicBread);

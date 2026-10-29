@@ -278,8 +278,8 @@ end;
 $$;
 
 -- review_draft (ticket 03) now also takes the Tag names the user kept or added (`tags`, already
--- tidied by the data layer): it finds or makes each of their Tags and puts it on the Recipe, then
--- clears the suggestions. A review refused, or sent again, attaches nothing.
+-- tidied by the data layer), at most 20: it finds or makes each of their Tags and puts it on the
+-- Recipe, then clears the suggestions. A review refused, or sent again, attaches nothing.
 drop function public.review_draft(uuid, text, text[], jsonb);
 
 create function public.review_draft(
@@ -297,6 +297,10 @@ as $$
 declare
   draft public.recipes;
 begin
+  if cardinality(review_draft.tags) > 20 then
+    raise exception 'a Recipe can be reviewed with at most 20 Tags' using errcode = '22023';
+  end if;
+
   select * into draft from public.recipes r
   where r.id = review_draft.recipe_id and r.owner_id = (select auth.uid())
   for update;
