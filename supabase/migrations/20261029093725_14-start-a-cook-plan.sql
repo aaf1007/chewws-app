@@ -330,6 +330,20 @@ begin
 end;
 $$;
 
+-- The "Cook Plan invite" push each invite earns, one per member per plan, ever: written by
+-- invite_to_cook_plan with who invited them, and marked sent by claim_cook_plan_invite_push.
+-- Leaving and being invited again earns none.
+create table private.cook_plan_invite_pushes (
+  plan_id uuid not null references public.cook_plans (id) on delete cascade,
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  invited_by uuid not null references public.profiles (id) on delete cascade,
+  invited_at timestamptz not null default now(),
+  sent_at timestamptz,
+  primary key (plan_id, user_id)
+);
+
+revoke all on table private.cook_plan_invite_pushes from public, anon, authenticated;
+
 -- A member invites one of their own Friends into an active plan, at most 8 members. They're a
 -- member at once. Answers {status: 'invited' | 'notFound' (not a plan of the caller's) |
 -- 'notActive' | 'notFriends' | 'alreadyMember' | 'full'}. Only `invited` changed anything.
@@ -371,6 +385,9 @@ begin
   if not found then
     return jsonb_build_object('status', 'alreadyMember');
   end if;
+  insert into private.cook_plan_invite_pushes (plan_id, user_id, invited_by)
+  values (invite_to_cook_plan.plan_id, invite_to_cook_plan.friend_id, me)
+  on conflict on constraint cook_plan_invite_pushes_pkey do nothing;
   return jsonb_build_object('status', 'invited');
 end;
 $$;
@@ -618,20 +635,10 @@ grant execute on function public.recipe_cook_plans(uuid) to authenticated;
 
 -- The invite push ------------------------------------------------------------------------------
 
--- One "Cook Plan invite" push per member per plan, ever: leaving and being invited again sends none.
-create table private.cook_plan_invite_pushes (
-  plan_id uuid not null references public.cook_plans (id) on delete cascade,
-  user_id uuid not null references public.profiles (id) on delete cascade,
-  sent_at timestamptz not null default now(),
-  primary key (plan_id, user_id)
-);
-
-revoke all on table private.cook_plan_invite_pushes from public, anon, authenticated;
-
 -- For the notify function (service role only), as `inviter` asks to tell `invitee` they were
 -- invited: the inviter's username, the plan's Recipe titles and the invitee's push tokens, and the
--- push is recorded. Null, and nothing recorded, unless `invitee` is a member `inviter` invited, has
--- a phone to tell, and has had no push for this plan before.
+-- push is marked sent. Null, and nothing marked, unless `invitee` is a member whose invite from
+-- `inviter` hasn't been pushed yet, and has a phone to tell.
 create function public.claim_cook_plan_invite_push(plan_id uuid, inviter uuid, invitee uuid)
 returns jsonb
 language plpgsql
@@ -645,8 +652,9 @@ declare
 begin
   if not private.is_cook_plan_member(claim_cook_plan_invite_push.plan_id, invitee)
     or not exists (
-      select 1 from public.cook_plan_members m
-      where m.plan_id = claim_cook_plan_invite_push.plan_id and m.user_id = invitee and m.invited_by = inviter
+      select 1 from private.cook_plan_invite_pushes s
+      where s.plan_id = claim_cook_plan_invite_push.plan_id and s.user_id = invitee
+        and s.invited_by = inviter and s.sent_at is null
     ) then
     return null;
   end if;
@@ -657,9 +665,9 @@ begin
     return null;
   end if;
 
-  insert into private.cook_plan_invite_pushes (plan_id, user_id)
-  values (claim_cook_plan_invite_push.plan_id, invitee)
-  on conflict on constraint cook_plan_invite_pushes_pkey do nothing;
+  update private.cook_plan_invite_pushes s set sent_at = now()
+  where s.plan_id = claim_cook_plan_invite_push.plan_id and s.user_id = invitee
+    and s.invited_by = inviter and s.sent_at is null;
   if not found then
     return null;
   end if;

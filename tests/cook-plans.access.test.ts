@@ -389,8 +389,7 @@ test("who may read another user's Recipe is decided only by private.can_read_rec
     'recipe_lines: private.can_read_recipe(recipe_id)',
     'source_videos: private.can_read_recipe(recipe_id)',
   ]);
-  // Adding a Recipe to a plan compares its owner too, but to decide who may add it: only its owner.
-  expect(await functionsRestatingTheRecipeReadRule()).toEqual(['public.add_recipe_to_cook_plan']);
+  expect(await functionsRestatingTheRecipeReadRule()).toEqual([]);
 });
 
 test('the private rules are not exposed through the Data API, the invite push is the server’s, and signed out nothing answers', async () => {

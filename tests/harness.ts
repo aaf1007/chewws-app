@@ -713,40 +713,52 @@ export async function sourceVideoOf(
 }
 
 /**
- * The database functions (public and private) that decide for themselves who is in a Cook Plan,
- * matching a user against `cook_plan_members` instead of asking private.is_cook_plan_member
- * (decisions 14: one membership rule). Removing your own row (`delete from`) is not deciding.
+ * The membership rule itself (decisions 14): private.is_cook_plan_member, and cook_plan_ids, its
+ * list form. Only these may match a user against `cook_plan_members`.
+ */
+const MEMBERSHIP_RULE = ['is_cook_plan_member', 'cook_plan_ids'];
+
+/**
+ * The database functions (public and private), other than the membership rule's own, that match a
+ * user against `cook_plan_members` themselves (decisions 14: one membership rule), whatever else
+ * they ask. Removing your own row (`delete from`) is not deciding.
  */
 export async function functionsRestatingTheMembershipRule(): Promise<string[]> {
   const rows = await asDatabaseOwner<{ name: string }>(
     `select n.nspname || '.' || p.proname as name
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
      where n.nspname in ('public', 'private')
-       and p.proname <> 'is_cook_plan_member'
+       and not (n.nspname = 'private' and p.proname = any ($2))
        and p.prosrc ~* $1
        and p.prosrc ~* 'user_id\\s*='
-       and p.prosrc !~* 'is_cook_plan_member'
      order by 1`,
-    ['(?<!delete )(from|join)\\s+(public\\.)?cook_plan_members'],
+    ['(?<!delete )(from|join)\\s+(public\\.)?cook_plan_members', MEMBERSHIP_RULE],
   );
   return rows.map((r) => r.name);
 }
 
 /**
- * The database functions (public and private) that read which Cook Plans a Recipe is in and
- * compare its owner, so deciding for themselves who may read it, instead of asking
- * private.can_read_recipe (decisions 14: one rule for reading another user's Recipe).
+ * The functions allowed to read which Cook Plans a Recipe is in and compare its owner: the Recipe
+ * read rule itself, and adding a Recipe to a plan, which compares the owner to decide who may add
+ * it (only its owner), not who may read it.
+ */
+const RECIPE_READ_RULE = ['private.can_read_recipe', 'public.add_recipe_to_cook_plan'];
+
+/**
+ * The database functions (public and private), other than those above, that read which Cook Plans
+ * a Recipe is in and compare its owner, so deciding for themselves who may read it, instead of
+ * asking private.can_read_recipe (decisions 14: one rule for reading another user's Recipe).
  */
 export async function functionsRestatingTheRecipeReadRule(): Promise<string[]> {
   const rows = await asDatabaseOwner<{ name: string }>(
     `select n.nspname || '.' || p.proname as name
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
      where n.nspname in ('public', 'private')
-       and p.proname <> 'can_read_recipe'
+       and not (n.nspname || '.' || p.proname = any ($2))
        and p.prosrc ~* $1
        and p.prosrc ~* 'owner_id\\s*='
      order by 1`,
-    ['(from|join)\\s+(public\\.)?cook_plan_recipes'],
+    ['(from|join)\\s+(public\\.)?cook_plan_recipes', RECIPE_READ_RULE],
   );
   return rows.map((r) => r.name);
 }
