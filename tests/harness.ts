@@ -1,9 +1,12 @@
+import { randomUUID } from 'node:crypto';
+
 import pg from 'pg';
 import { inject } from 'vitest';
 
 import {
   createDataLayer,
   createSessionStorage,
+  parseUserId,
   type DataLayer,
   type IngredientId,
   type KeyValueStorage,
@@ -14,16 +17,18 @@ import {
   createTestAccount,
   createTestClient,
   inProcessDraftBuilds,
+  inProcessNotifications,
   inProcessSourceRefresh,
   signInAttacker,
   type DraftBuilds,
   type DraftFakes,
+  type Notifications,
   type TestAccount,
 } from './access-harness';
 
-export type { DraftBuilds, DraftFakes };
+export type { DraftBuilds, DraftFakes, Notifications };
 
-export type TestUser = { userId: UserId; data: DataLayer; drafts: DraftBuilds };
+export type TestUser = { userId: UserId; data: DataLayer; drafts: DraftBuilds; notifications: Notifications };
 
 /**
  * A fresh signed-in user. Behaviour tests reach the app only through `data`, its data-layer
@@ -31,8 +36,27 @@ export type TestUser = { userId: UserId; data: DataLayer; drafts: DraftBuilds };
  * answers by default), with no network; `drafts.settled()` waits for those builds.
  */
 export async function signInTestUser(label = 'user', fakes: DraftFakes = {}): Promise<TestUser> {
-  const { userId, data, drafts } = await signInAttacker(label, fakes);
-  return { userId, data, drafts };
+  const { userId, data, drafts, notifications } = await signInAttacker(label, fakes);
+  return { userId, data, drafts, notifications };
+}
+
+/**
+ * A username no other test, nor an earlier run on the same database, has: `stem` (at most 10
+ * characters, lowercase letters, digits or _) and 9 random hex digits.
+ */
+export function uniqueUsername(stem = 'user'): string {
+  return `${stem.slice(0, 10)}_${randomUUID().replaceAll('-', '').slice(0, 9)}`;
+}
+
+/** A fresh signed-in user who has chosen a username (`uniqueUsername(stem)`). */
+export async function signInWithUsername(
+  stem: string,
+  fakes: DraftFakes = {},
+): Promise<TestUser & { username: string }> {
+  const user = await signInTestUser(stem, fakes);
+  const result = await user.data.setUsername(uniqueUsername(stem));
+  if (result.status !== 'set') throw new Error(`Couldn't choose a username: ${result.status}`);
+  return { ...user, username: result.username };
 }
 
 /** Sessions waiting, directly or through others, on the session with this pid. Live, never cached. */
@@ -192,6 +216,43 @@ export async function backdateSourceRefresh(recipeId: string, minutes: number): 
   await asDatabaseOwner(
     `update public.source_videos set refresh_requested_at = now() - make_interval(mins => $2) where recipe_id = $1`,
     [recipeId, minutes],
+  );
+}
+
+/**
+ * `count` fresh users, not signed in anywhere, who have chosen usernames starting with `stem`
+ * (`uniqueUsername`); quicker than signing each in. For tests that need many people to ask.
+ */
+export async function seedUsersWithUsernames(
+  stem: string,
+  count: number,
+): Promise<{ userId: UserId; username: string; account: TestAccount }[]> {
+  const accounts = await Promise.all(Array.from({ length: count }, () => createTestAccount(stem)));
+  const rows = await asDatabaseOwner<{ id: string; username: string; email: string }>(
+    `update public.profiles p set username = n.username
+     from unnest($1::text[], $2::text[]) as n (email, username)
+     join auth.users u on u.email = n.email
+     where p.id = u.id
+     returning p.id, p.username, u.email`,
+    [accounts.map((a) => a.email), accounts.map(() => uniqueUsername(stem))],
+  );
+  return accounts.map((account) => {
+    const row = rows.find((r) => r.email === account.email);
+    if (!row) throw new Error(`No Profile for ${account.email}`);
+    return { userId: parseUserId(row.id), username: row.username, account };
+  });
+}
+
+/** Every "Friend request" push between the two (either way) was sent `days` earlier than it was. */
+export async function backdateFriendRequestPushes(
+  a: Pick<TestUser, 'userId'>,
+  b: Pick<TestUser, 'userId'>,
+  days: number,
+): Promise<void> {
+  await asDatabaseOwner(
+    `update private.friend_request_pushes set sent_at = sent_at - make_interval(days => $3)
+     where (requester_id, addressee_id) in (($1, $2), ($2, $1))`,
+    [a.userId, b.userId, days],
   );
 }
 
@@ -435,16 +496,19 @@ export async function signInOnPhones(
         };
         const client = createTestClient(fetchThroughSignal, authClientStorage, { autoRefreshToken });
         const { drafts, startDraftBuild } = inProcessDraftBuilds(fakes);
+        const { notifications, sendNotification } = inProcessNotifications(client, fakes);
         const data = createDataLayer(client, {
           storage,
           sessionStorage,
           now: () => (clock === null ? Date.now() : clock),
           startDraftBuild,
           refreshSourceVideo: inProcessSourceRefresh(client, fakes),
+          sendNotification,
         });
         return {
           data,
           drafts,
+          notifications,
           ...network,
           setClock: (at) => void (clock = at.getTime()),
           saved: () => new Map(items),

@@ -5,11 +5,56 @@ export type ShoppingListId = string & { readonly __brand: 'ShoppingListId' };
 export type ShoppingListItemId = string & { readonly __brand: 'ShoppingListItemId' };
 export type TagId = string & { readonly __brand: 'TagId' };
 
+/**
+ * A user's Profile. `username` is null until they choose one. Your own Profile also says when you
+ * joined (`createdAt`); another user's, as `getProfile` shows it, is only their id and username.
+ */
 export type Profile = {
   id: UserId;
   username: string | null;
   createdAt: string;
 };
+
+/** Another user's Profile: only who they are (decisions 11). */
+export type OtherProfile = { id: UserId; username: string | null };
+
+/** What `setUsername` did: took the name, or why not. A taken or reserved name is never an error. */
+export type SetUsernameResult =
+  | { status: 'set'; username: string }
+  | { status: 'taken' }
+  | { status: 'reserved' }
+  /** Not 3–20 lowercase letters, digits and _ with at least one letter (`USERNAME_RULE`). */
+  | { status: 'invalid' };
+
+/** Where the signed-in user stands with another user. A request of theirs that was declined still reads `requestSent`. */
+export type Relationship = 'none' | 'requestSent' | 'requestReceived' | 'friends';
+
+/** Another user as username search finds them: who they are, and where you stand with them. */
+export type FoundUser = { id: UserId; username: string; relationship: Relationship };
+
+/**
+ * What `sendFriendRequest` did. `requested`: your request is pending (or was declined, which you
+ * can't tell). `accepted`: they had already asked you, so you're Friends now. `tooMany`: you have 50
+ * requests out. `notFound`: nobody by that id can be asked. `noUsername`: choose a username first.
+ */
+export type FriendRequestResult = {
+  status: 'requested' | 'accepted' | 'alreadyFriends' | 'tooMany' | 'notFound' | 'noUsername';
+};
+
+/** What `respondToFriendRequest` did; `notFound` when there's no such request waiting for you. */
+export type FriendRequestAnswer = { status: 'accepted' | 'declined' | 'notFound' };
+
+/** A user you're Friends with, and since when. */
+export type Friend = { id: UserId; username: string; friendsSince: string };
+
+/** A friend request: the other user (who sent it, or whom you sent it to) and when it was sent. */
+export type FriendRequest = { id: UserId; username: string; sentAt: string };
+
+/**
+ * Requests waiting for your answer (`incoming`), and yours not accepted yet (`outgoing`, declined
+ * ones included), newest first.
+ */
+export type FriendRequests = { incoming: FriendRequest[]; outgoing: FriendRequest[] };
 
 export type SessionState =
   | { status: 'loading' }
@@ -294,6 +339,18 @@ export function parseDraftReadyPush(data: unknown): RecipeId | null {
   const recipeId: unknown = Reflect.get(data, 'recipeId');
   if (kind !== 'draftReady' || typeof recipeId !== 'string' || !UUID.test(recipeId)) return null;
   return parseRecipeId(recipeId);
+}
+
+/**
+ * Who sent a tapped "Friend request" notification, from its data `{ kind: 'friendRequest',
+ * fromUserId }` (decisions 11). Null for any other notification, or data that isn't that.
+ */
+export function parseFriendRequestPush(data: unknown): UserId | null {
+  if (typeof data !== 'object' || data === null) return null;
+  const kind: unknown = Reflect.get(data, 'kind');
+  const fromUserId: unknown = Reflect.get(data, 'fromUserId');
+  if (kind !== 'friendRequest' || typeof fromUserId !== 'string' || !UUID.test(fromUserId)) return null;
+  return parseUserId(fromUserId);
 }
 
 export function parseIngredientId(raw: string): IngredientId {
