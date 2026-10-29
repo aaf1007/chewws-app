@@ -814,19 +814,38 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   /**
    * Uploads a screenshot for one of the user's Recipes into their own folder, at
    * `{user id}/{recipe id}.jpg`, the path `save_from_link` and `add_caption_to_draft` look for.
-   * Sent again (a save tried again), it replaces the first.
+   * With `replace`, it takes the place of one already there; without, one already there stays and
+   * this answers 'exists'.
    */
-  async function uploadScreenshot(recipeId: RecipeId, jpeg: ArrayBuffer): Promise<void> {
+  async function uploadScreenshot(
+    recipeId: RecipeId,
+    jpeg: ArrayBuffer,
+    { replace }: { replace: boolean },
+  ): Promise<'uploaded' | 'exists'> {
     const me = await currentUserId();
     const { error } = await client.storage
       .from(RECIPE_IMAGES)
-      .upload(screenshotPath(me, recipeId), jpeg, { contentType: 'image/jpeg', upsert: true });
-    if (!error) return;
+      .upload(screenshotPath(me, recipeId), jpeg, { contentType: 'image/jpeg', upsert: replace });
+    if (!error) return 'uploaded';
     const status: unknown = Reflect.get(error, 'status');
+    if (!replace && (status === 409 || Reflect.get(error, 'statusCode') === '409')) return 'exists';
     if (typeof status === 'number' && status > 0) {
       throw new DataError('screenshot_not_saved', `The screenshot couldn't be saved: ${error.message}`, { cause: error });
     }
     throw new DataError('offline', "No connection. Try again when you're back online.", { cause: error });
+  }
+
+  /**
+   * Uploads a save's screenshot. A save sent again (its answer lost) finds the image its first try
+   * uploaded. Once that try made the Draft, the Draft's build may be downloading the image, and
+   * replacing it under the download fails the build: it stays. Before then, nothing reads it, and
+   * the screenshot the phone has now (perhaps changed since) takes its place.
+   */
+  async function uploadSaveScreenshot(recipeId: RecipeId, jpeg: ArrayBuffer): Promise<void> {
+    if ((await uploadScreenshot(recipeId, jpeg, { replace: false })) === 'uploaded') return;
+    const { data, error } = await client.from('recipes').select('id').eq('id', recipeId).maybeSingle();
+    if (error) fail(error);
+    if (data === null) await uploadScreenshot(recipeId, jpeg, { replace: true });
   }
 
   async function readRecipe(id: RecipeId) {
@@ -1032,7 +1051,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     const detected = checked.link;
     const caption = toPastedCaption(shared.caption);
     const recipeId = shared.draftId ?? newDraftId();
-    if (shared.screenshot) await uploadScreenshot(recipeId, shared.screenshot);
+    if (shared.screenshot) await uploadSaveScreenshot(recipeId, shared.screenshot);
     const { error } = await client.rpc('save_from_link', {
       recipe_id: recipeId,
       url: detected.url,
@@ -1060,7 +1079,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     if (caption === null && !input.screenshot) {
       throw new DataError('nothing_added', 'Paste the caption or add a screenshot first.');
     }
-    if (input.screenshot) await uploadScreenshot(id, input.screenshot);
+    if (input.screenshot) await uploadScreenshot(id, input.screenshot, { replace: true });
     const { data, error } = await client.rpc('add_caption_to_draft', {
       recipe_id: id,
       pasted_text: caption ?? undefined,
