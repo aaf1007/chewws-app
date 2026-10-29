@@ -1,6 +1,7 @@
 export { ActionButtons, type Action } from './action-buttons';
 export { AddField } from './add-field';
 export { Button, type ButtonVariant } from './button';
+export { DayPicker, formatDay, localToday } from './day-picker';
 export { DraftBanner, type DraftBannerKind } from './draft-banner';
 export { EmptyState } from './empty-state';
 export { FilterTiles, type FilterTileOption } from './filter-tiles';

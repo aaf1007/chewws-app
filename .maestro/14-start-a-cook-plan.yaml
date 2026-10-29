@@ -1,0 +1,167 @@
+# Ticket 14: Cook Plans. The dev user starts a plan on a day and invites sam, a Friend; sam adds a
+# Recipe of his; the dev user adds one of theirs, opens sam's and saves their own copy. sam invites
+# the dev user to a plan of his, which arrives as a push whose tap opens it. Last, deleting a Recipe
+# that's in a plan warns first that it'll leave it.
+# Run with `npm run e2e -- .maestro/14-start-a-cook-plan.yaml`. What sam does on his own phone,
+# scripts/e2e-db.mjs does as him (through scripts/net-control.mjs), and the "Cook Plan invite" push
+# is delivered with `xcrun simctl push` (.maestro/assets/cook-plan-invite.apns): one phone, no
+# network.
+appId: com.ant1007.recipeapp
+env:
+  # The push shows only once the app has asked for notifications and they were allowed; this flow
+  # turns them on from Friends > "Turn on notifications" (decisions 11) and answers the prompt.
+  NOTIFICATIONS: unset
+---
+- runScript: scripts/befriend-sam.js
+- runFlow: subflows/sign-in-dev.yaml
+
+# A Recipe of the dev user's, to add to the plan.
+- tapOn: "Write a Recipe"
+- extendedWaitUntil:
+    visible:
+      id: "recipe-title"
+    timeout: 10000
+- tapOn:
+    id: "recipe-title"
+- inputText: "Garlic bread"
+- tapOn:
+    id: "line-1-text"
+- inputText: "2 cloves garlic"
+- tapOn:
+    id: "line-1-ingredient"
+- inputText: "garlic"
+- hideKeyboard
+- scrollUntilVisible:
+    element: "Save Recipe"
+    direction: DOWN
+- tapOn: "Save Recipe"
+- extendedWaitUntil:
+    visible: "Edit Recipe"
+    timeout: 10000
+- tapOn: "Back"
+
+# No plans yet. Start one, for tomorrow, inviting sam.
+- tapOn:
+    id: "tab-cook-plans"
+- extendedWaitUntil:
+    visible: "No Cook Plans yet"
+    timeout: 10000
+- tapOn:
+    id: "start-cook-plan"
+- extendedWaitUntil:
+    visible: "Invite: @sam"
+    timeout: 10000
+- tapOn: "Tomorrow"
+- tapOn: "Invite: @sam"
+- assertVisible: "Remove: @sam"
+- assertVisible: "Invited when you start"
+- tapOn:
+    id: "create-cook-plan"
+- extendedWaitUntil:
+    visible: "with @sam · .*"
+    timeout: 10000
+- assertVisible: "No Recipes yet. Add one of yours; everyone in the plan can open it."
+- assertVisible: "@sam"
+- assertVisible: "Invited by you"
+
+# sam adds his shakshuka on his phone; the dev user adds their garlic bread, and sees both.
+- runScript: scripts/sam-adds-recipe-to-plan.js
+- tapOn: "Add a Recipe"
+- extendedWaitUntil:
+    visible: "Garlic bread, 1 ingredient"
+    timeout: 10000
+- tapOn: "Garlic bread, 1 ingredient"
+- extendedWaitUntil:
+    visible: "Garlic bread, Yours"
+    timeout: 10000
+- assertVisible: "Sam's shakshuka, @sam's"
+
+# sam's Recipe opens for the dev user, who saves their own copy.
+- tapOn: "Sam's shakshuka, @sam's"
+- extendedWaitUntil:
+    visible: "@sam's Recipe"
+    timeout: 10000
+- assertVisible: "4 eggs. Ingredient: egg"
+- assertNotVisible: "Edit Recipe"
+- assertNotVisible: "Delete Recipe"
+- tapOn: "Save your own copy"
+- extendedWaitUntil:
+    visible: "Saved to your library."
+    timeout: 10000
+- tapOn: "Open your copy"
+- extendedWaitUntil:
+    visible: "Saved from @sam"
+    timeout: 10000
+- assertVisible: "Edit Recipe"
+- tapOn: "Back"
+- tapOn: "Back"
+
+# The invite picker: everyone of the dev user's Friends is in the plan already.
+- tapOn: "Invite Friends"
+- extendedWaitUntil:
+    visible: "Nobody else to invite"
+    timeout: 10000
+- tapOn: "Back"
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "Sam's shakshuka, Garlic bread, with @sam · .*"
+    timeout: 10000
+
+# Notifications on, from Friends; then sam invites the dev user to a plan of his, while the app is
+# in the background, and tapping the push opens it.
+- tapOn:
+    id: "tab-profile"
+- tapOn:
+    id: "friends-row"
+- extendedWaitUntil:
+    visible:
+      id: "turn-on-notifications"
+    timeout: 10000
+- tapOn:
+    id: "turn-on-notifications"
+- extendedWaitUntil:
+    visible: ".*Would Like to Send You Notifications.*"
+    timeout: 10000
+- tapOn: "Allow"
+- extendedWaitUntil:
+    notVisible:
+      id: "turn-on-notifications"
+    timeout: 10000
+- pressKey: home
+- runScript: scripts/sam-invites-dev.js
+# The banner at the top of the screen (drawn by the system, outside the app's hierarchy).
+- tapOn:
+    point: "50%,10%"
+- extendedWaitUntil:
+    visible: "Sam's flatbread, @sam's"
+    timeout: 15000
+- assertVisible: "with @sam"
+- assertVisible: "Started this plan"
+- assertVisible: "You, invited by @sam"
+
+# Deleting the garlic bread, which is in the dev user's plan with sam, warns first. (Back from the
+# plan, and from Friends, under it.)
+- tapOn: "Back"
+- tapOn: "Back"
+- tapOn:
+    id: "tab-library"
+- extendedWaitUntil:
+    visible: "Garlic bread, 1 ingredient · 0 steps"
+    timeout: 10000
+- tapOn: "Garlic bread, 1 ingredient · 0 steps"
+- scrollUntilVisible:
+    element: "Delete Recipe"
+    direction: DOWN
+- tapOn: "Delete Recipe"
+- extendedWaitUntil:
+    visible: "It'll leave your Cook Plan with @sam. This also removes it from your library."
+    timeout: 10000
+- tapOn: "Delete"
+- extendedWaitUntil:
+    notVisible: "Garlic bread, 1 ingredient · 0 steps"
+    timeout: 10000
+- tapOn:
+    id: "tab-cook-plans"
+- extendedWaitUntil:
+    visible: "Sam's shakshuka, with @sam · .*"
+    timeout: 10000

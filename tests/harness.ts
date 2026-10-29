@@ -662,3 +662,145 @@ export async function signInOnPhones(
     }),
   );
 }
+
+/**
+ * For race tests only: `user` editing their Recipe on another phone (edit_recipe: a new title and
+ * lines, `ingredientName`s already normalised), not committed yet.
+ */
+export const holdRecipeEdit = (
+  user: Someone,
+  recipeId: string,
+  title: string,
+  lines: { originalText: string; amountText: string | null; ingredientName: string }[],
+) =>
+  holdCallAs(user, 'select public.edit_recipe($1, $2, $3, $4::jsonb)', [
+    recipeId,
+    title,
+    [],
+    JSON.stringify(lines.map((l) => ({ original_text: l.originalText, amount_text: l.amountText, ingredient_name: l.ingredientName }))),
+  ]);
+
+/** For race tests only: `user` inviting `friend` into a Cook Plan on another phone, not committed yet. */
+export const holdCookPlanInvite = (user: Someone, planId: string, friend: Someone) =>
+  holdCallAs(user, 'select public.invite_to_cook_plan($1, $2)', [planId, friend.userId]);
+
+/** For race tests only: `user` adding their Recipe to a Cook Plan on another phone, not committed yet. */
+export const holdCookPlanRecipeAdd = (user: Someone, planId: string, recipeId: string) =>
+  holdCallAs(user, 'select public.add_recipe_to_cook_plan($1, $2)', [planId, recipeId]);
+
+/** For race tests only: `user` leaving a Cook Plan on another phone, not committed yet. */
+export const holdCookPlanLeave = (user: Someone, planId: string) =>
+  holdCallAs(user, 'select public.leave_cook_plan($1)', [planId]);
+
+/**
+ * `user` and each of `others` are Friends, as if each had asked and been accepted; quicker than
+ * asking each. For tests that need many Friends (a Cook Plan's 8 members).
+ */
+export async function seedFriendships(user: Someone, others: Someone[]): Promise<void> {
+  await asDatabaseOwner(
+    `insert into public.friendships (requester_id, addressee_id, status, responded_at)
+     select $1, other, 'accepted', now() from unnest($2::uuid[]) as other`,
+    [user.userId, others.map((o) => o.userId)],
+  );
+}
+
+/** Whether a Cook Plan still exists, whoever may see it. */
+export async function cookPlanExists(planId: string): Promise<boolean> {
+  const rows = await asDatabaseOwner<{ found: boolean }>(
+    'select exists (select 1 from public.cook_plans where id = $1) as found',
+    [planId],
+  );
+  return rows[0].found;
+}
+
+/**
+ * A Recipe's Source Video as stored, whoever may see it: when it was last read from its platform
+ * (decisions 04), and two of the things the 30-day YouTube job clears.
+ */
+export async function sourceVideoOf(
+  recipeId: string,
+): Promise<{ fetchedAt: string | null; creatorName: string | null; caption: string | null }> {
+  const rows = await asDatabaseOwner<{ fetched_at: Date | null; creator_name: string | null; caption: string | null }>(
+    'select fetched_at, creator_name, caption from public.source_videos where recipe_id = $1',
+    [recipeId],
+  );
+  if (rows.length === 0) throw new Error(`Recipe ${recipeId} has no Source Video.`);
+  const [row] = rows;
+  return { fetchedAt: row.fetched_at?.toISOString() ?? null, creatorName: row.creator_name, caption: row.caption };
+}
+
+/**
+ * The membership rule itself (decisions 14): private.is_cook_plan_member, and cook_plan_ids, its
+ * list form. Only these may match a user against `cook_plan_members`.
+ */
+const MEMBERSHIP_RULE = ['is_cook_plan_member', 'cook_plan_ids'];
+
+/**
+ * The database functions (public and private), other than the membership rule's own, that match a
+ * user against `cook_plan_members` themselves (decisions 14: one membership rule), whatever else
+ * they ask. Removing your own row (`delete from`) is not deciding.
+ */
+export async function functionsRestatingTheMembershipRule(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private')
+       and not (n.nspname = 'private' and p.proname = any ($2))
+       and p.prosrc ~* $1
+       and p.prosrc ~* 'user_id\\s*='
+     order by 1`,
+    ['(?<!delete )(from|join)\\s+(public\\.)?cook_plan_members', MEMBERSHIP_RULE],
+  );
+  return rows.map((r) => r.name);
+}
+
+/**
+ * The functions allowed to read which Cook Plans a Recipe is in and compare its owner: the Recipe
+ * read rule itself, and adding a Recipe to a plan, which compares the owner to decide who may add
+ * it (only its owner), not who may read it.
+ */
+const RECIPE_READ_RULE = ['private.can_read_recipe', 'public.add_recipe_to_cook_plan'];
+
+/**
+ * The database functions (public and private), other than those above, that read which Cook Plans
+ * a Recipe is in and compare its owner, so deciding for themselves who may read it, instead of
+ * asking private.can_read_recipe (decisions 14: one rule for reading another user's Recipe).
+ */
+export async function functionsRestatingTheRecipeReadRule(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private')
+       and not (n.nspname || '.' || p.proname = any ($2))
+       and p.prosrc ~* $1
+       and p.prosrc ~* 'owner_id\\s*='
+     order by 1`,
+    ['(from|join)\\s+(public\\.)?cook_plan_recipes', RECIPE_READ_RULE],
+  );
+  return rows.map((r) => r.name);
+}
+
+/**
+ * Every row-level policy that reads `cook_plan_members` itself instead of asking
+ * private.is_cook_plan_member, as `table: policy name`.
+ */
+export async function policiesRestatingTheMembershipRule(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select schemaname || '.' || tablename || ': ' || policyname as name from pg_policies
+     where coalesce(qual, '') ~* 'cook_plan_members' or coalesce(with_check, '') ~* 'cook_plan_members'
+     order by 1`,
+    [],
+  );
+  return rows.map((r) => r.name);
+}
+
+/** The select policies on a Recipe's lines and Source Video, as `table: using` (on one line). */
+export async function recipePartReadPolicies(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select tablename || ': ' || regexp_replace(qual, '\\s+', ' ', 'g') as name from pg_policies
+     where schemaname = 'public' and tablename in ('recipe_lines', 'source_videos') and cmd in ('SELECT', 'ALL')
+     order by 1`,
+    [],
+  );
+  return rows.map((r) => r.name);
+}
