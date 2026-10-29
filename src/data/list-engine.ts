@@ -11,11 +11,17 @@
  * Where a checked-off line's Ingredient goes is decided by the `check_off` database function, not
  * here: it writes another user's Pantry, so the server can't take the client's word for it.
  *
- * It also puts a Shopping List in order, and shows it with the changes the phone hasn't sent yet.
+ * It also puts a Shopping List in order, and shows it with the changes the phone hasn't sent yet,
+ * and does the same for a Cook Plan list, annotating each line with the members who have it.
  */
 import type {
+  CookPlanId,
+  CookPlanItemId,
+  CookPlanList,
+  CookPlanListItem,
   Ingredient,
   IngredientId,
+  ListPerson,
   Recipe,
   RecipeId,
   ShoppingList,
@@ -59,18 +65,35 @@ export function toListLines(
 }
 
 /**
- * The list a change is for (decisions 13): the user's own Shopping List or a Friend's shared with
- * them. The server takes a change only for a list its sender can use when it arrives. Ticket 15
- * adds `{ kind: 'cookPlan'; id }`.
+ * The list a change is for (decisions 13, 15): the user's own Shopping List or a Friend's shared
+ * with them, or a Cook Plan's list. The server takes a change only for a list its sender can use
+ * when it arrives.
  */
-export type ListRef = { kind: 'shoppingList'; id: ShoppingListId };
+export type ShoppingListRef = { kind: 'shoppingList'; id: ShoppingListId };
+export type CookPlanListRef = { kind: 'cookPlan'; id: CookPlanId };
+export type ListRef = ShoppingListRef | CookPlanListRef;
 
-/** A change to a list the phone can make with no signal, queued until it's sent. Each names its list. */
-export type ListChange =
-  | { kind: 'checkOff'; list: ListRef; itemId: ShoppingListItemId }
-  | { kind: 'uncheck'; list: ListRef; itemId: ShoppingListItemId }
+/** A change to a Shopping List the phone can make with no signal, queued until it's sent. */
+export type ShoppingListChange =
+  | { kind: 'checkOff'; list: ShoppingListRef; itemId: ShoppingListItemId }
+  | { kind: 'uncheck'; list: ShoppingListRef; itemId: ShoppingListItemId }
   /** Something typed by hand, with the id the phone made for it. */
-  | { kind: 'addManualItem'; list: ListRef; itemId: ShoppingListItemId; text: string };
+  | { kind: 'addManualItem'; list: ShoppingListRef; itemId: ShoppingListItemId; text: string };
+
+/** A change to a Cook Plan's list the phone can make with no signal. There are no hand-added lines. */
+export type CookPlanListChange = {
+  kind: 'checkOff' | 'uncheck' | 'claim' | 'unclaim';
+  list: CookPlanListRef;
+  itemId: CookPlanItemId;
+};
+
+/** A change to a list, queued until it's sent. Each names its list; one queue holds every kind. */
+export type ListChange = ShoppingListChange | CookPlanListChange;
+
+export const isCookPlanChange = (change: ListChange): change is CookPlanListChange => change.list.kind === 'cookPlan';
+
+export const isShoppingListChange = (change: ListChange): change is ShoppingListChange =>
+  change.list.kind === 'shoppingList';
 
 const compareText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -124,7 +147,7 @@ export function withListChanges(
 ): ShoppingList {
   let items = list.items;
   for (const { madeAt, change } of changes) {
-    if (change.list.kind !== 'shoppingList' || change.list.id !== list.id) continue;
+    if (!isShoppingListChange(change) || change.list.id !== list.id) continue;
     if (change.kind === 'addManualItem') {
       if (items.some((item) => item.id === change.itemId)) continue;
       const added: ShoppingListItem = {
@@ -144,4 +167,66 @@ export function withListChanges(
     });
   }
   return items === list.items ? list : withItems(list, items);
+}
+
+/** Which member has which Ingredient on a Cook Plan's lines, as the server computed it. */
+export type WhoHas = { ingredientId: IngredientId; userId: UserId };
+
+/** A Cook Plan list's order: by Ingredient name. */
+const byIngredient = (a: CookPlanListItem, b: CookPlanListItem) =>
+  compareText(a.ingredient.name, b.ingredient.name) || compareText(a.id, b.id);
+
+/**
+ * A Cook Plan list with these lines, in order, each annotated with the members who have its
+ * Ingredient (`whoHas`, from their Pantry or Staples), in the order the plan lists its members.
+ * Someone `whoHas` names who isn't a member any more is left out.
+ */
+export function toCookPlanList(
+  plan: Pick<CookPlanList, 'planId' | 'status' | 'members'>,
+  items: readonly Omit<CookPlanListItem, 'whoHas'>[],
+  whoHas: readonly WhoHas[],
+): CookPlanList {
+  const having = new Map<IngredientId, Set<UserId>>();
+  for (const { ingredientId, userId } of whoHas) {
+    having.set(ingredientId, (having.get(ingredientId) ?? new Set()).add(userId));
+  }
+  const withWhoHas = items.map((item) => {
+    const who = having.get(item.ingredient.id);
+    const people: ListPerson[] = who ? plan.members.filter((m) => who.has(m.id)) : [];
+    return { ...item, whoHas: people };
+  });
+  return { planId: plan.planId, status: plan.status, members: plan.members, items: withWhoHas.sort(byIngredient) };
+}
+
+/**
+ * A Cook Plan list as the phone shows it: the last list read with the changes made since on top, in
+ * the order they were made, as `withListChanges` does for a Shopping List. A check or Claim made
+ * here is `me`'s, at the time it was made; unclaiming clears only `me`'s own Claim. Only changes
+ * naming this plan count.
+ */
+export function withCookPlanChanges(
+  list: CookPlanList,
+  changes: readonly { madeAt: string; change: ListChange }[],
+  me: UserId,
+): CookPlanList {
+  let items = list.items;
+  for (const { madeAt, change } of changes) {
+    if (!isCookPlanChange(change) || change.list.id !== list.planId) continue;
+    items = items.map((item): CookPlanListItem => {
+      if (item.id !== change.itemId) return item;
+      switch (change.kind) {
+        case 'checkOff':
+          return item.check.status === 'checked' ? item : { ...item, check: { status: 'checked', checkedAt: madeAt, checkedBy: me } };
+        case 'uncheck':
+          return { ...item, check: { status: 'unchecked' } };
+        case 'claim':
+          return item.claim.status === 'claimed' && item.claim.claimedBy === me
+            ? item
+            : { ...item, claim: { status: 'claimed', claimedAt: madeAt, claimedBy: me } };
+        case 'unclaim':
+          return item.claim.status === 'claimed' && item.claim.claimedBy === me ? { ...item, claim: { status: 'unclaimed' } } : item;
+      }
+    });
+  }
+  return items === list.items ? list : { ...list, items };
 }

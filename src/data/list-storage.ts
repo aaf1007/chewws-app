@@ -1,16 +1,23 @@
 /**
- * Reading back what the phone saved for the Shopping List: the last list it saw and its queued
- * changes. What's saved was written by this app, but may be from an older version, cut short or
+ * Reading back what the phone saved for the Shopping List and Cook Plan lists: the last list it saw
+ * and its queued changes. What's saved was written by this app, but may be from an older version, cut short or
  * cleared, so anything that isn't exactly the expected shape reads as nothing rather than throwing.
  */
-import { withItems, type ListChange, type ListRef } from './list-engine';
+import { toCookPlanList, withItems, type CookPlanListChange, type ListChange, type ShoppingListChange, type ShoppingListRef } from './list-engine';
 import {
+  parseCookPlanId,
+  parseCookPlanItemId,
   parseIngredientId,
   parseRecipeId,
   parseShoppingListId,
   parseShoppingListItemId,
   parseUserId,
   type CheckState,
+  type ClaimState,
+  type CookPlanId,
+  type CookPlanList,
+  type CookPlanListItem,
+  type CookPlanRecipeAmounts,
   type ListPerson,
   type SharedShoppingList,
   type ShoppingListId,
@@ -120,16 +127,17 @@ export function parseSavedShoppingList(raw: string | null): ShoppingList | null 
 }
 
 /**
- * How a queued change is saved: as ticket 10 saved a hand-add, with its Shopping List's id as
- * `listId`, now on every change. Ticket 15 saves a Cook Plan's as `list`.
+ * How a queued change is saved: a Shopping List's as ticket 10 saved a hand-add, with its list's id
+ * as `listId`, now on every change; a Cook Plan list's with its `list` (decisions 13, 15).
  */
 export function encodeListChange(change: ListChange): Record<string, unknown> {
+  if (change.list.kind === 'cookPlan') return { ...change };
   const { list, ...rest } = change;
   return { ...rest, listId: list.id };
 }
 
-/** The list a saved change names: `listId` (or a `list` of a kind this app knows), else `ownListId`. */
-function listOf(row: Record<string, unknown>, ownListId: ShoppingListId | null): ListRef | null {
+/** The Shopping List a saved change names: `listId` (or a `list` of that kind), else `ownListId`. */
+function shoppingListOf(row: Record<string, unknown>, ownListId: ShoppingListId | null): ShoppingListRef | null {
   if (row.listId !== undefined) return { kind: 'shoppingList', id: parseShoppingListId(text(row.listId)) };
   if (row.list !== undefined) {
     const ref = record(row.list);
@@ -137,6 +145,38 @@ function listOf(row: Record<string, unknown>, ownListId: ShoppingListId | null):
     return { kind: 'shoppingList', id: parseShoppingListId(text(ref.id)) };
   }
   return ownListId === null ? null : { kind: 'shoppingList', id: ownListId };
+}
+
+const COOK_PLAN_CHANGES = ['checkOff', 'uncheck', 'claim', 'unclaim'] as const;
+
+/** A saved change to a Cook Plan's list, which always names its plan as `list`. */
+function cookPlanChange(row: Record<string, unknown>): CookPlanListChange | null {
+  const ref = record(row.list);
+  const kind = COOK_PLAN_CHANGES.find((k) => k === row.kind);
+  if (kind === undefined) return null;
+  return {
+    kind,
+    list: { kind: 'cookPlan', id: parseCookPlanId(text(ref.id)) },
+    itemId: parseCookPlanItemId(text(row.itemId)),
+  };
+}
+
+function shoppingListChange(row: Record<string, unknown>, ownListId: ShoppingListId | null): ShoppingListChange | null {
+  const itemId = parseShoppingListItemId(text(row.itemId));
+  const list = shoppingListOf(row, ownListId);
+  if (!list) return null;
+  switch (row.kind) {
+    case 'checkOff':
+      return { kind: 'checkOff', list, itemId };
+    case 'uncheck':
+      return { kind: 'uncheck', list, itemId };
+    case 'addManualItem': {
+      const typed = text(row.text).trim();
+      return typed ? { kind: 'addManualItem', list, itemId, text: typed } : null;
+    }
+    default:
+      return null;
+  }
 }
 
 /**
@@ -147,23 +187,78 @@ function listOf(row: Record<string, unknown>, ownListId: ShoppingListId | null):
 export function parseListChange(value: unknown, ownListId: ShoppingListId | null): ListChange | null {
   try {
     const row = record(value);
-    const itemId = parseShoppingListItemId(text(row.itemId));
-    const list = listOf(row, ownListId);
-    if (!list) return null;
-    switch (row.kind) {
-      case 'checkOff':
-        return { kind: 'checkOff', list, itemId };
-      case 'uncheck':
-        return { kind: 'uncheck', list, itemId };
-      case 'addManualItem': {
-        const typed = text(row.text).trim();
-        return typed ? { kind: 'addManualItem', list, itemId, text: typed } : null;
-      }
-      default:
-        return null;
-    }
+    if (row.listId === undefined && row.list !== undefined && record(row.list).kind === 'cookPlan') return cookPlanChange(row);
+    return shoppingListChange(row, ownListId);
   } catch {
     return null;
+  }
+}
+
+function claim(value: unknown): ClaimState {
+  const row = record(value);
+  if (row.status === 'unclaimed') return { status: 'unclaimed' };
+  if (row.status !== 'claimed') throw new Unreadable();
+  return { status: 'claimed', claimedAt: text(row.claimedAt), claimedBy: row.claimedBy === null ? null : parseUserId(text(row.claimedBy)) };
+}
+
+function planRecipeAmounts(value: unknown): CookPlanRecipeAmounts {
+  const row = record(value);
+  const recipe = record(row.recipe);
+  const amountTexts = list(row.amountTexts).map(text);
+  if (recipe.status === 'removed') return { recipe: { status: 'removed', title: text(recipe.title) }, amountTexts };
+  if (recipe.status !== 'inPlan') throw new Unreadable();
+  return { recipe: { status: 'inPlan', id: parseRecipeId(text(recipe.id)), title: text(recipe.title) }, amountTexts };
+}
+
+function planItem(value: unknown): CookPlanListItem {
+  const row = record(value);
+  return {
+    id: parseCookPlanItemId(text(row.id)),
+    ingredient: ingredient(row.ingredient),
+    recipes: list(row.recipes).map(planRecipeAmounts),
+    whoHas: list(row.whoHas).map(person),
+    claim: claim(row.claim),
+    check: check(row.check),
+  };
+}
+
+/** The Cook Plan list the phone saved for `planId`, or null if there's none it can read. */
+export function parseSavedCookPlanList(raw: string | null, planId: CookPlanId): CookPlanList | null {
+  if (raw === null) return null;
+  try {
+    const row = record(JSON.parse(raw));
+    if (parseCookPlanId(text(row.planId)) !== planId) return null;
+    if (row.status !== 'active' && row.status !== 'cooked') throw new Unreadable();
+    const items = list(row.items).map(planItem);
+    // Who has what is kept as it was saved; the list is put in order again.
+    const whoHas = items.flatMap((item) => item.whoHas.map((p) => ({ ingredientId: item.ingredient.id, userId: p.id })));
+    return toCookPlanList({ planId, status: row.status, members: list(row.members).map(person) }, items, whoHas);
+  } catch {
+    return null;
+  }
+}
+
+/** A Cook Plan the user found they aren't in any more, until they've been told. */
+export type LostCookPlan = { planId: CookPlanId; changesNotSaved: number };
+
+function lostPlan(value: unknown): LostCookPlan {
+  const row = record(value);
+  const count = row.changesNotSaved;
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) throw new Unreadable();
+  return { planId: parseCookPlanId(text(row.planId)), changesNotSaved: count };
+}
+
+/**
+ * What the phone saved of the Cook Plan lists it keeps: which plans' lists it has copies of, and
+ * those it lost. Anything unreadable reads as none.
+ */
+export function parseSavedCookPlanIndex(raw: string | null): { plans: CookPlanId[]; lost: LostCookPlan[] } {
+  if (raw === null) return { plans: [], lost: [] };
+  try {
+    const row = record(JSON.parse(raw));
+    return { plans: list(row.plans).map((id) => parseCookPlanId(text(id))), lost: list(row.lost).map(lostPlan) };
+  } catch {
+    return { plans: [], lost: [] };
   }
 }
 
