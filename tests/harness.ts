@@ -777,10 +777,10 @@ export async function policiesRestatingTheMembershipRule(): Promise<string[]> {
   return rows.map((r) => r.name);
 }
 
-/** The select policies on a Recipe's lines and Source Video, as `table: using`. */
+/** The select policies on a Recipe's lines and Source Video, as `table: using` (on one line). */
 export async function recipePartReadPolicies(): Promise<string[]> {
   const rows = await asDatabaseOwner<{ name: string }>(
-    `select tablename || ': ' || qual as name from pg_policies
+    `select tablename || ': ' || regexp_replace(qual, '\\s+', ' ', 'g') as name from pg_policies
      where schemaname = 'public' and tablename in ('recipe_lines', 'source_videos') and cmd in ('SELECT', 'ALL')
      order by 1`,
     [],

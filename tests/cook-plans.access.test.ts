@@ -182,8 +182,9 @@ test('a stranger, and a Friend of a member who is not in the plan, read nothing 
   expect(joReads.listed).toEqual([{ id: planId }]);
   expect(joReads.shared).toEqual([{ id: pasta }, { id: reel }]);
   expect(joReads.lines?.length).toBeGreaterThan(0);
-  expect(joReads.videos).toHaveLength(2);
-  // The Recipe rows themselves (Want to Cook and all) stay their owner's.
+  // The Recipe and Source Video rows themselves (Want to Cook, the screenshot's path and all) stay
+  // their owner's; shared_recipe gives what of them a member may read.
+  expect(joReads.videos).toEqual([]);
   expect(joReads.rows).toEqual([]);
   expect(joReads.inPlans).toHaveLength(2);
 });
@@ -245,22 +246,35 @@ test("a member can't change another member's Recipe, nor see its Tags, Want to C
   expect(wantToCook).toMatchObject({ data: 'gone', error: null });
   expect(removeFromList).toMatchObject({ data: null, error: null });
 
-  // Tags and Want to Cook: neither the join rows nor the Recipe row, and shared_recipe has no such field.
+  // Tags, Want to Cook, the screenshot and the pasted caption: neither the join rows, nor the Recipe
+  // or Source Video rows, and shared_recipe has no such field.
   const tags = await jo.client.from('recipe_tags').select('*').eq('recipe_id', pasta);
   const row = await jo.client.from('recipes').select('want_to_cook_at, suggested_tags').eq('id', pasta);
-  const shared = await jo.client.rpc('shared_recipe', { recipe_id: pasta }).select('*').single();
+  const video = await jo.client.from('source_videos').select('screenshot_path, pasted_text').in('recipe_id', [pasta, reel]);
+  const shared = await jo.client.rpc('shared_recipe', { recipe_id: reel }).select('*').single();
   expect(tags).toMatchObject({ data: [], error: null });
   expect(row).toMatchObject({ data: [], error: null });
+  expect(video).toMatchObject({ data: [], error: null });
   expect(Object.keys(shared.data ?? {}).sort()).toEqual([
     'created_at',
     'id',
     'owner_id',
     'owner_username',
     'recipe_found',
+    'source_caption',
+    'source_creator_name',
+    'source_creator_url',
+    'source_external_id',
+    'source_platform',
+    'source_thumbnail_url',
+    'source_url',
     'steps',
     'title',
     'updated_at',
   ]);
+  // sam sees both on his own Reel: they're there, and only members are kept from them.
+  const own = await sam.client.from('source_videos').select('screenshot_path').eq('recipe_id', reel).single();
+  expect(own.data?.screenshot_path).toBe(`${sam.userId}/${reel}.jpg`);
 
   // sam's Draft isn't in the plan, and couldn't be: nothing of it shows, and it can't be added.
   expect((await jo.client.rpc('shared_recipe', { recipe_id: draft })).data).toEqual([]);
@@ -387,7 +401,8 @@ test('who is in a plan is decided only by private.is_cook_plan_member, never res
 test("who may read another user's Recipe is decided only by private.can_read_recipe, never restated", async () => {
   expect(await recipePartReadPolicies()).toEqual([
     'recipe_lines: private.can_read_recipe(recipe_id)',
-    'source_videos: private.can_read_recipe(recipe_id)',
+    // Owner-only: a Source Video row holds the screenshot's path and the pasted caption.
+    'source_videos: (EXISTS ( SELECT 1 FROM recipes r WHERE ((r.id = source_videos.recipe_id) AND (r.owner_id = ( SELECT auth.uid() AS uid)))))',
   ]);
   expect(await functionsRestatingTheRecipeReadRule()).toEqual([]);
 });

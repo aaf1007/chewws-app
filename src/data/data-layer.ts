@@ -194,11 +194,6 @@ function toSourceVideo(row: SourceVideoColumns | null, screenshots: ScreenshotUr
   };
 }
 
-/** A Source Video without the owner's screenshot: what another user sees (decisions 14). */
-function withoutScreenshot({ screenshotUrl: _screenshot, ...video }: SourceVideo): SourceVideo {
-  return video;
-}
-
 /**
  * A Cook Plan's day as typed: a calendar date `YYYY-MM-DD` that exists (no time, no zone). Past
  * days are fine (decisions 14). Anything else is refused.
@@ -1348,18 +1343,18 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
 
   /**
    * Another user's reviewed Recipe the signed-in user may read (one in a Cook Plan they're in,
-   * decisions 14): its title, lines, steps and Source Video, never its Tags, Want to Cook or
-   * screenshot (an Instagram Reel shows as the plain card). Null when they may not.
+   * decisions 14): its title, lines, steps and Source Video as the platform described it, never
+   * its Tags, Want to Cook, screenshot or pasted caption (an Instagram Reel shows as the plain
+   * card). Null when they may not.
    */
   async function getSomeoneElsesRecipe(id: RecipeId): Promise<Recipe | null> {
     const me = await currentUserId();
-    const [recipe, lines, video, copies] = await Promise.all([
+    const [recipe, lines, copies] = await Promise.all([
       client.rpc('shared_recipe', { recipe_id: id }).maybeSingle(),
       client
         .from('recipe_lines')
         .select('position, original_text, amount_text, ingredient:ingredients(id, name)')
         .eq('recipe_id', id),
-      client.from('source_videos').select(SOURCE_VIDEO_COLUMNS).eq('recipe_id', id).maybeSingle(),
       client
         .from('recipes')
         .select('id')
@@ -1369,10 +1364,21 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
         .order('id')
         .limit(1),
     ]);
-    for (const read of [recipe, lines, video, copies]) if (read.error) fail(read.error);
+    for (const read of [recipe, lines, copies]) if (read.error) fail(read.error);
     const row = recipe.data;
     if (!row || !lines.data) return null;
-    const sourceVideo = toSourceVideo(video.data);
+    // The platform's description only: the screenshot is the owner's own image, and members see
+    // the plain card (decisions 14).
+    const sourceVideo: SourceVideo | null =
+      row.source_platform && row.source_url
+        ? {
+            platform: row.source_platform,
+            originalUrl: row.source_url,
+            creatorName: row.source_creator_name,
+            creatorUrl: row.source_creator_url,
+            thumbnailUrl: row.source_thumbnail_url,
+          }
+        : null;
     const copy = copies.data?.[0];
     return {
       status: 'someoneElses',
@@ -1389,8 +1395,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
           ingredient: { id: parseIngredientId(line.ingredient.id), name: line.ingredient.name },
         })),
       steps: row.steps,
-      // The screenshot is the owner's own image; members see the plain card (decisions 14).
-      ...(sourceVideo ? { sourceVideo: withoutScreenshot(sourceVideo) } : {}),
+      ...(sourceVideo ? { sourceVideo } : {}),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       yourCopy: copy ? parseRecipeId(copy.id) : null,

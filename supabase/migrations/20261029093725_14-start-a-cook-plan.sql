@@ -7,10 +7,11 @@
 -- Two rules, each in one place:
 --   private.is_cook_plan_member: who is in a plan (cook_plan_ids is its list form, and asks it).
 --   private.can_read_recipe: who may read a Recipe; its owner, or a member of a plan it's in.
---     Ticket 19 widens it. The lines' and Source Videos' select policies ask it, and another
---     user's Recipe itself is read through shared_recipe, which asks it too. The recipes table's
---     own select policy stays owner-only: its rows carry Want to Cook and the Draft builder's
---     suggested Tags, which members never see (decisions 14), and RLS can't hide a column.
+--     Ticket 19 widens it. The lines' select policy asks it, and another user's Recipe and Source
+--     Video are read through shared_recipe, which asks it too. The recipes and source_videos
+--     tables' own select policies stay owner-only: their rows carry Want to Cook, the Draft
+--     builder's suggested Tags, the screenshot's path and the pasted caption, which members never
+--     see (decisions 14), and RLS can't hide a column.
 
 create type public.cook_plan_status as enum ('active', 'cooked');
 
@@ -193,14 +194,11 @@ create policy "Users read the lines of Recipes they may read"
   on public.recipe_lines for select to authenticated
   using (private.can_read_recipe(recipe_id));
 
-drop policy "Owners can read their Recipes' Source Videos" on public.source_videos;
-create policy "Users read the Source Videos of Recipes they may read"
-  on public.source_videos for select to authenticated
-  using (private.can_read_recipe(recipe_id));
-
 -- Another user's reviewed Recipe, as the caller may read it: no Tags, Want to Cook, suggested Tags
--- or build state. The owner's username only while the caller may see their Profile. No row when
--- they may not read it (or it's a Draft, or there's no such Recipe).
+-- or build state. The owner's username only while the caller may see their Profile. Its Source
+-- Video, if it has one, as the platform described it: platform, link, external id, creator,
+-- caption and thumbnail, never the owner's screenshot or pasted caption. No row when they may not
+-- read it (or it's a Draft, or there's no such Recipe).
 create function public.shared_recipe(recipe_id uuid)
 returns table (
   id uuid,
@@ -210,7 +208,14 @@ returns table (
   steps text[],
   recipe_found boolean,
   created_at timestamptz,
-  updated_at timestamptz
+  updated_at timestamptz,
+  source_platform public.source_platform,
+  source_url text,
+  source_external_id text,
+  source_creator_name text,
+  source_creator_url text,
+  source_caption text,
+  source_thumbnail_url text
 )
 language sql
 stable
@@ -218,9 +223,11 @@ security definer
 set search_path = ''
 as $$
   select r.id, r.owner_id, case when private.can_see_profile(p.id) then p.username end,
-    r.title, r.steps, r.recipe_found, r.created_at, r.updated_at
+    r.title, r.steps, r.recipe_found, r.created_at, r.updated_at,
+    s.platform, s.original_url, s.external_id, s.creator_name, s.creator_url, s.caption, s.thumbnail_url
   from public.recipes r
   join public.profiles p on p.id = r.owner_id
+  left join public.source_videos s on s.recipe_id = r.id
   where r.id = shared_recipe.recipe_id and r.status = 'reviewed' and private.can_read_recipe(r.id);
 $$;
 

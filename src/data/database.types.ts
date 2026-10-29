@@ -983,6 +983,13 @@ export type Database = {
           owner_id: string
           owner_username: string
           recipe_found: boolean
+          source_caption: string
+          source_creator_name: string
+          source_creator_url: string
+          source_external_id: string
+          source_platform: Database["public"]["Enums"]["source_platform"]
+          source_thumbnail_url: string
+          source_url: string
           steps: string[]
           title: string
           updated_at: string
