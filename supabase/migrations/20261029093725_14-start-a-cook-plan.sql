@@ -256,8 +256,11 @@ begin
   if me is null then
     raise exception 'not signed in' using errcode = '42501';
   end if;
+  -- Shared-locked, so an edit the owner is making finishes first, and the copy is one version of
+  -- the Recipe: never the old title with the new lines.
   select * into original from public.recipes r
-  where r.id = copy_recipe.recipe_id and r.status = 'reviewed' and private.can_read_recipe(r.id, me);
+  where r.id = copy_recipe.recipe_id and r.status = 'reviewed' and private.can_read_recipe(r.id, me)
+  for share;
   if not found then
     return jsonb_build_object('status', 'notFound');
   end if;

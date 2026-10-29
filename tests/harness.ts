@@ -663,6 +663,23 @@ export async function signInOnPhones(
   );
 }
 
+/**
+ * For race tests only: `user` editing their Recipe on another phone (edit_recipe: a new title and
+ * lines, `ingredientName`s already normalised), not committed yet.
+ */
+export const holdRecipeEdit = (
+  user: Someone,
+  recipeId: string,
+  title: string,
+  lines: { originalText: string; amountText: string | null; ingredientName: string }[],
+) =>
+  holdCallAs(user, 'select public.edit_recipe($1, $2, $3, $4::jsonb)', [
+    recipeId,
+    title,
+    [],
+    JSON.stringify(lines.map((l) => ({ original_text: l.originalText, amount_text: l.amountText, ingredient_name: l.ingredientName }))),
+  ]);
+
 /** For race tests only: `user` inviting `friend` into a Cook Plan on another phone, not committed yet. */
 export const holdCookPlanInvite = (user: Someone, planId: string, friend: Someone) =>
   holdCallAs(user, 'select public.invite_to_cook_plan($1, $2)', [planId, friend.userId]);

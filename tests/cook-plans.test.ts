@@ -13,6 +13,7 @@ import {
   holdCookPlanInvite,
   holdCookPlanLeave,
   holdCookPlanRecipeAdd,
+  holdRecipeEdit,
   runYouTubeExpiryJob,
   seedFriendships,
   seedUsersWithUsernames,
@@ -395,6 +396,22 @@ test('the copy is independent: editing or deleting either never changes the othe
   if (second.status !== 'copied') throw new Error(second.status);
   await jo.data.deleteRecipe(copy);
   expect((await jo.data.getRecipe(second.recipeId))?.title).toBe("Jo's garlic bread");
+});
+
+test("a copy made while the owner is editing waits for the edit, and is all of the new version", async () => {
+  const { sam, jo, planId } = await samAndJo();
+  const bread = await sam.data.createRecipe(garlicBread);
+  await sam.data.addRecipeToCookPlan(planId, bread);
+  const cheesy = [{ originalText: '100g cheddar', amountText: '100g', ingredientName: 'cheddar' }];
+
+  const held = await holdRecipeEdit(sam, bread, 'Cheesy bread', cheesy);
+  const copying = jo.data.copyRecipe(bread);
+  await held.waitForWaiting(1);
+  await held.commit();
+
+  const copied = await copying;
+  if (copied.status !== 'copied') throw new Error(copied.status);
+  expect(asInput(await jo.data.getRecipe(copied.recipeId))).toEqual({ title: 'Cheesy bread', lines: cheesy, steps: [] });
 });
 
 test('copying again makes another copy, and the plan Recipe offers the newest as yours', async () => {
