@@ -5,6 +5,11 @@ import { expect, test } from 'vitest';
 import { parseFriendRequestPush, type FoundUser, type UserId } from '../src/data';
 import {
   backdateFriendRequestPushes,
+  holdFriendRequest,
+  holdFriendRequestAnswer,
+  holdFriendRequestCancel,
+  holdUnfriend,
+  holdUsernameChoice,
   signInTestUser,
   signInWithUsername,
   uniqueUsername,
@@ -82,29 +87,31 @@ test('a username can be changed later, and the old one is free for anyone at onc
   expect((await b.data.getMyProfile()).username).toBe(old);
 });
 
-test('two users choosing the same name at once: one gets it, the other is told it is taken', async () => {
+test('a name chosen while someone else is choosing it waits for them, and is taken', async () => {
   const a = await signInTestUser('a');
   const b = await signInTestUser('b');
   const wanted = uniqueUsername('race');
+  const held = await holdUsernameChoice(a, wanted); // a's choice, not committed yet
 
-  const results = await Promise.all([a.data.setUsername(wanted), b.data.setUsername(wanted)]);
+  const choosing = b.data.setUsername(wanted);
+  await held.waitForWaiting(1);
+  await held.commit();
 
-  expect(results.map((r) => r.status).sort()).toEqual(['set', 'taken']);
-  const names = [(await a.data.getMyProfile()).username, (await b.data.getMyProfile()).username];
-  expect(names.filter((n) => n === wanted)).toHaveLength(1);
-  expect(names.filter((n) => n === null)).toHaveLength(1);
+  expect(await choosing).toEqual({ status: 'taken' });
+  expect((await a.data.getMyProfile()).username).toBe(wanted);
+  expect((await b.data.getMyProfile()).username).toBeNull();
 });
 
-test('one user choosing the same name twice at once gets it both times', async () => {
+test('one user choosing the same name on two phones at once gets it both times', async () => {
   const a = await signInTestUser('a');
   const wanted = uniqueUsername('twice');
+  const held = await holdUsernameChoice(a, wanted);
 
-  const results = await Promise.all([a.data.setUsername(wanted), a.data.setUsername(wanted)]);
+  const choosing = a.data.setUsername(wanted);
+  await held.waitForWaiting(1);
+  await held.commit();
 
-  expect(results).toEqual([
-    { status: 'set', username: wanted },
-    { status: 'set', username: wanted },
-  ]);
+  expect(await choosing).toEqual({ status: 'set', username: wanted });
   expect((await a.data.getMyProfile()).username).toBe(wanted);
 });
 
@@ -324,16 +331,20 @@ test('a token the push service reports gone is forgotten', async () => {
   expect(c.notifications.pushesSent()).toEqual([]);
 });
 
-// At the same time
+// At the same time. Each race holds one side open in a second database session (harness only) and
+// makes the other wait on it, so the interleaving is the same on every run.
 
-test('the same request sent twice at once is one request and one push', async () => {
+test('the same request sent from two phones at once is one request and one push', async () => {
   const a = await signInWithUsername('alice');
   const b = await signInWithUsername('bob');
   await b.data.registerPushToken(TOKEN_B);
+  const held = await holdFriendRequest(a, b); // a's other phone, not committed yet
 
-  const results = await Promise.all([a.data.sendFriendRequest(b.userId), a.data.sendFriendRequest(b.userId)]);
+  const sending = a.data.sendFriendRequest(b.userId);
+  await held.waitForWaiting(1);
+  await held.commit();
 
-  expect(results).toEqual([{ status: 'requested' }, { status: 'requested' }]);
+  expect(await sending).toEqual({ status: 'requested' });
   expect(await seenBy(a)).toEqual({ friends: [], incoming: [], outgoing: [b.username] });
   expect(await seenBy(b)).toEqual({ friends: [], incoming: [a.username], outgoing: [] });
   expect(a.notifications.pushesSent()).toEqual([friendRequestPush(TOKEN_B, a.username, a.userId)]);
@@ -342,49 +353,106 @@ test('the same request sent twice at once is one request and one push', async ()
 test('two people asking each other at once become Friends', async () => {
   const a = await signInWithUsername('alice');
   const b = await signInWithUsername('bob');
+  const held = await holdFriendRequest(a, b);
 
-  const results = await Promise.all([a.data.sendFriendRequest(b.userId), b.data.sendFriendRequest(a.userId)]);
+  const sending = b.data.sendFriendRequest(a.userId);
+  await held.waitForWaiting(1);
+  await held.commit();
 
-  expect(results.map((r) => r.status).sort()).toEqual(['accepted', 'requested']);
+  expect(await sending).toEqual({ status: 'accepted' });
   expect(await seenBy(a)).toEqual({ friends: [b.username], incoming: [], outgoing: [] });
   expect(await seenBy(b)).toEqual({ friends: [a.username], incoming: [], outgoing: [] });
 });
 
-test('accepting twice at once, or unfriending twice at once, ends the same as once', async () => {
+test('accepting on two phones at once ends the same as once', async () => {
   const a = await signInWithUsername('alice');
   const b = await signInWithUsername('bob');
   await a.data.sendFriendRequest(b.userId);
+  const held = await holdFriendRequestAnswer(b, a, true);
 
-  const answers = await Promise.all([
-    b.data.respondToFriendRequest(a.userId, true),
-    b.data.respondToFriendRequest(a.userId, true),
-  ]);
-  expect(answers).toEqual([{ status: 'accepted' }, { status: 'accepted' }]);
+  const answering = b.data.respondToFriendRequest(a.userId, true);
+  await held.waitForWaiting(1);
+  await held.commit();
+
+  expect(await answering).toEqual({ status: 'accepted' });
   expect(await seenBy(a)).toEqual({ friends: [b.username], incoming: [], outgoing: [] });
+  expect(await seenBy(b)).toEqual({ friends: [a.username], incoming: [], outgoing: [] });
+});
 
-  await Promise.all([a.data.unfriend(b.userId), b.data.unfriend(a.userId)]);
+test('accepting a request while it is being withdrawn: not found, and no Friendship', async () => {
+  const a = await signInWithUsername('alice');
+  const b = await signInWithUsername('bob');
+  await a.data.sendFriendRequest(b.userId);
+  const held = await holdFriendRequestCancel(a, b); // a withdraws it, not committed yet
+
+  const answering = b.data.respondToFriendRequest(a.userId, true);
+  await held.waitForWaiting(1);
+  await held.commit();
+
+  expect(await answering).toEqual({ status: 'notFound' });
   expect(await seenBy(a)).toEqual(nothing);
   expect(await seenBy(b)).toEqual(nothing);
 });
 
-test('accepting and cancelling at once: either Friends or nothing, never a request left half-done', async () => {
+test('asking back while the request is being withdrawn sends a fresh request, not a Friendship', async () => {
   const a = await signInWithUsername('alice');
   const b = await signInWithUsername('bob');
   await a.data.sendFriendRequest(b.userId);
+  const held = await holdFriendRequestCancel(a, b);
 
-  const [answer] = await Promise.all([
-    b.data.respondToFriendRequest(a.userId, true),
-    a.data.cancelFriendRequest(b.userId),
-  ]);
+  const sending = b.data.sendFriendRequest(a.userId);
+  await held.waitForWaiting(1);
+  await held.commit();
 
-  if (answer.status === 'accepted') {
-    expect(await seenBy(a)).toEqual({ friends: [b.username], incoming: [], outgoing: [] });
-    expect(await seenBy(b)).toEqual({ friends: [a.username], incoming: [], outgoing: [] });
-  } else {
-    expect(answer).toEqual({ status: 'notFound' });
-    expect(await seenBy(a)).toEqual(nothing);
-    expect(await seenBy(b)).toEqual(nothing);
-  }
+  expect(await sending).toEqual({ status: 'requested' });
+  expect(await seenBy(a)).toEqual({ friends: [], incoming: [b.username], outgoing: [] });
+  expect(await seenBy(b)).toEqual({ friends: [], incoming: [], outgoing: [a.username] });
+});
+
+test('withdrawing a request while it is being accepted withdraws nothing: they are Friends', async () => {
+  const a = await signInWithUsername('alice');
+  const b = await signInWithUsername('bob');
+  await a.data.sendFriendRequest(b.userId);
+  const held = await holdFriendRequestAnswer(b, a, true);
+
+  const cancelling = a.data.cancelFriendRequest(b.userId);
+  await held.waitForWaiting(1);
+  await held.commit();
+
+  await cancelling;
+  expect(await seenBy(a)).toEqual({ friends: [b.username], incoming: [], outgoing: [] });
+  expect(await seenBy(b)).toEqual({ friends: [a.username], incoming: [], outgoing: [] });
+});
+
+test('asking while being unfriended sends a request, not "already Friends"', async () => {
+  const a = await signInWithUsername('alice');
+  const b = await signInWithUsername('bob');
+  await a.data.sendFriendRequest(b.userId);
+  await b.data.respondToFriendRequest(a.userId, true);
+  const held = await holdUnfriend(a, b); // a unfriends b, not committed yet
+
+  const sending = b.data.sendFriendRequest(a.userId);
+  await held.waitForWaiting(1);
+  await held.commit();
+
+  expect(await sending).toEqual({ status: 'requested' });
+  expect(await seenBy(a)).toEqual({ friends: [], incoming: [b.username], outgoing: [] });
+});
+
+test('unfriending on both sides at once ends the same as once', async () => {
+  const a = await signInWithUsername('alice');
+  const b = await signInWithUsername('bob');
+  await a.data.sendFriendRequest(b.userId);
+  await b.data.respondToFriendRequest(a.userId, true);
+  const held = await holdUnfriend(a, b);
+
+  const unfriending = b.data.unfriend(a.userId);
+  await held.waitForWaiting(1);
+  await held.commit();
+
+  await unfriending;
+  expect(await seenBy(a)).toEqual(nothing);
+  expect(await seenBy(b)).toEqual(nothing);
 });
 
 // What others can see

@@ -281,8 +281,12 @@ begin
   end if;
   if have_row and existing.status = 'pending' then
     update public.friendships f set status = 'accepted', responded_at = now()
-    where f.requester_id = other and f.addressee_id = me;
-    return jsonb_build_object('status', 'accepted');
+    where f.requester_id = other and f.addressee_id = me and f.status = 'pending';
+    if found then
+      return jsonb_build_object('status', 'accepted');
+    end if;
+    -- Gone meanwhile (it can't be, under the pair lock, but never answer a change not made).
+    have_row := false;
   end if;
 
   if (select count(*) from public.friendships f
@@ -328,8 +332,13 @@ begin
 
   if current_status = 'pending' then
     update public.friendships f set status = answer, responded_at = now()
-    where f.requester_id = respond_to_friend_request.requester_id and f.addressee_id = me;
-    return jsonb_build_object('status', answer);
+    where f.requester_id = respond_to_friend_request.requester_id and f.addressee_id = me
+      and f.status = 'pending';
+    -- Only an answer that was recorded is reported.
+    if found then
+      return jsonb_build_object('status', answer);
+    end if;
+    return jsonb_build_object('status', 'notFound');
   end if;
   if current_status = answer then
     return jsonb_build_object('status', answer);
@@ -341,34 +350,55 @@ $$;
 revoke execute on function public.respond_to_friend_request(uuid, boolean) from public, anon;
 grant execute on function public.respond_to_friend_request(uuid, boolean) to authenticated;
 
--- Withdraws the caller's request to `user_id`, pending or declined alike. None is fine.
+-- Withdraws the caller's request to `user_id`, pending or declined alike. None is fine. It takes
+-- the pair's lock as every change to a pair does, so an answer or a request back made meanwhile
+-- waits for it and then sees the request gone.
 create function public.cancel_friend_request(user_id uuid)
 returns void
-language sql
+language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  me uuid := auth.uid();
+begin
+  if me is null then
+    raise exception 'not signed in' using errcode = '42501';
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended(
+    'friendship:' || least(me, cancel_friend_request.user_id)::text
+      || greatest(me, cancel_friend_request.user_id)::text, 0));
   delete from public.friendships f
-  where f.requester_id = (select auth.uid())
+  where f.requester_id = me
     and f.addressee_id = cancel_friend_request.user_id
     and f.status in ('pending', 'declined');
+end;
 $$;
 
 revoke execute on function public.cancel_friend_request(uuid) from public, anon;
 grant execute on function public.cancel_friend_request(uuid) to authenticated;
 
 -- Ends the Friendship between the caller and `user_id`, for both. Either may ask again later.
--- Not Friends is fine.
+-- Not Friends is fine. Under the pair's lock, so a request made meanwhile waits and then asks anew.
 create function public.unfriend(user_id uuid)
 returns void
-language sql
+language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  me uuid := auth.uid();
+begin
+  if me is null then
+    raise exception 'not signed in' using errcode = '42501';
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended(
+    'friendship:' || least(me, unfriend.user_id)::text || greatest(me, unfriend.user_id)::text, 0));
   delete from public.friendships f
-  where least(f.requester_id, f.addressee_id) = least((select auth.uid()), unfriend.user_id)
-    and greatest(f.requester_id, f.addressee_id) = greatest((select auth.uid()), unfriend.user_id)
+  where least(f.requester_id, f.addressee_id) = least(me, unfriend.user_id)
+    and greatest(f.requester_id, f.addressee_id) = greatest(me, unfriend.user_id)
     and f.status = 'accepted';
+end;
 $$;
 
 revoke execute on function public.unfriend(uuid) from public, anon;

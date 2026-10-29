@@ -155,6 +155,42 @@ export async function holdLinkSave(user: Pick<TestUser, 'userId'>, url: string):
   return { waitForWaiting, commit };
 }
 
+/**
+ * For race tests only: a second database session that makes one call as the user, signed in, as
+ * the app would, and doesn't commit yet. Until `commit()`, whatever waits on what it holds (a row,
+ * a lock) shows up in `waitForWaiting`.
+ */
+async function holdCallAs(user: Pick<TestUser, 'userId'>, sql: string, params: unknown[]): Promise<HeldRemoval> {
+  const claims = JSON.stringify({ sub: user.userId, role: 'authenticated' });
+  const { waitForWaiting, commit } = await holdInTransaction(sql, params, [
+    ["select set_config('request.jwt.claims', $1, true)", [claims]],
+    ['set local role authenticated', []],
+  ]);
+  return { waitForWaiting, commit };
+}
+
+type Someone = Pick<TestUser, 'userId'>;
+
+/** For race tests only: `user` choosing `username` on another phone, not committed yet. */
+export const holdUsernameChoice = (user: Someone, username: string) =>
+  holdCallAs(user, 'select public.set_username($1)', [username]);
+
+/** For race tests only: `user` asking `other` to be Friends on another phone, not committed yet. */
+export const holdFriendRequest = (user: Someone, other: Someone) =>
+  holdCallAs(user, 'select public.send_friend_request($1)', [other.userId]);
+
+/** For race tests only: `user` answering `requester`'s request on another phone, not committed yet. */
+export const holdFriendRequestAnswer = (user: Someone, requester: Someone, accept: boolean) =>
+  holdCallAs(user, 'select public.respond_to_friend_request($1, $2)', [requester.userId, accept]);
+
+/** For race tests only: `user` withdrawing their request to `other` on another phone, not committed yet. */
+export const holdFriendRequestCancel = (user: Someone, other: Someone) =>
+  holdCallAs(user, 'select public.cancel_friend_request($1)', [other.userId]);
+
+/** For race tests only: `user` unfriending `other` on another phone, not committed yet. */
+export const holdUnfriend = (user: Someone, other: Someone) =>
+  holdCallAs(user, 'select public.unfriend($1)', [other.userId]);
+
 /** Runs one statement on the database as its owner, for the few things no action can reach. */
 async function asDatabaseOwner<T extends pg.QueryResultRow>(sql: string, params: unknown[]) {
   const db = new pg.Client({ connectionString: inject('supabase').dbUrl });
