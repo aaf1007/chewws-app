@@ -58,15 +58,19 @@ export function toListLines(
   return [...lines.values()];
 }
 
-/** A change to a Shopping List the phone can make with no signal, queued until it's sent. */
+/**
+ * The list a change is for (decisions 13): the user's own Shopping List or a Friend's shared with
+ * them. The server takes a change only for a list its sender can use when it arrives. Ticket 15
+ * adds `{ kind: 'cookPlan'; id }`.
+ */
+export type ListRef = { kind: 'shoppingList'; id: ShoppingListId };
+
+/** A change to a list the phone can make with no signal, queued until it's sent. Each names its list. */
 export type ListChange =
-  | { kind: 'checkOff'; itemId: ShoppingListItemId }
-  | { kind: 'uncheck'; itemId: ShoppingListItemId }
-  /**
-   * Something typed by hand, with the id the phone made for it, for the list `listId`: the server
-   * refuses it unless whoever sends it can use that list.
-   */
-  | { kind: 'addManualItem'; listId: ShoppingListId; itemId: ShoppingListItemId; text: string };
+  | { kind: 'checkOff'; list: ListRef; itemId: ShoppingListItemId }
+  | { kind: 'uncheck'; list: ListRef; itemId: ShoppingListItemId }
+  /** Something typed by hand, with the id the phone made for it. */
+  | { kind: 'addManualItem'; list: ListRef; itemId: ShoppingListItemId; text: string };
 
 const compareText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -90,7 +94,7 @@ export function sortListItems(items: readonly ShoppingListItem[]): ShoppingListI
  * goes as its last line does.
  */
 export function withItems(
-  list: Pick<ShoppingList, 'id' | 'ownerId'>,
+  list: Pick<ShoppingList, 'id' | 'ownerId' | 'ownerUsername' | 'sharedWith'>,
   items: readonly ShoppingListItem[],
 ): ShoppingList {
   const recipes = new Map(
@@ -99,6 +103,8 @@ export function withItems(
   return {
     id: list.id,
     ownerId: list.ownerId,
+    ownerUsername: list.ownerUsername,
+    sharedWith: list.sharedWith,
     items: sortListItems(items),
     recipes: [...recipes.values()].sort((a, b) => compareText(a.title, b.title) || compareText(a.id, b.id)),
   };
@@ -106,9 +112,10 @@ export function withItems(
 
 /**
  * The list as the phone shows it: the last list read from the server with the changes made since
- * on top, in the order they were made. A check made here is by `me`, at the time it was made. An
- * item added here has no Ingredient yet: the server matches it when it arrives. A change to an item
- * that isn't on the list does nothing. Applying a change twice is the same as once.
+ * on top, in the order they were made. Only the changes that name this list count. A check made
+ * here is by `me`, at the time it was made. An item added here has no Ingredient yet: the server
+ * matches it when it arrives. A change to an item that isn't on the list does nothing. Applying a
+ * change twice is the same as once.
  */
 export function withListChanges(
   list: ShoppingList,
@@ -117,6 +124,7 @@ export function withListChanges(
 ): ShoppingList {
   let items = list.items;
   for (const { madeAt, change } of changes) {
+    if (change.list.kind !== 'shoppingList' || change.list.id !== list.id) continue;
     if (change.kind === 'addManualItem') {
       if (items.some((item) => item.id === change.itemId)) continue;
       const added: ShoppingListItem = {
