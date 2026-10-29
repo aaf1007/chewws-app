@@ -11,7 +11,12 @@ import {
   signInAttacker,
   type Attacker,
 } from './access-harness';
-import { backdateFriendRequestPushes, seedUsersWithUsernames, uniqueUsername } from './harness';
+import {
+  backdateFriendRequestPushes,
+  functionsRestatingTheFriendRule,
+  seedUsersWithUsernames,
+  uniqueUsername,
+} from './harness';
 
 const permissionDenied = { code: '42501' };
 const TOKEN = 'ExponentPushToken[friendsaccess0000001]';
@@ -231,4 +236,8 @@ test('a pair gets at most one "Friend request" push in 7 days, however often the
   await requester.data.cancelFriendRequest(addressee.userId);
   await requester.data.sendFriendRequest(addressee.userId);
   expect(requester.notifications.pushesSent()).toHaveLength(2);
+});
+
+test('whether two users are Friends is decided in one place, private.are_friends', async () => {
+  expect(await functionsRestatingTheFriendRule()).toEqual([]);
 });

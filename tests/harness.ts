@@ -292,6 +292,24 @@ export async function backdateFriendRequestPushes(
   );
 }
 
+/**
+ * The database functions (public and private) that decide for themselves whether a friendship is
+ * accepted, comparing its status with 'accepted' instead of asking private.are_friends or
+ * private.friend_ids (decisions 11: one Friend rule). Setting a status is not deciding.
+ */
+export async function functionsRestatingTheFriendRule(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private')
+       and p.proname <> 'are_friends'
+       and p.prosrc ~* $1
+     order by 1`,
+    ["(?<!set )status\\s*(=\\s*'accepted'|in\\s*\\([^)]*'accepted')"],
+  );
+  return rows.map((r) => r.name);
+}
+
 /** Runs the daily job that drops YouTube data over 30 days old, now (pg_cron runs it at 03:17). */
 export async function runYouTubeExpiryJob(): Promise<void> {
   await asDatabaseOwner('select private.expire_youtube_source_data()', []);

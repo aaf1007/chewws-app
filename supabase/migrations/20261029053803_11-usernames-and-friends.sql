@@ -181,17 +181,20 @@ stable
 security definer
 set search_path = ''
 as $$
-  select coalesce((
-    select case
-      when f.status = 'accepted' then 'friends'
-      when f.requester_id = (select auth.uid()) then 'requestSent'
-      when f.status = 'pending' then 'requestReceived'
-      else 'none'
-    end
-    from public.friendships f
-    where least(f.requester_id, f.addressee_id) = least((select auth.uid()), other)
-      and greatest(f.requester_id, f.addressee_id) = greatest((select auth.uid()), other)
-  ), 'none');
+  select case
+    when private.are_friends((select auth.uid()), other) then 'friends'
+    else coalesce((
+      -- Not Friends, so any row is a request, one way or the other.
+      select case
+        when f.requester_id = (select auth.uid()) then 'requestSent'
+        when f.status = 'pending' then 'requestReceived'
+        else 'none'
+      end
+      from public.friendships f
+      where least(f.requester_id, f.addressee_id) = least((select auth.uid()), other)
+        and greatest(f.requester_id, f.addressee_id) = greatest((select auth.uid()), other)
+    ), 'none')
+  end;
 $$;
 
 revoke execute on function private.relationship_with(uuid) from public, anon;
@@ -273,7 +276,7 @@ begin
     and greatest(f.requester_id, f.addressee_id) = greatest(me, other);
   have_row := found;
 
-  if have_row and existing.status = 'accepted' then
+  if private.are_friends(me, other) then
     return jsonb_build_object('status', 'alreadyFriends');
   end if;
   if have_row and existing.requester_id = me then
@@ -397,7 +400,7 @@ begin
   delete from public.friendships f
   where least(f.requester_id, f.addressee_id) = least(me, unfriend.user_id)
     and greatest(f.requester_id, f.addressee_id) = greatest(me, unfriend.user_id)
-    and f.status = 'accepted';
+    and private.are_friends(me, unfriend.user_id);
 end;
 $$;
 
@@ -413,11 +416,11 @@ security definer
 set search_path = ''
 as $$
   select p.id, p.username, f.responded_at
-  from public.friendships f
-  join public.profiles p
-    on p.id = case when f.requester_id = (select auth.uid()) then f.addressee_id else f.requester_id end
-  where (f.requester_id = (select auth.uid()) or f.addressee_id = (select auth.uid()))
-    and f.status = 'accepted'
+  from private.friend_ids((select auth.uid())) as friend (id)
+  join public.profiles p on p.id = friend.id
+  join public.friendships f
+    on least(f.requester_id, f.addressee_id) = least((select auth.uid()), friend.id)
+   and greatest(f.requester_id, f.addressee_id) = greatest((select auth.uid()), friend.id)
   order by p.username;
 $$;
 
