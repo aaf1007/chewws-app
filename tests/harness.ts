@@ -132,6 +132,25 @@ export async function countLinkSaves(user: Pick<TestUser, 'userId'>): Promise<nu
   return rows[0].count;
 }
 
+/**
+ * Link saves the user made at these times, as if they had saved links then (ticket 07's daily
+ * limit counts them), with no Draft for them: quicker than saving each one.
+ */
+export async function seedLinkSaves(user: Pick<TestUser, 'userId'>, times: Date[]): Promise<void> {
+  await asDatabaseOwner(
+    'insert into public.link_saves (user_id, saved_at) select $1, unnest($2::timestamptz[])',
+    [user.userId, times.map((t) => t.toISOString())],
+  );
+}
+
+/** Every link save the user has made happened `hours` earlier than it did, as if that time had passed. */
+export async function backdateLinkSaves(user: Pick<TestUser, 'userId'>, hours: number): Promise<void> {
+  await asDatabaseOwner(
+    'update public.link_saves set saved_at = saved_at - make_interval(hours => $2) where user_id = $1',
+    [user.userId, hours],
+  );
+}
+
 /** The Draft's current build was claimed `minutes` ago, as if it had been running that long. */
 export async function backdateDraftBuild(recipeId: string, minutes: number): Promise<void> {
   await asDatabaseOwner(

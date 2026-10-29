@@ -250,6 +250,22 @@ export class DataError extends Error {
   }
 }
 
+/**
+ * A link save refused by the daily limit (decisions 07): the user has saved `limit` links in the
+ * last 24 hours. Nothing was saved. `retryAt` (an ISO timestamp) is when they can save again.
+ */
+export class DailyLimitError extends DataError {
+  readonly limit: number;
+  readonly retryAt: string;
+
+  constructor(limit: number, retryAt: string) {
+    super('daily_limit_reached', `You've saved ${limit} links in the last 24 hours, the daily limit.`);
+    this.name = 'DailyLimitError';
+    this.limit = limit;
+    this.retryAt = retryAt;
+  }
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function parseUserId(raw: string): UserId {
@@ -266,6 +282,18 @@ export function parseRecipeId(raw: string): RecipeId {
   }
   // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the one brand constructor
   return raw as RecipeId;
+}
+
+/**
+ * The Draft a tapped "Draft ready" notification opens: its `data` is `{ kind: 'draftReady',
+ * recipeId }` (decisions 07). Null for any other notification, or data that isn't that.
+ */
+export function parseDraftReadyPush(data: unknown): RecipeId | null {
+  if (typeof data !== 'object' || data === null) return null;
+  const kind: unknown = Reflect.get(data, 'kind');
+  const recipeId: unknown = Reflect.get(data, 'recipeId');
+  if (kind !== 'draftReady' || typeof recipeId !== 'string' || !UUID.test(recipeId)) return null;
+  return parseRecipeId(recipeId);
 }
 
 export function parseIngredientId(raw: string): IngredientId {

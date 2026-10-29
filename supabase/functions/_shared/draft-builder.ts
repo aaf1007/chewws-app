@@ -5,6 +5,7 @@
 import { normaliseIngredientName } from '../../../src/data/ingredient-matcher.ts';
 import { tidyTagNames } from '../../../src/data/tag-name.ts';
 import { ExtractError, type Extract, type Extraction, type Screenshot } from './claude-extractor.ts';
+import { draftReadyMessages, type PushSender } from './push-sender.ts';
 import {
   SourceError,
   userAddedCaption,
@@ -28,7 +29,13 @@ export type BuildFailure =
 
 /** Calls one of the builder's database functions as the service role, and returns its result. */
 export type Rpc = (
-  fn: 'claim_draft_build' | 'finish_draft' | 'fail_draft' | 'store_source_refresh',
+  fn:
+    | 'claim_draft_build'
+    | 'finish_draft'
+    | 'fail_draft'
+    | 'store_source_refresh'
+    | 'draft_ready_push'
+    | 'forget_push_tokens',
   args: Record<string, unknown>,
 ) => Promise<unknown>;
 
@@ -42,6 +49,8 @@ export type DraftBuilderDeps = {
    * `save_from_link` made for them).
    */
   loadScreenshot: (path: string, signal: AbortSignal) => Promise<Screenshot>;
+  /** Sends the "Draft ready" push (Expo's push service; a recording fake in tests). */
+  sendPush: PushSender;
   /** How long one attempt may take, reading and Claude together (hosted functions stop at 150 s). */
   budgetMs?: number;
 };
@@ -54,6 +63,9 @@ export type BuildOutcome =
   | { status: 'failed'; reason: BuildFailure };
 
 const BUDGET_MS = 120_000;
+
+/** How long sending the "Draft ready" push may take, after the build. */
+const PUSH_MS = 10_000;
 
 /** What `claim_draft_build` returned: what was shared, or null when there's nothing to build. */
 function toSharedLink(claimed: unknown): SharedLink | null {
@@ -123,6 +135,34 @@ async function extractionOf(material: SourceMaterial, deps: DraftBuilderDeps, si
   return deps.extract({ ...material, screenshot }, signal);
 }
 
+/** What `draft_ready_push` returned: the Draft's title and its owner's push tokens, or null. */
+function toDraftReadyTarget(target: unknown): { title: string; tokens: string[] } | null {
+  if (typeof target !== 'object' || target === null) return null;
+  const title: unknown = Reflect.get(target, 'title');
+  const tokens: unknown = Reflect.get(target, 'tokens');
+  if (typeof title !== 'string' || !Array.isArray(tokens)) return null;
+  return { title, tokens: tokens.filter((t): t is string => typeof t === 'string') };
+}
+
+/**
+ * Sends "Draft ready" to every phone of the Draft's owner (decisions 07), and forgets the tokens
+ * the push service says are gone. Only a build that filled the Draft in calls it, so a second kick
+ * or a Retry sends no second one. Never throws: a push that can't be sent doesn't fail the build.
+ */
+async function sendDraftReady(recipeId: string, deps: DraftBuilderDeps): Promise<void> {
+  try {
+    const target = toDraftReadyTarget(await deps.rpc('draft_ready_push', { recipe_id: recipeId }));
+    if (target === null || target.tokens.length === 0) return;
+    const { unregistered } = await deps.sendPush(
+      draftReadyMessages(recipeId, target.title, target.tokens),
+      AbortSignal.timeout(PUSH_MS),
+    );
+    if (unregistered.length > 0) await deps.rpc('forget_push_tokens', { tokens: unregistered });
+  } catch (error) {
+    console.error('Draft ready push not sent:', error);
+  }
+}
+
 /** The most Tag names a Draft keeps from the builder (decisions 06). */
 const MAX_SUGGESTED_TAGS = 5;
 
@@ -168,6 +208,7 @@ export async function buildDraft(recipeId: string, deps: DraftBuilderDeps): Prom
         },
       },
     });
+    if (changed === true) await sendDraftReady(recipeId, deps);
     return { status: 'built', changed: changed === true };
   } catch (error) {
     const reason = failureOf(error, budget.signal.aborted);

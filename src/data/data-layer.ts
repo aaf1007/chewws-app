@@ -14,7 +14,7 @@ import {
   type KeyValueStorage,
   type QueuedChange,
 } from './change-queue';
-import type { Database } from './database.types';
+import type { Database, Json } from './database.types';
 import { normaliseIngredientName } from './ingredient-matcher';
 import { toListLines, withItems, withListChanges, type ListChange } from './list-engine';
 import { parseListChange, parseSavedShoppingList } from './list-storage';
@@ -23,6 +23,7 @@ import { searchWords } from './search-words';
 import { MAX_REVIEW_TAGS, checkTagName, normaliseTagName, tagKey, tidyTagNames } from './tag-name';
 import { sessionIdOf, type SessionStorage } from './session-storage';
 import {
+  DailyLimitError,
   DataError,
   parseIngredientId,
   parseRecipeId,
@@ -374,6 +375,21 @@ function toDataError(error: AuthError | PostgrestError): DataError {
   return new DataError(error.code ?? 'unknown', error.message, { cause: error });
 }
 
+/** What `save_from_link` answered: saved, or refused by the daily limit (decisions 07). */
+function toSaveFromLinkResult(answer: Json): SaveFromLinkResult | DailyLimitError {
+  if (typeof answer === 'object' && answer !== null && !Array.isArray(answer)) {
+    const { status, recipeId, limit, retryAt } = answer;
+    if (status === 'saved' && typeof recipeId === 'string') return { status, recipeId: parseRecipeId(recipeId) };
+    if (status === 'dailyLimitReached' && typeof limit === 'number' && typeof retryAt === 'string') {
+      return new DailyLimitError(limit, new Date(retryAt).toISOString());
+    }
+  }
+  throw new DataError('unknown', 'save_from_link answered oddly.');
+}
+
+/** An Expo push token as the app gets one: `ExponentPushToken[…]`. */
+const PUSH_TOKEN = /^(Exponent|Expo)PushToken\[[A-Za-z0-9_-]+\]$/;
+
 function fail(error: AuthError | PostgrestError): never {
   throw toDataError(error);
 }
@@ -709,7 +725,42 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
    * signed in.
    */
   async function signOut(): Promise<void> {
-    await endOnServer(await endSessionOnPhone({ reason: 'signedOut' }));
+    const token = pushToken;
+    pushToken = null;
+    const cleared = await endSessionOnPhone({ reason: 'signedOut' });
+    await forgetPushToken(token, cleared);
+    await endOnServer(cleared);
+  }
+
+  // This phone's push token, once the app has registered it while this user is signed in.
+  let pushToken: string | null = null;
+
+  /**
+   * Registers this phone's Expo push token for the signed-in user, so their finished Drafts send
+   * "Draft ready" here (decisions 07). The app calls it once notifications are allowed, and again
+   * on every foreground. A token another user registered (the phone changed hands) moves to them.
+   */
+  async function registerPushToken(token: string): Promise<void> {
+    const trimmed = token.trim();
+    if (trimmed.length > 200 || !PUSH_TOKEN.test(trimmed)) throw new DataError('invalid_push_token', `Not an Expo push token: ${token}`);
+    const { error } = await client.rpc('register_push_token', { token: trimmed });
+    if (error) fail(error);
+    pushToken = trimmed;
+  }
+
+  /**
+   * Best effort, as the user signs out: this phone stops getting their notifications. Sent with a
+   * session just cleared from the phone, as `endOnServer` ends them; with no signal, or none still
+   * valid, the token stays theirs until the next user registers it or Expo reports it gone.
+   */
+  async function forgetPushToken(token: string | null, sessions: KeptSession[]) {
+    const session = sessions.find(({ expiresAt }) => expiresAt !== null && expiresAt * 1000 > Date.now());
+    if (token === null || !session) return;
+    try {
+      await client.rpc('forget_push_token', { token }).setHeader('Authorization', bearer(session.accessToken));
+    } catch {
+      // Signed out on the phone already.
+    }
   }
 
   /**
@@ -1052,20 +1103,21 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     const caption = toPastedCaption(shared.caption);
     const recipeId = shared.draftId ?? newDraftId();
     if (shared.screenshot) await uploadSaveScreenshot(recipeId, shared.screenshot);
-    const { error } = await client.rpc('save_from_link', {
+    const { data, error } = await client.rpc('save_from_link', {
       recipe_id: recipeId,
       url: detected.url,
       platform: detected.platform,
       pasted_text: caption ?? undefined,
       with_screenshot: Boolean(shared.screenshot),
     });
-    if (error) {
-      const refused = toDataError(error);
-      if (shared.screenshot) await cleanUpRefusedUpload(recipeId, refused);
-      throw refused;
+    const result = error ? toDataError(error) : toSaveFromLinkResult(data);
+    if (result instanceof DataError) {
+      // Nothing was saved, so the screenshot uploaded for it goes.
+      if (shared.screenshot) await cleanUpRefusedUpload(recipeId, result);
+      throw result;
     }
     await kick(recipeId);
-    return { status: 'saved', recipeId };
+    return result;
   }
 
   /**
@@ -1758,6 +1810,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     deleteTag,
     newDraftId,
     saveFromLink,
+    registerPushToken,
     addCaptionToDraft,
     listDrafts,
     resumeDraftBuilds,
