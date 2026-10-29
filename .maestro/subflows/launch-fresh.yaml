@@ -2,10 +2,14 @@
 # Ends on the sign-in screen. Needs `npm run dev:up` first.
 # The __expo_* params skip the dev client's onboarding, keep its menu from opening at launch and
 # hide its floating tools button, so no dev-only chrome sits over the app while a flow runs.
+# Notifications are allowed up front, so the system prompt the app shows after the first saved link
+# (ticket 07) never stops a flow; a flow that wants the prompt sets `NOTIFICATIONS: unset` in its env.
 appId: com.ant1007.recipeapp
 ---
 - launchApp:
     clearState: true
+    permissions:
+      notifications: ${NOTIFICATIONS || 'allow'}
 - openLink: "recipeapp://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8081&__expo_disable_onboarding=1&__expo_disable_auto_launch=1&__expo_disable_fab=1"
 - extendedWaitUntil:
     visible: "Sign in as test user (dev)"
