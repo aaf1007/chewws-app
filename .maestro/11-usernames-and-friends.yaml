@@ -1,0 +1,169 @@
+# Ticket 11: a new user chooses a unique username (a taken one and a bad one are refused), finds
+# someone by username and asks them to be Friends; a request from someone else arrives as a push,
+# whose tap opens Friends with the request, which they accept; the other side accepts theirs; they
+# unfriend one Friend; and they change their username later.
+# Run with `npm run e2e -- .maestro/11-usernames-and-friends.yaml`. The other people are the seeded
+# users sam and alex_cooks (supabase/seed.sql). What they do on their own phones, scripts/e2e-db.mjs
+# does as them (through scripts/net-control.mjs), and the "Friend request" push is delivered with
+# `xcrun simctl push` (.maestro/assets/friend-request.apns): one phone, no network.
+appId: com.ant1007.recipeapp
+env:
+  # The push shows only once the app has asked for notifications and they were allowed; the app
+  # asks after the first saved link (ticket 07), so this flow saves one and answers the prompt.
+  NOTIFICATIONS: unset
+---
+# A new user, as far as the app can tell: the dev user, with no username.
+- runScript: scripts/clear-dev-username.js
+- runFlow: subflows/launch-fresh.yaml
+- tapOn: "Sign in as test user (dev)"
+- extendedWaitUntil:
+    visible: "Choose a username"
+    timeout: 15000
+- assertNotVisible:
+    id: "tab-library"
+
+# sam's is taken, whatever its case; two letters are too few.
+- tapOn:
+    id: "username-field"
+- inputText: "@Sam"
+- tapOn:
+    id: "username-save"
+- extendedWaitUntil:
+    visible: "@sam is taken. Try another."
+    timeout: 10000
+- tapOn:
+    id: "username-field"
+- eraseText: 10
+- inputText: "ab"
+- tapOn:
+    id: "username-save"
+- assertVisible: "Use 3–20 letters, numbers or _"
+- tapOn:
+    id: "username-field"
+- eraseText: 10
+- inputText: "Dev_Cook"
+- tapOn:
+    id: "username-save"
+- extendedWaitUntil:
+    visible:
+      id: "tab-library"
+    timeout: 15000
+
+# A first saved link, so the app asks for notifications (ticket 07), which are allowed.
+- openLink: "recipeapp://save?url=https%3A%2F%2Fwww.tiktok.com%2F%40pastaqueen%2Fvideo%2F7400000000000000001"
+- extendedWaitUntil:
+    visible: "Save Recipe"
+    timeout: 10000
+- tapOn:
+    id: "save-link"
+- extendedWaitUntil:
+    visible: ".*Would Like to Send You Notifications.*"
+    timeout: 10000
+- tapOn: "Allow"
+- assertVisible: "Saved as a Draft"
+- tapOn: "Done"
+
+# Profile shows the username; Friends is empty.
+- tapOn:
+    id: "tab-profile"
+- extendedWaitUntil:
+    visible: "@dev_cook"
+    timeout: 10000
+- tapOn:
+    id: "friends-row"
+- extendedWaitUntil:
+    visible: "No Friends yet"
+    timeout: 10000
+
+# Search by username: too short says so; then alex_cooks is found and asked.
+- tapOn: "Find by username"
+- inputText: "al"
+- assertVisible: "Type at least 3 letters, numbers or _ of a username."
+- inputText: "e"
+- extendedWaitUntil:
+    visible: "Add: @alex_cooks"
+    timeout: 10000
+- tapOn: "Add: @alex_cooks"
+- extendedWaitUntil:
+    visible: "Cancel: @alex_cooks"
+    timeout: 10000
+- assertVisible: "Requested"
+- eraseText: 10
+- extendedWaitUntil:
+    visible:
+      id: "friend-requests-sent"
+    timeout: 10000
+- assertVisible: "Cancel: @alex_cooks"
+- assertNotVisible: "No Friends yet"
+- tapOn: "Back"
+
+# sam asks the dev user while the app is in the background; tapping the push opens Friends, with
+# the request at the top, and accepting makes them Friends.
+- pressKey: home
+- runScript: scripts/friend-request-from-sam.js
+# The banner at the top of the screen (drawn by the system, outside the app's hierarchy).
+- tapOn:
+    point: "50%,10%"
+- extendedWaitUntil:
+    visible: "Accept: @sam"
+    timeout: 15000
+- assertVisible:
+    id: "friend-requests"
+- assertVisible: "Decline: @sam"
+- tapOn: "Accept: @sam"
+- extendedWaitUntil:
+    visible: "Unfriend: @sam"
+    timeout: 10000
+- assertNotVisible: "Accept: @sam"
+
+# alex_cooks accepts the dev user's request on their phone; Friends shows them next time.
+- runScript: scripts/alex-accepts.js
+- tapOn: "Back"
+- tapOn:
+    id: "friends-row"
+- extendedWaitUntil:
+    visible: "Unfriend: @alex_cooks"
+    timeout: 10000
+- assertNotVisible: "Cancel: @alex_cooks"
+- assertVisible: "Unfriend: @sam"
+
+# Unfriending sam: confirmed, then only alex_cooks is left.
+- tapOn: "Unfriend: @sam"
+- extendedWaitUntil:
+    visible: "Unfriend @sam\\?"
+    timeout: 5000
+# The alert's button, not the row's "Unfriend" behind it.
+- tapOn:
+    text: "Unfriend"
+    below: "Unfriend @sam\\?"
+- extendedWaitUntil:
+    notVisible: "Unfriend: @sam"
+    timeout: 10000
+- assertVisible: "Unfriend: @alex_cooks"
+# sam can be asked again.
+- tapOn: "Find by username"
+- inputText: "sam"
+- extendedWaitUntil:
+    visible: "Add: @sam"
+    timeout: 10000
+- tapOn: "Back"
+
+# The username can be changed later; Friends stay.
+- tapOn: "Change username"
+- extendedWaitUntil:
+    visible: "Change username"
+    timeout: 10000
+- tapOn:
+    id: "username-field"
+- eraseText: 20
+- inputText: "chef_dev"
+- tapOn:
+    id: "username-save"
+- extendedWaitUntil:
+    visible: "@chef_dev"
+    timeout: 10000
+- tapOn:
+    id: "friends-row"
+- extendedWaitUntil:
+    visible: "Unfriend: @alex_cooks"
+    timeout: 10000

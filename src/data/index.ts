@@ -10,7 +10,7 @@ export { normaliseIngredientName } from './ingredient-matcher';
 export { searchWords, type SearchWord } from './search-words';
 export { checkTagName, normaliseTagName, tagKey, tidyTagNames, type TagNameCheck } from './tag-name';
 export { validateRecipeInput, type RecipeInputError } from './recipe-input';
-export { USERNAME_RULE, checkUsername, normaliseUsername, type UsernameCheck } from './username';
+export { USERNAME_RULE, checkUsername, normaliseUsername, usernameSearchQuery, type UsernameCheck } from './username';
 export { createSessionStorage, type AuthStorage, type SessionStorage } from './session-storage';
 export {
   DailyLimitError,

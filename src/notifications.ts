@@ -4,10 +4,10 @@ import { router } from 'expo-router';
 import { useEffect } from 'react';
 import { AppState } from 'react-native';
 
-import { parseDraftReadyPush, type SessionState } from '@/data';
+import { parseDraftReadyPush, parseFriendRequestPush, type SessionState } from '@/data';
 import { data } from '@/data/app';
 
-// "Draft ready" shows as a banner even while the app is open.
+// "Draft ready" and "Friend request" show as a banner even while the app is open.
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowBanner: true,
@@ -47,10 +47,11 @@ export async function registerForDraftReady({ ask }: { ask: boolean }): Promise<
 
 /**
  * While someone is signed in: registers the phone again on sign-in and each foreground (if
- * notifications are allowed), and a tapped "Draft ready" opens that Draft, whether the tap
- * started the app or came while it ran.
+ * notifications are allowed). A tapped notification opens its screen once the app can show it
+ * (`canOpen`: signed in, with a username), whether the tap started the app or came while it ran:
+ * "Draft ready" that Draft, "Friend request" Friends, where Requests are listed first.
  */
-export function useDraftReadyNotifications(session: SessionState) {
+export function useNotifications(session: SessionState, { canOpen }: { canOpen: boolean }) {
   const signedIn = session.status === 'signedIn';
 
   useEffect(() => {
@@ -64,10 +65,12 @@ export function useDraftReadyNotifications(session: SessionState) {
 
   const response = Notifications.useLastNotificationResponse();
   useEffect(() => {
-    if (!signedIn || !response) return;
+    if (!canOpen || !response) return;
     Notifications.clearLastNotificationResponse();
     if (response.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return;
-    const id = parseDraftReadyPush(response.notification.request.content.data);
-    if (id) router.push({ pathname: '/draft/[id]', params: { id } });
-  }, [signedIn, response]);
+    const pushed = response.notification.request.content.data;
+    const draftId = parseDraftReadyPush(pushed);
+    if (draftId) router.push({ pathname: '/draft/[id]', params: { id: draftId } });
+    else if (parseFriendRequestPush(pushed)) router.push('/friends');
+  }, [canOpen, response]);
 }

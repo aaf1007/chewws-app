@@ -1,0 +1,7 @@
+{
+  "Simulator Target Bundle": "com.ant1007.recipeapp",
+  "aps": {
+    "alert": { "title": "Friend request", "body": "@sam wants to be Friends" }
+  },
+  "body": { "kind": "friendRequest", "fromUserId": "00000000-0000-4000-8000-000000000000" }
+}
