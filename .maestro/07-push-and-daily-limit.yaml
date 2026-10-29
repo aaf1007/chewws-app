@@ -1,0 +1,90 @@
+# Ticket 07: the app asks for notification permission after the first saved link (not at launch),
+# the Drafts screen lists every unreviewed Draft, tapping "Draft ready" opens that Draft, and the
+# 31st link save in 24 hours is refused with the daily-limit message.
+# Run with `npm run e2e -- .maestro/07-push-and-daily-limit.yaml`. The functions run with
+# DRAFT_FIXTURES=1: canned captions and Claude answers, and a push sender that sends nothing. The
+# notification itself is delivered with `xcrun simctl push` (scripts/push-draft-ready.js), so the
+# flow needs no Expo push token (the simulator usually can't get one) and no network.
+appId: com.ant1007.recipeapp
+env:
+  # This flow wants the system prompt; every other flow has notifications allowed up front.
+  NOTIFICATIONS: unset
+---
+- runFlow: subflows/sign-in-dev.yaml
+# Nothing asked at launch.
+- assertNotVisible: ".*Would Like to Send You Notifications.*"
+
+# The first link saved: then the app asks to send notifications.
+- openLink: "recipeapp://save?url=https%3A%2F%2Fwww.tiktok.com%2F%40pastaqueen%2Fvideo%2F7400000000000000001"
+- extendedWaitUntil:
+    visible: "Save Recipe"
+    timeout: 10000
+- tapOn:
+    id: "save-link"
+- extendedWaitUntil:
+    visible: ".*Would Like to Send You Notifications.*"
+    timeout: 10000
+- tapOn: "Allow"
+- assertVisible: "Saved as a Draft"
+- tapOn: "Done"
+
+# A second link: no prompt this time.
+- openLink: "recipeapp://save?url=https%3A%2F%2Fwww.tiktok.com%2F%40snackdad%2Fvideo%2F7400000000000000002"
+- extendedWaitUntil:
+    visible: "Save Recipe"
+    timeout: 10000
+- tapOn:
+    id: "save-link"
+- assertVisible: "Saved as a Draft"
+- assertNotVisible: ".*Would Like to Send You Notifications.*"
+- tapOn: "View Drafts"
+
+# The Drafts screen lists both unreviewed Drafts.
+- extendedWaitUntil:
+    visible: "Crispy smash burgers, Recipe not in caption, TikTok · Snack Dad"
+    timeout: 15000
+- extendedWaitUntil:
+    visible: "Creamy garlic pasta, Ready to review, TikTok · Pasta Queen"
+    timeout: 15000
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible:
+      id: "drafts-row"
+    timeout: 10000
+
+# "Draft ready" arrives while the app is in the background; tapping it opens that Draft.
+- pressKey: home
+- runScript: scripts/push-draft-ready.js
+# The banner at the top of the screen (drawn by the system, outside the app's hierarchy).
+- tapOn:
+    point: "50%,10%"
+- extendedWaitUntil:
+    visible: "Review Draft"
+    timeout: 15000
+- assertVisible:
+    id: "not-in-caption"
+- assertVisible: "Crispy smash burgers"
+- tapOn: "Back"
+
+# The dev user has now saved 30 links in 24 hours; the next is refused, and no Draft is made.
+- runScript: scripts/fill-daily-limit.js
+- openLink: "recipeapp://save?url=https%3A%2F%2Fwww.youtube.com%2Fshorts%2FLemonPasta1"
+- extendedWaitUntil:
+    visible: "Save Recipe"
+    timeout: 10000
+- tapOn:
+    id: "save-link"
+- extendedWaitUntil:
+    visible:
+      id: "daily-limit"
+    timeout: 10000
+- assertVisible: "You've saved 30 links in the last 24 hours, the daily limit. You can save again at .*"
+- assertNotVisible: "Saved as a Draft"
+- tapOn: "Cancel"
+- tapOn:
+    id: "drafts-row"
+- extendedWaitUntil:
+    visible: "Creamy garlic pasta, Ready to review, TikTok · Pasta Queen"
+    timeout: 10000
+- assertNotVisible: ".*Lemon pasta.*"
+- assertNotVisible: "YouTube video.*"

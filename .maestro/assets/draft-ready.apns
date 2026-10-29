@@ -1,0 +1,7 @@
+{
+  "Simulator Target Bundle": "com.ant1007.recipeapp",
+  "aps": {
+    "alert": { "title": "Draft ready", "body": "Creamy garlic pasta" }
+  },
+  "body": { "kind": "draftReady", "recipeId": "00000000-0000-4000-8000-000000000000" }
+}

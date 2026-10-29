@@ -2,8 +2,9 @@
 // but not run commands, so scripts/e2e.sh runs this while flows run. POST /offline or /online runs
 // scripts/net.sh with that word; POST /expire-session runs scripts/expire-session.mjs (the app's
 // saved access token runs out); POST /add-photo puts .maestro/assets/caption-screenshot.jpg in the
-// booted simulator's photo library (for a flow that picks a screenshot); nothing else. Listens on
-// 127.0.0.1 only.
+// booted simulator's photo library (for a flow that picks a screenshot); POST /push-draft-ready and
+// /fill-daily-limit run scripts/e2e-db.mjs with that word (a "Draft ready" push for the dev user's
+// newest Draft; the dev user at the daily limit); nothing else. Listens on 127.0.0.1 only.
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +16,8 @@ const commands = {
   '/online': [script('./net.sh'), ['online']],
   '/expire-session': [process.execPath, [script('./expire-session.mjs')]],
   '/add-photo': ['xcrun', ['simctl', 'addmedia', 'booted', script('../.maestro/assets/caption-screenshot.jpg')]],
+  '/push-draft-ready': [process.execPath, [script('./e2e-db.mjs'), 'push-draft-ready']],
+  '/fill-daily-limit': [process.execPath, [script('./e2e-db.mjs'), 'fill-daily-limit']],
 };
 
 createServer((req, res) => {

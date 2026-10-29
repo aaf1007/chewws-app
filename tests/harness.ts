@@ -57,10 +57,11 @@ export type HeldRemoval = Omit<HeldLine, 'release'> & {
 };
 
 /** A second database session that runs `sql` in a transaction it doesn't end until told to. */
-async function holdInTransaction(sql: string, params: unknown[]) {
+async function holdInTransaction(sql: string, params: unknown[], before: [string, unknown[]][] = []) {
   const session = new pg.Client({ connectionString: inject('supabase').dbUrl });
   await session.connect();
   await session.query('begin');
+  for (const [first, firstParams] of before) await session.query(first, firstParams);
   await session.query(sql, params);
   const { rows } = await session.query<{ pid: number }>('select pg_backend_pid() as pid');
   const pid = rows[0].pid;
@@ -112,6 +113,24 @@ export async function holdShoppingListRemoval(itemId: ShoppingListItemId): Promi
   return { waitForWaiting, commit };
 }
 
+/**
+ * For race tests only: a second database session that saves a link as the user, through
+ * save_from_link as the app calls it, and doesn't commit yet. Until `commit()`, another save of
+ * theirs that waits for it shows up in `waitForWaiting`; one that doesn't wait doesn't.
+ */
+export async function holdLinkSave(user: Pick<TestUser, 'userId'>, url: string): Promise<HeldRemoval> {
+  const claims = JSON.stringify({ sub: user.userId, role: 'authenticated' });
+  const { waitForWaiting, commit } = await holdInTransaction(
+    `select public.save_from_link(gen_random_uuid(), $1, 'tiktok')`,
+    [url],
+    [
+      ["select set_config('request.jwt.claims', $1, true)", [claims]],
+      ['set local role authenticated', []],
+    ],
+  );
+  return { waitForWaiting, commit };
+}
+
 /** Runs one statement on the database as its owner, for the few things no action can reach. */
 async function asDatabaseOwner<T extends pg.QueryResultRow>(sql: string, params: unknown[]) {
   const db = new pg.Client({ connectionString: inject('supabase').dbUrl });
@@ -130,6 +149,25 @@ export async function countLinkSaves(user: Pick<TestUser, 'userId'>): Promise<nu
     [user.userId],
   );
   return rows[0].count;
+}
+
+/**
+ * Link saves the user made at these times, as if they had saved links then (ticket 07's daily
+ * limit counts them), with no Draft for them: quicker than saving each one.
+ */
+export async function seedLinkSaves(user: Pick<TestUser, 'userId'>, times: Date[]): Promise<void> {
+  await asDatabaseOwner(
+    'insert into public.link_saves (user_id, saved_at) select $1, unnest($2::timestamptz[])',
+    [user.userId, times.map((t) => t.toISOString())],
+  );
+}
+
+/** Every link save the user has made happened `hours` earlier than it did, as if that time had passed. */
+export async function backdateLinkSaves(user: Pick<TestUser, 'userId'>, hours: number): Promise<void> {
+  await asDatabaseOwner(
+    'update public.link_saves set saved_at = saved_at - make_interval(hours => $2) where user_id = $1',
+    [user.userId, hours],
+  );
 }
 
 /** The Draft's current build was claimed `minutes` ago, as if it had been running that long. */

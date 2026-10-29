@@ -12,8 +12,10 @@ export { checkTagName, normaliseTagName, tagKey, tidyTagNames, type TagNameCheck
 export { validateRecipeInput, type RecipeInputError } from './recipe-input';
 export { createSessionStorage, type AuthStorage, type SessionStorage } from './session-storage';
 export {
+  DailyLimitError,
   DataError,
   couldNotReadSource,
+  parseDraftReadyPush,
   parseRecipeId,
   parseShoppingListItemId,
   parseTagId,
