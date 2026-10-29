@@ -1,8 +1,9 @@
-// POST /functions/v1/notify {kind: 'friendRequest', toUserId}: sends the push the caller's action
-// earns someone else (decisions 11). A thin Deno entry (docs/agents/verify.md): it checks the
-// caller's session, answers 202 at once, and runs notify (supabase/functions/_shared/notifier.ts)
-// with a service-role rpc and Expo's push service; or, with DRAFT_FIXTURES=1 on a local stack only,
-// with a push sender that only logs. Whether a push is due is the database's call.
+// POST /functions/v1/notify {kind: 'friendRequest', toUserId} or {kind: 'cookPlanInvite', cookPlanId,
+// toUserId}: sends the push the caller's action earns someone else (decisions 11, 14). A thin Deno
+// entry (docs/agents/verify.md): it checks the caller's session, answers 202 at once, and runs
+// notify (supabase/functions/_shared/notifier.ts) with a service-role rpc and Expo's push service;
+// or, with DRAFT_FIXTURES=1 on a local stack only, with a push sender that only logs. Whether a push
+// is due is the database's call.
 
 import { createClient } from '@supabase/supabase-js';
 
@@ -54,7 +55,7 @@ Deno.serve(async (request) => {
     body = null;
   }
   const wanted = parseNotifyRequest(body);
-  if (!wanted) return json(400, { error: 'Send {"kind": "friendRequest", "toUserId": "…"}.' });
+  if (!wanted) return json(400, { error: 'Send {"kind": "friendRequest" or "cookPlanInvite", "toUserId": "…"}.' });
 
   // Who is asking, from their session; the anon key alone is nobody.
   const asCaller = createClient(supabaseUrl, anonKey, {

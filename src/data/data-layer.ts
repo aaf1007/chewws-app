@@ -35,13 +35,21 @@ import { checkUsername, usernameSearchQuery } from './username';
 import {
   DailyLimitError,
   DataError,
+  parseCookPlanId,
   parseIngredientId,
   parseRecipeId,
   parseShoppingListId,
   parseShoppingListItemId,
   parseTagId,
   parseUserId,
+  type AddRecipeToCookPlanResult,
   type CheckState,
+  type CookPlan,
+  type CookPlanId,
+  type CookPlanMember,
+  type CookPlanRecipe,
+  type CopyRecipeResult,
+  type CreateCookPlanResult,
   type DraftBuild,
   type DraftBuildFailure,
   type DraftSummary,
@@ -54,6 +62,8 @@ import {
   type IdTokenProvider,
   type Ingredient,
   type IngredientId,
+  type InviteToCookPlanResult,
+  type LeaveCookPlanResult,
   type LeaveSharedShoppingListResult,
   type ListSync,
   type NotSavedListChange,
@@ -62,9 +72,12 @@ import {
   type Profile,
   type Recipe,
   type RecipeId,
+  type RecipeCookPlan,
   type RecipeInput,
   type RecipeSummary,
+  type RemoveRecipeFromCookPlanResult,
   type SaveFromLinkResult,
+  type SetCookPlanDateResult,
   type CaptionInput,
   type Relationship,
   type SessionState,
@@ -180,6 +193,29 @@ function toSourceVideo(row: SourceVideoColumns | null, screenshots: ScreenshotUr
     ...(screenshotUrl ? { screenshotUrl } : {}),
   };
 }
+
+/** A Source Video without the owner's screenshot: what another user sees (decisions 14). */
+function withoutScreenshot({ screenshotUrl: _screenshot, ...video }: SourceVideo): SourceVideo {
+  return video;
+}
+
+/**
+ * A Cook Plan's day as typed: a calendar date `YYYY-MM-DD` that exists (no time, no zone). Past
+ * days are fine (decisions 14). Anything else is refused.
+ */
+function toCookOn(day: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day.trim());
+  const date = match ? new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))) : null;
+  if (!match || !date || date.toISOString().slice(0, 10) !== match[0]) {
+    throw new DataError('invalid_date', 'Pick a day for the Cook Plan, or none.');
+  }
+  return match[0];
+}
+
+type CookPlanRow = Pick<
+  Database['public']['Tables']['cook_plans']['Row'],
+  'id' | 'creator_id' | 'cook_on' | 'status' | 'cooked_at' | 'cooked_by' | 'created_at'
+>;
 
 /** A caption as pasted: trimmed, null when blank. Too long a caption is refused. */
 function toPastedCaption(caption: string | null | undefined): string | null {
@@ -1006,6 +1042,168 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     return requests;
   }
 
+  /**
+   * Starts a Cook Plan on `cookOn` (a day, `YYYY-MM-DD`; null for none) with the signed-in user as
+   * its only member, then invites each of `friends` (`inviteToCookPlan`; only Friends can be).
+   */
+  async function createCookPlan(input: { cookOn: string | null; friends: readonly UserId[] }): Promise<CreateCookPlanResult> {
+    const cookOn = input.cookOn === null ? null : toCookOn(input.cookOn);
+    const { data, error } = await client.rpc('create_cook_plan', cookOn === null ? {} : { cook_on: cookOn });
+    if (error) fail(error);
+    const planId = parseCookPlanId(data);
+    const invites: CreateCookPlanResult['invites'] = [];
+    for (const friendId of new Set(input.friends)) {
+      invites.push({ friendId, status: (await inviteToCookPlan(planId, friendId)).status });
+    }
+    return { planId, invites };
+  }
+
+  /**
+   * Invites one of the signed-in user's Friends into an active Cook Plan they're in (at most 8
+   * members). The Friend is a member at once, and gets a "Cook Plan invite" push (once per plan);
+   * a push that fails never fails the invite.
+   */
+  async function inviteToCookPlan(planId: CookPlanId, friendId: UserId): Promise<InviteToCookPlanResult> {
+    const { data, error } = await client.rpc('invite_to_cook_plan', { plan_id: planId, friend_id: friendId });
+    if (error) fail(error);
+    const status = statusOf('invite_to_cook_plan', data, [
+      'invited',
+      'notFriends',
+      'alreadyMember',
+      'full',
+      'notActive',
+      'notFound',
+    ]);
+    if (status === 'invited') await kickNotification({ kind: 'cookPlanInvite', cookPlanId: planId, toUserId: friendId });
+    return { status };
+  }
+
+  /** Sets an active Cook Plan's day (`YYYY-MM-DD`, past days too), or clears it (null). Nobody is told. */
+  async function setCookPlanDate(planId: CookPlanId, cookOn: string | null): Promise<SetCookPlanDateResult> {
+    const day = cookOn === null ? null : toCookOn(cookOn);
+    const { data, error } = await client.rpc('set_cook_plan_date', day === null ? { plan_id: planId } : { plan_id: planId, cook_on: day });
+    if (error) fail(error);
+    return { status: statusOf('set_cook_plan_date', data, ['set', 'notActive', 'notFound']) };
+  }
+
+  /** Leaves a Cook Plan. The plan goes with its last member. */
+  async function leaveCookPlan(planId: CookPlanId): Promise<LeaveCookPlanResult> {
+    const { data, error } = await client.rpc('leave_cook_plan', { plan_id: planId });
+    if (error) fail(error);
+    const status = statusOf('leave_cook_plan', data, ['left', 'notMember']);
+    if (status === 'notMember') return { status };
+    const planDeleted = fieldOf(data, 'planDeleted');
+    if (typeof planDeleted !== 'boolean') throw new DataError('unknown', 'leave_cook_plan answered oddly.');
+    return { status, planDeleted };
+  }
+
+  /** Adds one of the signed-in user's reviewed Recipes to an active Cook Plan they're in (at most 10). */
+  async function addRecipeToCookPlan(planId: CookPlanId, recipeId: RecipeId): Promise<AddRecipeToCookPlanResult> {
+    const { data, error } = await client.rpc('add_recipe_to_cook_plan', { plan_id: planId, recipe_id: recipeId });
+    if (error) fail(error);
+    return {
+      status: statusOf('add_recipe_to_cook_plan', data, [
+        'added',
+        'alreadyAdded',
+        'full',
+        'noSuchRecipe',
+        'notActive',
+        'notFound',
+      ]),
+    };
+  }
+
+  /** Removes any Recipe from an active Cook Plan the user is in, whoever added it (no voting). */
+  async function removeRecipeFromCookPlan(planId: CookPlanId, recipeId: RecipeId): Promise<RemoveRecipeFromCookPlanResult> {
+    const { data, error } = await client.rpc('remove_recipe_from_cook_plan', { plan_id: planId, recipe_id: recipeId });
+    if (error) fail(error);
+    return { status: statusOf('remove_recipe_from_cook_plan', data, ['removed', 'notInPlan', 'notActive', 'notFound']) };
+  }
+
+  /** Everyone in these Cook Plans, and their Recipes, by plan. */
+  async function cookPlanContents(planIds: CookPlanId[]) {
+    const [people, recipes] = await Promise.all([
+      client.from('cook_plan_people').select('*').in('plan_id', planIds),
+      client.from('cook_plan_recipe_list').select('*').in('plan_id', planIds),
+    ]);
+    if (people.error) fail(people.error);
+    if (recipes.error) fail(recipes.error);
+    const members = new Map<string, CookPlanMember[]>();
+    for (const row of people.data) {
+      if (row.plan_id === null || row.user_id === null || row.joined_at === null) continue;
+      const member: CookPlanMember = {
+        id: parseUserId(row.user_id),
+        username: row.username,
+        invitedBy: row.invited_by === null ? null : parseUserId(row.invited_by),
+        joinedAt: row.joined_at,
+      };
+      members.set(row.plan_id, [...(members.get(row.plan_id) ?? []), member]);
+    }
+    const planRecipes = new Map<string, CookPlanRecipe[]>();
+    for (const row of recipes.data) {
+      if (row.plan_id === null || row.recipe_id === null || row.owner_id === null) continue;
+      if (row.title === null || row.added_at === null) continue;
+      const recipe: CookPlanRecipe = {
+        id: parseRecipeId(row.recipe_id),
+        title: row.title,
+        owner: { id: parseUserId(row.owner_id), username: row.owner_username },
+        addedBy: row.added_by === null ? null : parseUserId(row.added_by),
+        addedAt: row.added_at,
+      };
+      planRecipes.set(row.plan_id, [...(planRecipes.get(row.plan_id) ?? []), recipe]);
+    }
+    const byJoined = (a: CookPlanMember, b: CookPlanMember) => compareText(a.joinedAt, b.joinedAt) || compareText(a.id, b.id);
+    const byAdded = (a: CookPlanRecipe, b: CookPlanRecipe) => compareText(a.addedAt, b.addedAt) || compareText(a.id, b.id);
+    return (planId: CookPlanId) => ({
+      members: [...(members.get(planId) ?? [])].sort(byJoined),
+      recipes: [...(planRecipes.get(planId) ?? [])].sort(byAdded),
+    });
+  }
+
+  function toCookPlan(row: CookPlanRow, contents: Pick<CookPlan, 'members' | 'recipes'>): CookPlan {
+    const fields = {
+      id: parseCookPlanId(row.id),
+      creatorId: row.creator_id === null ? null : parseUserId(row.creator_id),
+      cookOn: row.cook_on,
+      createdAt: row.created_at,
+      ...contents,
+    };
+    if (row.status === 'cooked' && row.cooked_at !== null) {
+      return { ...fields, status: 'cooked', cookedAt: row.cooked_at, cookedBy: row.cooked_by === null ? null : parseUserId(row.cooked_by) };
+    }
+    return { ...fields, status: 'active' };
+  }
+
+  /** The Cook Plans the signed-in user is in, newest first, with everyone in them and their Recipes. */
+  async function listCookPlans(): Promise<CookPlan[]> {
+    const { data, error } = await client.rpc('list_cook_plans');
+    if (error) fail(error);
+    const ids = data.map((row) => parseCookPlanId(row.id));
+    if (ids.length === 0) return [];
+    const contentsOf = await cookPlanContents(ids);
+    return data.map((row) => toCookPlan(row, contentsOf(parseCookPlanId(row.id))));
+  }
+
+  /** One Cook Plan the signed-in user is in, or null (not in it, or it's gone). */
+  async function getCookPlan(planId: CookPlanId): Promise<CookPlan | null> {
+    const [plan, contentsOf] = await Promise.all([
+      client.from('cook_plans').select('id, creator_id, cook_on, status, cooked_at, cooked_by, created_at').eq('id', planId).maybeSingle(),
+      cookPlanContents([planId]),
+    ]);
+    if (plan.error) fail(plan.error);
+    return plan.data ? toCookPlan(plan.data, contentsOf(planId)) : null;
+  }
+
+  /**
+   * The active Cook Plans one of the user's Recipes is in, with the others in each, so deleting it
+   * can warn first ("It'll leave your Cook Plan with @sam").
+   */
+  async function recipeCookPlans(recipeId: RecipeId): Promise<RecipeCookPlan[]> {
+    const { data, error } = await client.rpc('recipe_cook_plans', { recipe_id: recipeId });
+    if (error) fail(error);
+    return data.map((row) => ({ id: parseCookPlanId(row.plan_id), cookOn: row.cook_on, withUsernames: row.with_usernames }));
+  }
+
   async function createRecipe(input: RecipeInput): Promise<RecipeId> {
     const { data, error } = await client.rpc('create_recipe', toRecipeArgs(input));
     if (error) fail(error);
@@ -1132,12 +1330,87 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       await waitAtMost(REFRESH_WAIT_MS, requestSourceRefresh(id));
       row = await readRecipe(id);
     }
-    if (!row) return null;
-    const [screenshots, myTags] = await Promise.all([
+    if (!row) return getSomeoneElsesRecipe(id);
+    const [screenshots, myTags, savedFrom] = await Promise.all([
       screenshotUrlsOf([row.source_video]),
       row.status === 'draft' && row.suggested_tags.length > 0 ? listTags() : [],
+      row.copied_from_user_id === null ? null : savedFromOf(parseUserId(row.copied_from_user_id)),
     ]);
-    return toRecipe(row, now(), screenshots, myTags);
+    const recipe = toRecipe(row, now(), screenshots, myTags);
+    return recipe.status === 'reviewed' && savedFrom ? { ...recipe, savedFrom } : recipe;
+  }
+
+  /** Whose Recipe a copy was saved from, by username while the user may see their Profile. */
+  async function savedFromOf(userId: UserId): Promise<{ username: string | null }> {
+    const profile = await getProfile(userId);
+    return { username: profile?.username ?? null };
+  }
+
+  /**
+   * Another user's reviewed Recipe the signed-in user may read (one in a Cook Plan they're in,
+   * decisions 14): its title, lines, steps and Source Video, never its Tags, Want to Cook or
+   * screenshot (an Instagram Reel shows as the plain card). Null when they may not.
+   */
+  async function getSomeoneElsesRecipe(id: RecipeId): Promise<Recipe | null> {
+    const me = await currentUserId();
+    const [recipe, lines, video, copies] = await Promise.all([
+      client.rpc('shared_recipe', { recipe_id: id }).maybeSingle(),
+      client
+        .from('recipe_lines')
+        .select('position, original_text, amount_text, ingredient:ingredients(id, name)')
+        .eq('recipe_id', id),
+      client.from('source_videos').select(SOURCE_VIDEO_COLUMNS).eq('recipe_id', id).maybeSingle(),
+      client
+        .from('recipes')
+        .select('id')
+        .eq('owner_id', me)
+        .eq('copied_from_recipe_id', id)
+        .order('created_at', { ascending: false })
+        .order('id')
+        .limit(1),
+    ]);
+    for (const read of [recipe, lines, video, copies]) if (read.error) fail(read.error);
+    const row = recipe.data;
+    if (!row || !lines.data) return null;
+    const sourceVideo = toSourceVideo(video.data);
+    const copy = copies.data?.[0];
+    return {
+      status: 'someoneElses',
+      id: parseRecipeId(row.id),
+      ownerId: parseUserId(row.owner_id),
+      owner: { id: parseUserId(row.owner_id), username: row.owner_username ?? null },
+      title: row.title,
+      recipeFound: row.recipe_found,
+      lines: [...lines.data]
+        .sort((a, b) => a.position - b.position)
+        .map((line) => ({
+          originalText: line.original_text,
+          amountText: line.amount_text,
+          ingredient: { id: parseIngredientId(line.ingredient.id), name: line.ingredient.name },
+        })),
+      steps: row.steps,
+      // The screenshot is the owner's own image; members see the plain card (decisions 14).
+      ...(sourceVideo ? { sourceVideo: withoutScreenshot(sourceVideo) } : {}),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      yourCopy: copy ? parseRecipeId(copy.id) : null,
+    };
+  }
+
+  /**
+   * Saves the user's own copy of a Recipe they may read (one in their Cook Plan): a reviewed
+   * Recipe of theirs with the same title, lines and steps, and its Source Video, but none of its
+   * Tags, Want to Cook, Cook Logs or screenshot (ADR-0002). The copy is independent: changing or
+   * deleting either never touches the other. Copying again makes another copy.
+   */
+  async function copyRecipe(recipeId: RecipeId): Promise<CopyRecipeResult> {
+    const { data, error } = await client.rpc('copy_recipe', { recipe_id: recipeId });
+    if (error) fail(error);
+    const status = statusOf('copy_recipe', data, ['copied', 'notFound']);
+    if (status === 'notFound') return { status };
+    const copied = fieldOf(data, 'recipeId');
+    if (typeof copied !== 'string') throw new DataError('unknown', 'copy_recipe answered oddly.');
+    return { status, recipeId: parseRecipeId(copied) };
   }
 
   /**
@@ -2450,6 +2723,16 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     editRecipe,
     deleteRecipe,
     getRecipe,
+    copyRecipe,
+    createCookPlan,
+    inviteToCookPlan,
+    setCookPlanDate,
+    leaveCookPlan,
+    addRecipeToCookPlan,
+    removeRecipeFromCookPlan,
+    listCookPlans,
+    getCookPlan,
+    recipeCookPlans,
     refreshSourceVideo,
     listMyRecipes,
     listWantToCook,
