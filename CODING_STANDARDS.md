@@ -22,6 +22,7 @@ Run `npm run verify` (typecheck, lint, database types freshness, tests) before e
 - One migration per ticket: `supabase migration new <ticket-slug>`. Don't edit a migration from an earlier ticket; add a new one.
 - After changing the migration: `npm run db:reset`, then `npm run db:types`, and commit `src/data/database.types.ts`. [tool] `verify` fails if the types are stale.
 - Functions that need `security definer` set `search_path = ''` and qualify every name.
+- An RPC's `update` or `delete` that changes no rows never answers success. Check the row count (`found`, `get diagnostics`, or `returning`) and answer the real state (`notFound`, `gone`, `notShared`…), as `respond_to_friend_request` does.
 
 ## Tests (`tests/`)
 
@@ -31,6 +32,7 @@ Run `npm run verify` (typecheck, lint, database types freshness, tests) before e
 - Assert literal expected values (`toEqual([{ name: 'garlic', amounts: [...] }])`), not values recomputed with the code under test.
 - Assert what each user can see afterwards, not table contents.
 - Each ticket's acceptance criteria that say "data-layer test" map to at least one named test.
+- A concurrency test forces the interleaving it claims to test. A second database session holds the lock or row in an open transaction (`holdCallAs`, `holdShoppingListRemoval` in `tests/harness.ts`) and the test waits until the other call is blocked on it (`waitForWaiting`), or a fake holds one side at a named step (`holdNextRequest`). Two calls fired together with `Promise.all` and nothing held prove nothing. Before committing, remove the lock or guard the test is about and run it: it must fail every time, not only sometimes.
 - `vi.mock` is only for native modules that can't run in Node (as in `tests/apple-sign-in.test.ts`) and for the source reader and Claude call. Never mock the data layer in a data-layer test.
 
 ## Naming

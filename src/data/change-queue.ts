@@ -307,6 +307,8 @@ export function createChangeQueue<C>(options: {
   storage: KeyValueStorage;
   key: string;
   parseChange: (raw: unknown) => C | null;
+  /** How a change is saved, for `parseChange` to read back. As it is, by default. */
+  encodeChange?: (change: C) => unknown;
   /**
    * Resolves once `parseChange` can read the changes saved, if it needs something read first (to
    * fill in what an older version didn't save). They're read back after it.
@@ -328,6 +330,7 @@ export function createChangeQueue<C>(options: {
   newId: () => string;
 }): ChangeQueue<C> {
   const { storage, key, parseChange, parseAfter, send, nameOf, onDelivered, afterSync, now, newId } = options;
+  const encodeChange = options.encodeChange ?? ((change: C) => change);
   let state: QueueState<C> = { status: 'idle', queue: [], gaveUp: [] };
   let lastMadeAt = 0;
   const listeners = new Set<(state: QueueState<C>) => void>();
@@ -350,8 +353,8 @@ export function createChangeQueue<C>(options: {
   function save(): Promise<void> {
     if (discardedWith) return saving;
     const snapshot = JSON.stringify({
-      queue: state.queue,
-      gaveUp: state.gaveUp,
+      queue: state.queue.map((c) => ({ ...c, change: encodeChange(c.change) })),
+      gaveUp: state.gaveUp.map((c) => ({ ...c, change: encodeChange(c.change) })),
     });
     saving = saving.then(() => storage.setItem(key, snapshot)).catch(() => {});
     return saving;
