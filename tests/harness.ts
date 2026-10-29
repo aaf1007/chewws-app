@@ -804,3 +804,89 @@ export async function recipePartReadPolicies(): Promise<string[]> {
   );
   return rows.map((r) => r.name);
 }
+
+/** For race tests only: `user` claiming a Cook Plan line on another phone, made at `changedAt`, not committed yet. */
+export const holdCookPlanClaim = (user: Someone, planId: string, itemId: string, changedAt: Date) =>
+  holdCallAs(user, 'select public.claim_cook_plan_item($1, $2, $3)', [planId, itemId, changedAt.toISOString()]);
+
+/** For race tests only: `user` checking a Cook Plan line off on another phone, not committed yet. */
+export const holdCookPlanCheckOff = (user: Someone, planId: string, itemId: string) =>
+  holdCallAs(user, 'select public.cook_plan_check_off($1, $2)', [planId, itemId]);
+
+/**
+ * For race tests only: `user` adding their Recipe to a Cook Plan on another phone, with the list
+ * engine's `lines` for it (as the app sends them), not committed yet.
+ */
+export const holdCookPlanRecipeAddWithLines = (
+  user: Someone,
+  planId: string,
+  recipeId: string,
+  lines: { ingredientId: string; amountTexts: string[] }[],
+) =>
+  holdCallAs(user, 'select public.add_recipe_to_cook_plan($1, $2, $3::jsonb)', [
+    planId,
+    recipeId,
+    JSON.stringify(lines.map((l) => ({ ingredient_id: l.ingredientId, amount_texts: l.amountTexts }))),
+  ]);
+
+/** The plan is cooked, as "We cooked it" (ticket 18) will mark it; until then no action can. */
+export async function markCookPlanCookedInDatabase(planId: string, by: Someone): Promise<void> {
+  await asDatabaseOwner(`update public.cook_plans set status = 'cooked', cooked_at = now(), cooked_by = $2 where id = $1`, [
+    planId,
+    by.userId,
+  ]);
+}
+
+/**
+ * The functions allowed to read or write a Cook Plan's lines or amounts without asking the
+ * membership rule themselves: the triggers that run inside a member's change (the RPC that fired
+ * them asked it), which announce changes or apply the deletion rule (decisions 15).
+ */
+const COOK_PLAN_LIST_TRIGGERS = ['private.remove_cook_plan_recipe_lines'];
+
+/**
+ * The database functions (public and private) that read or write Cook Plan lines, amounts or who
+ * has them without asking private.is_cook_plan_member (decisions 15: every read and write asks
+ * it), other than the triggers above.
+ */
+export async function cookPlanListFunctionsNotAskingMembership(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private')
+       and not (n.nspname || '.' || p.proname = any ($2))
+       and p.prosrc ~* $1
+       and p.prosrc !~* 'private\\.is_cook_plan_member\\('
+     order by 1`,
+    ['(from|join|into|update)\\s+(public\\.)?cook_plan_(items|amounts)\\M', COOK_PLAN_LIST_TRIGGERS],
+  );
+  return rows.map((r) => r.name);
+}
+
+/**
+ * The functions that read members' Pantries or Staples (decisions 08: "counts as present" is
+ * private.ingredients_had, and nothing else reads them for it). Writing one's own is not reading.
+ */
+export async function functionsReadingPantries(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private') and p.prosrc ~* $1
+     order by 1`,
+    ['(from|join)\\s+(public\\.)?(pantry_entries|staples)\\M'],
+  );
+  return rows.map((r) => r.name);
+}
+
+/** Every row-level policy on Cook Plan lines, amounts and Realtime messages, as `table cmd: using` (on one line). */
+export async function cookPlanListPolicies(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select schemaname || '.' || tablename || ' ' || cmd || ': ' || regexp_replace(coalesce(qual, '') || coalesce(' check ' || with_check, ''), '\\s+', ' ', 'g') as name
+     from pg_policies
+     where (schemaname = 'public' and tablename in ('cook_plan_items', 'cook_plan_amounts'))
+        or (schemaname = 'realtime' and tablename = 'messages')
+     order by 1`,
+    [],
+  );
+  return rows.map((r) => r.name);
+}

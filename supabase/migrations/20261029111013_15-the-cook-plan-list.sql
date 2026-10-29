@@ -95,13 +95,12 @@ begin
   if me is null then
     raise exception 'not signed in' using errcode = '42501';
   end if;
-  -- The Recipe first (if it's the caller's), then the plan: deleting the Recipe takes them in that
-  -- order too (its cook_plan_recipes rows' trigger locks the plan), so the two can't deadlock.
+  -- Share-locks the Recipe, if it's the caller's reviewed one, so a delete of it waits for this add
+  -- (and then takes the Recipe out of the plan again), or finishes first and it's not found.
   select r.title into recipe_title from public.recipes r
   where r.id = add_recipe_to_cook_plan.recipe_id and r.owner_id = me and r.status = 'reviewed'
   for key share;
-  -- One change to a plan's Recipes and lines at a time, so two adds can't both take its last place,
-  -- and an add and a removal sharing an Ingredient see each other's lines.
+  -- One change to a plan's Recipes at a time, so two adds can't both take its last place.
   select p.status into plan_status from public.cook_plans p where p.id = add_recipe_to_cook_plan.plan_id for update;
   if not found or not private.is_cook_plan_member(add_recipe_to_cook_plan.plan_id, me) then
     return jsonb_build_object('status', 'notFound');
@@ -144,7 +143,8 @@ begin
   end if;
 
   -- Makes each missing line and locks every line it joins (in Ingredient order), so its amounts go
-  -- onto lines nobody else can delete before this commits.
+  -- onto lines nobody else can delete before this commits: a Recipe leaving meanwhile (the trigger
+  -- below) waits for this, then finds the line needed.
   with needed as (
     insert into public.cook_plan_items as i (plan_id, ingredient_id)
     select add_recipe_to_cook_plan.plan_id, (line ->> 'ingredient_id')::uuid
@@ -183,10 +183,9 @@ as $$
 declare
   touched uuid[];
 begin
-  -- One change to a plan's Recipes and lines at a time, as adding takes it: an add that needs one of
-  -- these Ingredients waits for this, or finishes first and its amount keeps the line.
-  perform 1 from public.cook_plans p where p.id = old.plan_id for update;
-  -- Its lines, locked in id order, so a Claim or check-off made meanwhile is seen before deciding.
+  -- Its lines, locked in id order, before deciding what goes: a Claim, check-off or another
+  -- Recipe's amount (an add) on one of them, made meanwhile, waits for this, or finishes first and
+  -- is seen by the statements below, so the line stays.
   select array_agg(i.id order by i.id) into touched from (
     select i.id from public.cook_plan_items i
     where i.plan_id = old.plan_id
