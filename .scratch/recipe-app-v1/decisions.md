@@ -181,6 +181,9 @@ Defaults chosen where the tickets leave things open. Override any by editing thi
   - `recipe_title` is copied from the Recipe by a trigger as each amount is written, so `add_recipe_to_shopping_list` is unchanged.
   - Realtime may keep a private channel's authorization from when the client joined, so a subscription made before unfriending might still hear "changed" until it rejoins (not tested). The message carries nothing, and the read it prompts finds the list gone. A new subscription is refused at once (tested).
   - The phone shows its copy of a Friend's list at once, as it does the user's own, until a read can check it. Once a read finds it unshared, the copy and its waiting changes go from the phone for good.
+  - **Before going public:**
+    - A Realtime subscription already joined keeps hearing the empty "changed" pings after an unfriend, until it rejoins or its access token refreshes. They carry nothing, and the read each prompts is refused.
+    - `shopping_list_people` shows each Friend on a shared list the usernames of the others on it, even ones who aren't their Friends. Accepted, as usernames can be found by search anyway. No other Profile field is shown.
 
 ## 14 Start a Cook Plan
 
