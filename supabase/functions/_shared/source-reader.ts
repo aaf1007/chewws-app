@@ -4,7 +4,7 @@
 // canned captions and pages (spec, Testing Decisions). Only official platform routes are used
 // (ADR-0004): TikTok oEmbed, the YouTube Data API, and a recipe site's own page.
 
-import { detectSource, isPlatformLink, linksIn, youtubeVideoId, type Platform } from './detect-source.ts';
+import { detectSource, instagramShortcode, isPlatformLink, linksIn, youtubeVideoId, type Platform } from './detect-source.ts';
 import { pageAdapter, type PageInfo, type SiteRecipe } from './page-reader.ts';
 import type { SafeFetch } from './safe-fetch.ts';
 import { SourceError } from './source-error.ts';
@@ -12,12 +12,23 @@ import { SourceError } from './source-error.ts';
 export { SourceError, type SourceFailure } from './source-error.ts';
 export type { PageInfo, SiteRecipe } from './page-reader.ts';
 
-/** What the user shared: the link, and (tickets 04, 05) any text or screenshot with it. */
+/**
+ * What the user shared: the link, and what they added to it (ticket 05): a caption they pasted
+ * (`text`) and a screenshot they uploaded (its path in the recipe-images bucket).
+ */
 export type SharedLink = { url: string; text: string | null; screenshotPath: string | null };
+
+/** Whether the user added a caption or a screenshot to read the recipe from. */
+export function userAddedCaption(shared: Pick<SharedLink, 'text' | 'screenshotPath'>): boolean {
+  return Boolean(shared.text?.trim()) || shared.screenshotPath !== null;
+}
 
 export type SourceMaterial = {
   platform: Platform;
-  /** `video`: a TikTok or YouTube video. `recipeSite`: a page with a schema.org Recipe. `page`: any other page. */
+  /**
+   * `video`: a TikTok or YouTube video, or an Instagram Reel (read only from what the user added).
+   * `recipeSite`: a page with a schema.org Recipe. `page`: any other page.
+   */
   kind: 'video' | 'recipeSite' | 'page';
   originalUrl: string;
   externalId: string | null;
@@ -114,26 +125,80 @@ export function createSourceReader(adapters: SourceAdapters): SourceReader {
     };
   }
 
+  /**
+   * Reads a video from its platform. A TikTok with no caption can't be read (its oEmbed lost its
+   * title in 2026), unless the user added one. When they did, the platform is still asked (its
+   * creator and thumbnail are welcome), but nothing it says stops the build: the user's caption is
+   * what's read.
+   */
+  async function videoOf(
+    platform: 'tiktok' | 'youtube',
+    url: string,
+    shared: SharedLink,
+    signal: AbortSignal,
+  ): Promise<VideoInfo> {
+    const fromUser = userAddedCaption(shared);
+    try {
+      let video: VideoInfo;
+      if (platform === 'tiktok') {
+        video = await withOneRetry(() => adapters.tiktok(url, signal), signal);
+      } else {
+        const id = youtubeVideoId(url);
+        if (id === null) throw new SourceError('unavailable', `Not a YouTube video: ${url}`);
+        video = await withOneRetry(() => adapters.youtube(id, signal), signal);
+      }
+      // TikTok's empty oEmbed says nothing about the caption: the app couldn't read it. YouTube's
+      // API did read the description, and an empty one is a video with no recipe in it.
+      if (platform === 'tiktok' && video.caption === null && !fromUser) {
+        throw new SourceError('noCaption', `TikTok gave no caption for ${url}.`);
+      }
+      return video;
+    } catch (e) {
+      if (!fromUser || !(e instanceof SourceError) || signal.aborted) throw e;
+      const externalId = platform === 'tiktok' ? (/\/video\/(\d+)/u.exec(url)?.[1] ?? null) : youtubeVideoId(url);
+      return { externalId, caption: null, creatorName: null, creatorUrl: null, thumbnailUrl: null };
+    }
+  }
+
   return {
     async read(shared, signal) {
       const detected = detectSource(shared.url);
       if (detected === null) throw new SourceError('unavailable', `Not a link: ${shared.url}`);
       const { platform, url } = detected;
-      if (platform === 'tiktok') {
-        const video = await withOneRetry(() => adapters.tiktok(url, signal), signal);
-        return readVideo(platform, url, video, shared, signal);
-      }
-      if (platform === 'youtube') {
-        const id = youtubeVideoId(url);
-        if (id === null) throw new SourceError('unavailable', `Not a YouTube video: ${url}`);
-        const video = await withOneRetry(() => adapters.youtube(id, signal), signal);
+      if (platform === 'tiktok' || platform === 'youtube') {
+        const video = await videoOf(platform, url, shared, signal);
         return readVideo(platform, url, video, shared, signal);
       }
       if (platform === 'instagram') {
-        throw new SourceError('unavailable', 'Instagram links are read from a screenshot or caption (ticket 05).');
+        // Never fetched (ADR-0004): a Reel is read only from what the user added, and any recipe
+        // site their caption links to.
+        const site = await recipeSiteIn([shared.text], signal);
+        return {
+          platform,
+          kind: 'video',
+          originalUrl: url,
+          externalId: instagramShortcode(url),
+          title: null,
+          caption: null,
+          creatorName: null,
+          creatorUrl: null,
+          thumbnailUrl: null,
+          siteRecipe: site?.siteRecipe ?? null,
+          recipeSiteUrl: site?.url ?? null,
+          pastedText: shared.text,
+          screenshotPath: shared.screenshotPath,
+        };
       }
-      const page = await withOneRetry(() => adapters.page(url, signal), signal);
-      const recipe = page.siteRecipe;
+      let page: PageInfo;
+      try {
+        page = await withOneRetry(() => adapters.page(url, signal), signal);
+      } catch (e) {
+        // A page that refused the server (or failed to load) is read from what the user added.
+        if (!userAddedCaption(shared) || !(e instanceof SourceError) || signal.aborted) throw e;
+        page = { url, title: null, imageUrl: null, siteRecipe: null };
+      }
+      const site = page.siteRecipe ? page : await recipeSiteIn([shared.text], signal);
+      const recipe = site?.siteRecipe ?? null;
       return {
         platform: 'web',
         kind: recipe ? 'recipeSite' : 'page',
@@ -145,7 +210,7 @@ export function createSourceReader(adapters: SourceAdapters): SourceReader {
         creatorUrl: null,
         thumbnailUrl: recipe?.imageUrl ?? page.imageUrl,
         siteRecipe: recipe,
-        recipeSiteUrl: recipe ? page.url : null,
+        recipeSiteUrl: recipe ? (site?.url ?? null) : null,
         pastedText: shared.text,
         screenshotPath: shared.screenshotPath,
       };

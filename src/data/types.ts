@@ -28,9 +28,24 @@ export type RecipeLine = {
  * Why the Draft builder couldn't fill a Draft in. `sourceUnavailable`: the platform has no such
  * video (private, deleted). `sourceUnreachable`: the platform didn't answer. `unreadable`: no
  * recipe could be read from what it said. `timedOut`: the build took too long. `notSetUp`: the
- * server can't call Claude yet (no API key).
+ * server can't call Claude yet (no API key). The app couldn't read the source at all:
+ * `noCaption`, the platform gave no caption (TikTok's oEmbed since October 2026), and
+ * `sourceRefused`, the page turned the server away (a 4xx, such as a recipe site's 402). Those two
+ * are not "recipe not in caption": the user can add the caption (`addCaptionToDraft`) instead.
  */
-export type DraftBuildFailure = 'sourceUnavailable' | 'sourceUnreachable' | 'unreadable' | 'timedOut' | 'notSetUp';
+export type DraftBuildFailure =
+  | 'sourceUnavailable'
+  | 'sourceUnreachable'
+  | 'unreadable'
+  | 'timedOut'
+  | 'notSetUp'
+  | 'noCaption'
+  | 'sourceRefused';
+
+/** Whether a failure means the app couldn't read the source, so the user can add its caption. */
+export function couldNotReadSource(reason: DraftBuildFailure): boolean {
+  return reason === 'noCaption' || reason === 'sourceRefused';
+}
 
 /**
  * Where the Draft builder is with a Recipe. Hand-written and reviewed Recipes are `built`. A
@@ -51,7 +66,19 @@ export type SourceVideo = {
   creatorName: string | null;
   creatorUrl: string | null;
   thumbnailUrl: string | null;
+  /**
+   * The screenshot the user added (an Instagram Reel's caption, say), as a link valid for an hour.
+   * Absent when they added none. It is the user's own image, and the Recipe's picture.
+   */
+  screenshotUrl?: string;
 };
+
+/**
+ * What the user added to a link so the Draft builder can read it when the app can't (an Instagram
+ * Reel; a source that couldn't be read): a caption they pasted, a screenshot, or both. The
+ * screenshot is JPEG bytes, already scaled to at most 1568 px on its long edge.
+ */
+export type CaptionInput = { caption?: string | null; screenshot?: ArrayBuffer | null };
 
 type RecipeFields = {
   id: RecipeId;
@@ -73,7 +100,15 @@ type RecipeFields = {
  */
 export type Recipe =
   | (RecipeFields & { status: 'reviewed' })
-  | (RecipeFields & { status: 'draft'; build: DraftBuild });
+  | (RecipeFields & {
+      status: 'draft';
+      build: DraftBuild;
+      /**
+       * Whether the user can paste a caption or add a screenshot to build it again
+       * (`addCaptionToDraft`): a failed Draft, or one built with no recipe found, with builds left.
+       */
+      canAddCaption: boolean;
+    });
 
 /** A Draft as the Drafts list shows it. */
 export type DraftSummary = {

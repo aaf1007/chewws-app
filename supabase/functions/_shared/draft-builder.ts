@@ -3,11 +3,27 @@
 // wires the real source reader, Claude and a service-role `rpc`; tests wire fakes.
 
 import { normaliseIngredientName } from '../../../src/data/ingredient-matcher.ts';
-import { ExtractError, type Extract, type Extraction } from './claude-extractor.ts';
-import { SourceError, type SharedLink, type SourceMaterial, type SourceReader } from './source-reader.ts';
+import { ExtractError, type Extract, type Extraction, type Screenshot } from './claude-extractor.ts';
+import {
+  SourceError,
+  userAddedCaption,
+  type SharedLink,
+  type SourceMaterial,
+  type SourceReader,
+} from './source-reader.ts';
 
-/** Why a build failed, as `fail_draft` stores it. */
-export type BuildFailure = 'source_unavailable' | 'source_unreachable' | 'unreadable' | 'timed_out' | 'not_set_up';
+/**
+ * Why a build failed, as `fail_draft` stores it. `no_caption` and `source_refused`: the source
+ * couldn't be read (no caption, or a page that refused the server); the user can add one.
+ */
+export type BuildFailure =
+  | 'source_unavailable'
+  | 'source_unreachable'
+  | 'unreadable'
+  | 'timed_out'
+  | 'not_set_up'
+  | 'no_caption'
+  | 'source_refused';
 
 /** Calls one of the builder's database functions as the service role, and returns its result. */
 export type Rpc = (
@@ -19,6 +35,12 @@ export type DraftBuilderDeps = {
   rpc: Rpc;
   readSource: SourceReader['read'];
   extract: Extract;
+  /**
+   * Downloads a screenshot the user added, by its path in the private recipe-images bucket (as
+   * the service role: the function checked the Draft is the caller's, and the path is the one
+   * `save_from_link` made for them).
+   */
+  loadScreenshot: (path: string, signal: AbortSignal) => Promise<Screenshot>;
   /** How long one attempt may take, reading and Claude together (hosted functions stop at 150 s). */
   budgetMs?: number;
 };
@@ -49,9 +71,20 @@ function toSharedLink(claimed: unknown): SharedLink | null {
 function failureOf(error: unknown, timedOut: boolean): BuildFailure {
   if (timedOut) return 'timed_out';
   if (error instanceof SourceError) {
-    if (error.reason === 'unreadable') return 'unreadable';
-    if (error.reason === 'notSetUp') return 'not_set_up';
-    return error.reason === 'unavailable' ? 'source_unavailable' : 'source_unreachable';
+    switch (error.reason) {
+      case 'unreadable':
+        return 'unreadable';
+      case 'notSetUp':
+        return 'not_set_up';
+      case 'unavailable':
+        return 'source_unavailable';
+      case 'unreachable':
+        return 'source_unreachable';
+      case 'refused':
+        return 'source_refused';
+      case 'noCaption':
+        return 'no_caption';
+    }
   }
   if (error instanceof ExtractError) return error.reason === 'notSetUp' ? 'not_set_up' : 'unreadable';
   return 'unreadable';
@@ -71,6 +104,25 @@ function plainPage(material: SourceMaterial): Extraction {
 }
 
 /**
+ * An Instagram Reel saved with nothing added (decisions 05): no Claude call, and a
+ * recipe-not-in-caption Draft titled "Instagram Reel".
+ */
+const NOTHING_ADDED: Extraction = { title: 'Instagram Reel', recipeFound: false, lines: [], steps: [] };
+
+/** What to build the Draft from: Claude's reading of the material, or no reading at all. */
+async function extractionOf(material: SourceMaterial, deps: DraftBuilderDeps, signal: AbortSignal): Promise<Extraction> {
+  const fromUser = userAddedCaption({ text: material.pastedText, screenshotPath: material.screenshotPath });
+  if (!fromUser && material.kind === 'page') return plainPage(material);
+  if (!fromUser && material.platform === 'instagram') return NOTHING_ADDED;
+  // A video whose description is empty, linking to no recipe site: nothing for Claude to read.
+  if (!fromUser && material.caption === null && material.siteRecipe === null) {
+    return { title: material.title ?? '', recipeFound: false, lines: [], steps: [] };
+  }
+  const screenshot = material.screenshotPath === null ? null : await deps.loadScreenshot(material.screenshotPath, signal);
+  return deps.extract({ ...material, screenshot }, signal);
+}
+
+/**
  * Builds the Draft `recipeId` once: a second kick while it builds, or after it's built, finds
  * nothing to claim. Ingredient names go through the Ingredient matcher; a line whose name
  * normalises to nothing is dropped. Never throws for a failed build: it marks the Draft failed.
@@ -83,7 +135,7 @@ export async function buildDraft(recipeId: string, deps: DraftBuilderDeps): Prom
   const timer = setTimeout(() => budget.abort(new Error('The build ran out of time.')), deps.budgetMs ?? BUDGET_MS);
   try {
     const material = await deps.readSource(shared, budget.signal);
-    const extraction = material.kind === 'page' ? plainPage(material) : await deps.extract(material, budget.signal);
+    const extraction = await extractionOf(material, deps, budget.signal);
     const lines = extraction.lines.flatMap((line) => {
       const name = normaliseIngredientName(line.ingredient);
       const text = line.text.trim();

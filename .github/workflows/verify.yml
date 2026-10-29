@@ -30,11 +30,12 @@ jobs:
         with:
           version: 2.109.1 # keep in step with the local CLI so generated DB types match
 
-      # Tests use auth, PostgREST and Postgres through Kong; the rest is skipped to start faster.
-      # -x takes container names (mailpit, logflare, storage-api), not the names `--help` lists.
-      # The OAuth provider secrets in config.toml are unset here; the CLI only warns about them.
+      # Tests use auth, PostgREST, Storage (the screenshots users add, ticket 05) and Postgres
+      # through Kong; the rest is skipped to start faster. -x takes container names (mailpit,
+      # logflare), not the names `--help` lists. The OAuth provider secrets in config.toml are unset
+      # here; the CLI only warns about them.
       - name: Start local Supabase
-        run: supabase start -x studio,imgproxy,mailpit,edge-runtime,logflare,vector,realtime,storage-api
+        run: supabase start -x studio,imgproxy,mailpit,edge-runtime,logflare,vector,realtime
 
       # Typecheck, lint, DB types freshness, vitest. The Maestro e2e flows need the iOS simulator.
       - run: npm run verify

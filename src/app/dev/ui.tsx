@@ -17,6 +17,7 @@ import {
   NavRow,
   ScoreBadge,
   Screen,
+  ScreenshotField,
   SearchField,
   SectionHeader,
   ShoppingListRow,
@@ -185,6 +186,11 @@ export default function UiGallery() {
         onPress={noop}
       />
       <SourceVideoCard kind="page" platform="blog.example.org" title="My kitchen tour" detail="Open the page" onPress={noop} />
+      <SourceVideoCard platform="Instagram" title="Instagram Reel" detail="Watch on Instagram" onPress={noop} />
+
+      <SectionHeader title="Screenshot field" />
+      <ScreenshotField imageUri={null} onAdd={noop} onRemove={noop} />
+      <ScreenshotField imageUri={photo('photo-1467003909585-2f8a72700288').uri} onAdd={noop} onRemove={noop} />
 
       <SectionHeader title="Draft banners" />
       <DraftBanner kind="building" title="Building this Draft…" message="It’ll be ready in a moment." />
@@ -199,6 +205,15 @@ export default function UiGallery() {
         message="Couldn't reach TikTok."
         actions={[
           { label: 'Try again', onPress: noop },
+          { label: 'Fill in by hand', onPress: noop },
+        ]}
+      />
+      <DraftBanner
+        kind="couldNotRead"
+        title="Couldn't read this TikTok"
+        message="TikTok didn't share this video's caption. Paste the caption or add a screenshot of it."
+        actions={[
+          { label: 'Add caption or screenshot', onPress: noop },
           { label: 'Fill in by hand', onPress: noop },
         ]}
       />

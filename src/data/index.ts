@@ -11,8 +11,10 @@ export { validateRecipeInput, type RecipeInputError } from './recipe-input';
 export { createSessionStorage, type AuthStorage, type SessionStorage } from './session-storage';
 export {
   DataError,
+  couldNotReadSource,
   parseRecipeId,
   parseShoppingListItemId,
+  type CaptionInput,
   type CheckState,
   type DraftBuild,
   type DraftBuildFailure,

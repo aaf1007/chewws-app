@@ -43,7 +43,8 @@ describe('checkSharedLink', () => {
     ['https://www.youtube.com/shorts/LemonPasta1', { status: 'saveable' }],
     ['https://blog.example.org/my-kitchen-tour', { status: 'saveable' }],
     ['https://www.youtube.com/@LemonKitchen', { status: 'unsupported', message: 'That YouTube link isn’t a video.' }],
-    ['https://www.instagram.com/reel/C1a2b3c4d5e/', { status: 'unsupported', message: 'Instagram links can’t be saved yet.' }],
+    ['https://www.instagram.com/reel/C1a2b3c4d5e/', { status: 'saveable' }],
+    ['https://www.instagram.com/pastaqueen/', { status: 'unsupported', message: 'That Instagram link isn’t a Reel or a post.' }],
     ['no link here', { status: 'noLink' }],
   ])('%s', (shared, expected) => {
     expect(checkSharedLink(shared)).toMatchObject(expected);
