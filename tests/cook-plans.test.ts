@@ -185,6 +185,33 @@ test('an invited Friend gets one "Cook Plan invite" push naming the plan; leavin
   ]);
 });
 
+test("a co-member can't send the invite push for someone they didn't invite; it stays due for the one who did", async () => {
+  // sam's kick for his invite never arrives, so kim's push is still due.
+  const sam = await signInWithUsername('sam', { loseNotifyKicks: 1 });
+  const jo = await signInWithUsername('jo');
+  const kim = await signInWithUsername('kim');
+  await befriend(jo, sam);
+  await befriend(kim, sam);
+  await kim.data.registerPushToken(TOKEN);
+  const { planId } = await sam.data.createCookPlan({ cookOn: null, friends: [] });
+  expect(await sam.data.inviteToCookPlan(planId, kim.userId)).toEqual({ status: 'invited' });
+  expect(await sam.data.inviteToCookPlan(planId, jo.userId)).toEqual({ status: 'invited' });
+  expect(sam.notifications.pushesSent()).toEqual([]);
+
+  await jo.notifications.kick({ kind: 'cookPlanInvite', cookPlanId: planId, toUserId: kim.userId });
+  expect(jo.notifications.pushesSent()).toEqual([]);
+
+  await sam.notifications.kick({ kind: 'cookPlanInvite', cookPlanId: planId, toUserId: kim.userId });
+  expect(sam.notifications.pushesSent()).toEqual([
+    {
+      to: TOKEN,
+      title: 'Cook Plan invite',
+      body: `@${sam.username} invited you to cook`,
+      data: { kind: 'cookPlanInvite', cookPlanId: planId },
+    },
+  ]);
+});
+
 test('a plan with no Recipes yet: the push says only who invited you', async () => {
   const sam = await signInWithUsername('sam');
   const jo = await signInWithUsername('jo');
