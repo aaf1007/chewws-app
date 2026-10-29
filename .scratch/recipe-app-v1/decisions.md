@@ -135,6 +135,10 @@ Defaults chosen where the tickets leave things open. Override any by editing thi
   - The data layer *kicks* it after `send_friend_request` answers `requested`, through a new `DataLayerOptions.sendNotification`, the way it kicks `build-draft`. Tests run it in-process with `recordingPushSender`. No pg_net trigger, for the reason in decision 03.
   - The push says title "Friend request", body "@{username} wants to be Friends". Tapping it opens Friends > Requests. A failed kick or send never fails the request: the in-app Requests list is the source of truth, with no retry. Accepting sends no push (spec L238).
 - **Notifications from Friends** (ticket 11 review, 2026-10-29): ticket 07 asks for notification permission only after the first saved link, so someone who only adds Friends was never asked. Now, right after the user's first friend request sent or accepted, while permission is undecided, the app gives a one-line reason ("Notifications are how you hear when someone asks to be Friends.", with "Not now" or "Continue") and then the system asks. The Friends screen also shows a "Turn on notifications" row while permission is undecided. Once decided, neither appears again.
+- **Before going public** (ticket 11 review):
+  - A requester whose request was declined keeps seeing the addressee's current username (in their Sent list, search and `get_profile`), since a decline is never revealed. Block, when it comes, is how someone stops that.
+  - `search_users` can still be walked by extending prefixes, 10 results at a time (`aaa`, `aab`, …). The per-user rate limit (user decisions 11–19, 1) is what stops it.
+  - If `needsUsername` can't reach the server (no signal, a server error), the gate lets the user into the app without a username. The server still refuses everything that needs one (`send_friend_request` answers `noUsername`), and the next launch asks again.
 - **Flag:** profiles are owner-read-only (`20261022235947_profiles.sql`) and `username` is nullable with a case-sensitive `unique`. This ticket adds the check and the wider read policy; it doesn't edit the old migration.
 
 ## 12 Invite links
