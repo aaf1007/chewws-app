@@ -19,6 +19,8 @@ import { normaliseIngredientName } from './ingredient-matcher';
 import { toListLines, withItems, withListChanges, type ListChange } from './list-engine';
 import { parseListChange, parseSavedShoppingList } from './list-storage';
 import { validateRecipeInput } from './recipe-input';
+import { searchWords } from './search-words';
+import { MAX_TAG_NAME_LENGTH, normaliseTagName, tagKey, tagNameLength, tidyTagNames } from './tag-name';
 import { sessionIdOf, type SessionStorage } from './session-storage';
 import {
   DataError,
@@ -26,6 +28,7 @@ import {
   parseRecipeId,
   parseShoppingListId,
   parseShoppingListItemId,
+  parseTagId,
   parseUserId,
   type CheckState,
   type DraftBuild,
@@ -51,6 +54,8 @@ import {
   type ShoppingListItemId,
   type ShoppingListView,
   type SourceVideo,
+  type Tag,
+  type TagId,
   type UserId,
 } from './types';
 
@@ -61,13 +66,17 @@ type RecipeLineRow = Database['public']['Tables']['recipe_lines']['Row'];
 type ShoppingListItemRow = Database['public']['Tables']['shopping_list_items']['Row'];
 type ShoppingListAmountRow = Database['public']['Tables']['shopping_list_amounts']['Row'];
 type SourceVideoRow = Database['public']['Tables']['source_videos']['Row'];
+type TagRow = Database['public']['Tables']['tags']['Row'];
 type BuildFailureRow = Database['public']['Enums']['draft_build_failure'];
 
 const SOURCE_VIDEO_COLUMNS = 'platform, original_url, creator_name, creator_url, thumbnail_url, fetched_at, screenshot_path';
 
 const SOURCE_VIDEO = `source_video:source_videos(${SOURCE_VIDEO_COLUMNS})`;
 
-const RECIPE_WITH_LINES = `*, recipe_lines(position, original_text, amount_text, ingredient:ingredients(id, name)), ${SOURCE_VIDEO}`;
+const RECIPE_WITH_LINES = `*, recipe_lines(position, original_text, amount_text, ingredient:ingredients(id, name)), recipe_tags(tag:tags(id, name)), ${SOURCE_VIDEO}`;
+
+/** A reviewed Recipe as the library lists it. */
+const RECIPE_SUMMARY = 'id, title, steps, created_at, recipe_lines(count)';
 
 const DRAFT_SUMMARY = `id, title, status, recipe_found, build_status, build_failure, build_attempts, build_started_at, created_at, ${SOURCE_VIDEO}`;
 
@@ -156,15 +165,42 @@ function toPastedCaption(caption: string | null | undefined): string | null {
   return trimmed;
 }
 
+function toTag(row: Pick<TagRow, 'id' | 'name'>): Tag {
+  return { id: parseTagId(row.id), name: row.name };
+}
+
+/** Tags in the order the user sees them: by name, without regard to case. */
+const byTagName = (a: Tag, b: Tag) => compareText(tagKey(a.name), tagKey(b.name)) || compareText(a.name, b.name);
+
+/** Suggested Tag names, each spelled as the user's Tag of that name when they have one. */
+function toSuggestedTags(suggested: string[], myTags: Tag[]): string[] {
+  const mine = new Map(myTags.map((tag) => [tagKey(tag.name), tag.name]));
+  return tidyTagNames(suggested.map((name) => mine.get(tagKey(name)) ?? name));
+}
+
+function toRecipeSummary(
+  row: Pick<RecipeRow, 'id' | 'title' | 'steps' | 'created_at'> & { recipe_lines: { count: number }[] },
+): RecipeSummary {
+  return {
+    id: parseRecipeId(row.id),
+    title: row.title,
+    lineCount: row.recipe_lines[0]?.count ?? 0,
+    stepCount: row.steps.length,
+    createdAt: row.created_at,
+  };
+}
+
 function toRecipe(
   row: RecipeRow & {
     recipe_lines: (Pick<RecipeLineRow, 'position' | 'original_text' | 'amount_text'> & {
       ingredient: Pick<IngredientRow, 'id' | 'name'>;
     })[];
+    recipe_tags: { tag: Pick<TagRow, 'id' | 'name'> }[];
     source_video: SourceVideoColumns | null;
   },
   now: number,
   screenshots: ScreenshotUrls,
+  myTags: Tag[],
 ): Recipe {
   const sourceVideo = toSourceVideo(row.source_video, screenshots);
   const fields = {
@@ -184,11 +220,19 @@ function toRecipe(
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
-  if (row.status === 'reviewed') return { ...fields, status: 'reviewed' };
+  if (row.status === 'reviewed') {
+    return {
+      ...fields,
+      status: 'reviewed',
+      tags: row.recipe_tags.map((rt) => toTag(rt.tag)).sort(byTagName),
+      wantToCookSince: row.want_to_cook_at,
+    };
+  }
   const build = toDraftBuild(row, now);
   const canAddCaption =
     build.status === 'failed' ? build.canRetry : build.status === 'built' && !row.recipe_found && row.build_attempts < BUILD_ATTEMPTS;
-  return { ...fields, status: 'draft', build, canAddCaption };
+  const suggestedTags = toSuggestedTags(row.suggested_tags, myTags);
+  return { ...fields, status: 'draft', build, suggestedTags, canAddCaption };
 }
 
 /**
@@ -815,7 +859,12 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       await waitAtMost(REFRESH_WAIT_MS, requestSourceRefresh(id));
       row = await readRecipe(id);
     }
-    return row ? toRecipe(row, now(), await screenshotUrlsOf([row.source_video])) : null;
+    if (!row) return null;
+    const [screenshots, myTags] = await Promise.all([
+      screenshotUrlsOf([row.source_video]),
+      row.status === 'draft' && row.suggested_tags.length > 0 ? listTags() : [],
+    ]);
+    return toRecipe(row, now(), screenshots, myTags);
   }
 
   /**
@@ -843,19 +892,110 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     const me = await currentUserId();
     const { data, error } = await client
       .from('recipes')
-      .select('id, title, steps, created_at, recipe_lines(count)')
+      .select(RECIPE_SUMMARY)
       .eq('owner_id', me)
       .eq('status', 'reviewed')
       .order('created_at', { ascending: false })
       .order('id');
     if (error) fail(error);
-    return data.map((row) => ({
-      id: parseRecipeId(row.id),
-      title: row.title,
-      lineCount: row.recipe_lines[0]?.count ?? 0,
-      stepCount: row.steps.length,
-      createdAt: row.created_at,
-    }));
+    return data.map(toRecipeSummary);
+  }
+
+  /** The signed-in user's Recipes marked Want to Cook, the most recently marked first. */
+  async function listWantToCook(): Promise<RecipeSummary[]> {
+    const me = await currentUserId();
+    const { data, error } = await client
+      .from('recipes')
+      .select(RECIPE_SUMMARY)
+      .eq('owner_id', me)
+      .eq('status', 'reviewed')
+      .not('want_to_cook_at', 'is', null)
+      .order('want_to_cook_at', { ascending: false })
+      .order('id');
+    if (error) fail(error);
+    return data.map(toRecipeSummary);
+  }
+
+  /**
+   * The signed-in user's reviewed Recipes (Drafts aren't searched) that match every word of
+   * `query`: in the title, a Tag's name, or a linked Ingredient's name, without regard to case
+   * (decisions 06). An Ingredient is found by the word as the Ingredient matcher reads it, so
+   * "tomatoes" finds tomato. With `wantToCook`, only those marked Want to Cook, the most recently
+   * marked first; otherwise newest first. An empty query finds them all.
+   */
+  async function searchRecipes(query: string, options: { wantToCook?: boolean } = {}): Promise<RecipeSummary[]> {
+    const wantToCook = options.wantToCook ?? false;
+    let search = client
+      .rpc('search_recipes', { words: searchWords(query), want_to_cook_only: wantToCook })
+      .select(`${RECIPE_SUMMARY}, want_to_cook_at`);
+    if (wantToCook) search = search.order('want_to_cook_at', { ascending: false });
+    const { data, error } = await search.order('created_at', { ascending: false }).order('id');
+    if (error) fail(error);
+    return data.map(toRecipeSummary);
+  }
+
+  /**
+   * Marks a reviewed Recipe Want to Cook (`on`), or unmarks it. Marking one already marked keeps
+   * when it was first marked. A Draft can't be marked until it's reviewed.
+   */
+  async function setWantToCook(recipeId: RecipeId, on: boolean): Promise<void> {
+    const { data, error } = await client.rpc('set_want_to_cook', { recipe_id: recipeId, want_to_cook: on });
+    if (error) fail(error);
+    if (data === 'gone') throw new DataError('recipe_not_found', 'That Recipe no longer exists.');
+    if (data === 'notReviewed') {
+      throw new DataError('draft_not_reviewed', 'Review this Draft first, then mark it Want to Cook.');
+    }
+  }
+
+  /** A Tag name as typed, ready to save. Fails when it's blank or too long. */
+  function toTagName(typed: string): string {
+    const name = normaliseTagName(typed);
+    if (!name) throw new DataError('tag_required', 'Type the name of a Tag.');
+    if (tagNameLength(name) > MAX_TAG_NAME_LENGTH) {
+      throw new DataError('tag_too_long', `A Tag can be at most ${MAX_TAG_NAME_LENGTH} characters.`);
+    }
+    return name;
+  }
+
+  /**
+   * Puts a Tag on one of the user's reviewed Recipes, by the name they typed: their Tag of that
+   * name (without regard to case, keeping its spelling), or a new one. Already on it is fine.
+   * A Draft gets its Tags when it's reviewed (`reviewDraft`).
+   */
+  async function addTag(recipeId: RecipeId, name: string): Promise<Tag> {
+    const { data, error } = await client.rpc('add_tag', { recipe_id: recipeId, name: toTagName(name) });
+    if (error) fail(error);
+    if (data === null) {
+      const recipe = await getRecipe(recipeId);
+      if (recipe?.status === 'draft') {
+        throw new DataError('draft_not_reviewed', 'Review this Draft first; its Tags are saved with it.');
+      }
+      throw new DataError('recipe_not_found', 'That Recipe no longer exists.');
+    }
+    if (typeof data !== 'object' || Array.isArray(data)) throw new DataError('unknown', 'add_tag answered oddly.');
+    const { id, name: stored } = data;
+    if (typeof id !== 'string' || typeof stored !== 'string') throw new DataError('unknown', 'add_tag answered oddly.');
+    return { id: parseTagId(id), name: stored };
+  }
+
+  /** Takes a Tag off a Recipe. The Tag stays in the user's Tags. Not on it is fine. */
+  async function removeTag(recipeId: RecipeId, tagId: TagId): Promise<void> {
+    const { error } = await client.from('recipe_tags').delete().eq('recipe_id', recipeId).eq('tag_id', tagId);
+    if (error) fail(error);
+  }
+
+  /** The signed-in user's Tags, by name, including any no Recipe has now. */
+  async function listTags(): Promise<Tag[]> {
+    const me = await currentUserId();
+    const { data, error } = await client.from('tags').select('id, name').eq('owner_id', me);
+    if (error) fail(error);
+    return data.map(toTag).sort(byTagName);
+  }
+
+  /** Deletes one of the user's Tags, taking it off every Recipe it was on. Gone already is fine. */
+  async function deleteTag(tagId: TagId): Promise<void> {
+    const { error } = await client.from('tags').delete().eq('id', tagId);
+    if (error) fail(error);
   }
 
   /** Kicks a Draft's build. A kick that fails changes nothing: `resumeDraftBuilds` kicks again. */
@@ -1007,11 +1147,14 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
 
   /**
    * Saves the user's reviewed version of a Draft (its title, lines and steps, as `editRecipe`
-   * does) and makes it a Recipe in the library. A failed Draft can be filled in by hand; one still
-   * building can't be reviewed yet. A Recipe that is no longer a Draft is left as it is.
+   * does) and makes it a Recipe in the library, with `tags`: the suggested Tag names the user kept
+   * and any they added, each made or found as `addTag` does (blank ones are dropped). A failed
+   * Draft can be filled in by hand; one still building can't be reviewed yet. A Recipe that is no
+   * longer a Draft is left as it is, its Tags too.
    */
-  async function reviewDraft(id: RecipeId, input: RecipeInput): Promise<void> {
-    const { data, error } = await client.rpc('review_draft', { recipe_id: id, ...toRecipeArgs(input) });
+  async function reviewDraft(id: RecipeId, input: RecipeInput, tags: readonly string[] = []): Promise<void> {
+    const names = tags.map(normaliseTagName).filter(Boolean).map(toTagName);
+    const { data, error } = await client.rpc('review_draft', { recipe_id: id, ...toRecipeArgs(input), tags: names });
     if (error) fail(error);
     if (data === 'gone') throw new DataError('recipe_not_found', 'That Draft no longer exists.');
     if (data === 'building') {
@@ -1586,6 +1729,13 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     getRecipe,
     refreshSourceVideo,
     listMyRecipes,
+    listWantToCook,
+    searchRecipes,
+    setWantToCook,
+    addTag,
+    removeTag,
+    listTags,
+    deleteTag,
     newDraftId,
     saveFromLink,
     addCaptionToDraft,
