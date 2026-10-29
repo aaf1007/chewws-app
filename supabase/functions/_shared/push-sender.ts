@@ -1,14 +1,24 @@
 // The push sender (decisions 07): the one place the server sends a push notification. The Draft
-// builder calls a `PushSender`; the build-draft function wires Expo's push service, and tests and
-// DRAFT_FIXTURES wire the recording fake, so neither reaches the network. Runtime-neutral: the
-// caller passes `fetch`, and the one URL it is ever called with is Expo's (a fixed host, not a link
-// from a user, so it doesn't go through safeFetch).
+// builder and the notifier (friend requests, decisions 11) call a `PushSender`; the build-draft and
+// notify functions wire Expo's push service, and tests and DRAFT_FIXTURES wire the recording fake,
+// so neither reaches the network. Runtime-neutral: the caller passes `fetch`, and the one URL it is
+// ever called with is Expo's (a fixed host, not a link from a user, so it doesn't go through
+// safeFetch).
 
 /** What a "Draft ready" notification carries, for the app to open that Draft when it's tapped. */
 export type DraftReadyData = { kind: 'draftReady'; recipeId: string };
 
+/** What a "Friend request" notification carries: who asked. Tapping it opens Friends > Requests. */
+export type FriendRequestData = { kind: 'friendRequest'; fromUserId: string };
+
+/** What a "Cook Plan invite" notification carries (ticket 14): the plan to open. */
+export type CookPlanInviteData = { kind: 'cookPlanInvite'; cookPlanId: string };
+
+/** What a notification carries, for the app to open the right screen when it's tapped. */
+export type PushData = DraftReadyData | FriendRequestData | CookPlanInviteData;
+
 /** One notification to one phone, by its Expo push token. */
-export type PushMessage = { to: string; title: string; body: string; data: DraftReadyData };
+export type PushMessage = { to: string; title: string; body: string; data: PushData };
 
 /**
  * Sends `messages`, and answers which of their tokens the push service says are no longer
@@ -19,6 +29,16 @@ export type PushSender = (messages: PushMessage[], signal: AbortSignal) => Promi
 /** The "Draft ready" notification for one Draft, to each of its owner's phones. */
 export function draftReadyMessages(recipeId: string, title: string, tokens: readonly string[]): PushMessage[] {
   return tokens.map((to) => ({ to, title: 'Draft ready', body: title, data: { kind: 'draftReady', recipeId } }));
+}
+
+/** The "Friend request" notification from `fromUserId` (@`username`), to each of the addressee's phones. */
+export function friendRequestMessages(fromUserId: string, username: string, tokens: readonly string[]): PushMessage[] {
+  return tokens.map((to) => ({
+    to,
+    title: 'Friend request',
+    body: `@${username} wants to be Friends`,
+    data: { kind: 'friendRequest', fromUserId },
+  }));
 }
 
 export const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
