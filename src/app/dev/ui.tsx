@@ -14,6 +14,7 @@ import {
   IngredientLineRow,
   IngredientRow,
   ListRow,
+  ListSwitcher,
   NavRow,
   PersonRow,
   ScoreBadge,
@@ -66,6 +67,7 @@ export default function UiGallery() {
   const [filter, setFilter] = useState<'wantToCook' | 'saved' | 'cooked'>('saved');
   const [query, setQuery] = useState('');
   const [view, setView] = useState<'list' | 'map'>('list');
+  const [whichList, setWhichList] = useState('mine');
   const [title, setTitle] = useState('Garlic bread');
   const [line, setLine] = useState({
     originalText: '2 cloves garlic, minced',
@@ -256,6 +258,18 @@ export default function UiGallery() {
           { label: 'Shopping List', icon: 'cart-outline', onPress: noop },
           { label: 'Cooked', icon: 'checkmark-circle-outline', onPress: noop },
         ]}
+      />
+
+      <SectionHeader title="List switcher" />
+      <ListSwitcher
+        options={[
+          { value: 'mine', label: 'Your list' },
+          { value: 'sam', label: "Sam's list" },
+          { value: 'alex', label: "Alex_cooks's list" },
+          { value: 'rosa', label: "Rosa_2024's list" },
+        ]}
+        value={whichList}
+        onChange={setWhichList}
       />
 
       <SectionHeader title="Floating segment" />

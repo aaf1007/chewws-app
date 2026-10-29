@@ -10,6 +10,7 @@ export { IngredientLineEditor, type IngredientLineFields } from './ingredient-li
 export { IngredientLineRow } from './ingredient-line-row';
 export { IngredientRow } from './ingredient-row';
 export { ListRow } from './list-row';
+export { ListSwitcher, type ListSwitcherOption } from './list-switcher';
 export { NavRow } from './nav-row';
 export { PersonRow, type PersonAction } from './person-row';
 export { ScoreBadge, formatScore, type ScoreTone } from './score-badge';
