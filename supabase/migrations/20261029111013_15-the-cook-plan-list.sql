@@ -262,6 +262,24 @@ grant execute on function public.cook_plan_who_has(uuid) to authenticated;
 -- (ticket 18), Claims answer `gone`; checks still apply, so a check made offline in the store still
 -- fills the buyer's Pantry.
 
+-- A line kept only because it was claimed or checked off, all its Recipes having left the plan
+-- ("(removed)"), goes once nobody has claimed or checked it off any more: nothing in the plan needs
+-- it. Called by unclaim and uncheck, on the line they hold locked.
+create function private.drop_cook_plan_line_if_unneeded(item_id uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  delete from public.cook_plan_items i
+  where i.id = drop_cook_plan_line_if_unneeded.item_id
+    and i.claimed_at is null
+    and i.checked_at is null
+    and not exists (select 1 from public.cook_plan_amounts a where a.item_id = i.id and a.recipe_id is not null);
+$$;
+
+revoke execute on function private.drop_cook_plan_line_if_unneeded(uuid) from public, anon, authenticated;
+
 -- Checks a line off. On the unchecked-to-checked change its Ingredient goes into the checker's own
 -- Pantry (the buyer's, decisions 15): never the claimer's or the Recipe owner's. Checking off a
 -- checked line keeps who checked it and when, but counts as its latest check. The Claim is untouched.
@@ -306,7 +324,8 @@ begin
 end;
 $$;
 
--- Unchecks a line. The Pantry is left alone (decisions 09). The Claim is untouched.
+-- Unchecks a line. The Pantry is left alone (decisions 09). The Claim is untouched. A "(removed)"
+-- line nobody has claimed goes.
 create function public.cook_plan_uncheck(plan_id uuid, item_id uuid, changed_at timestamptz default null)
 returns text
 language plpgsql
@@ -335,6 +354,7 @@ begin
   if not found then
     return 'gone';
   end if;
+  perform private.drop_cook_plan_line_if_unneeded(item.id);
   return 'applied';
 end;
 $$;
@@ -377,6 +397,7 @@ end;
 $$;
 
 -- Clears the caller's own Claim on a line. Anyone else's Claim, or none, answers `gone` and stays.
+-- A "(removed)" line nobody has checked off goes.
 create function public.unclaim_cook_plan_item(plan_id uuid, item_id uuid, changed_at timestamptz default null)
 returns text
 language plpgsql
@@ -405,6 +426,7 @@ begin
   if not found then
     return 'gone';
   end if;
+  perform private.drop_cook_plan_line_if_unneeded(item.id);
   return 'applied';
 end;
 $$;

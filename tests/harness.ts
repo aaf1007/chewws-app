@@ -839,10 +839,11 @@ export async function markCookPlanCookedInDatabase(planId: string, by: Someone):
 
 /**
  * The functions allowed to read or write a Cook Plan's lines or amounts without asking the
- * membership rule themselves: the triggers that run inside a member's change (the RPC that fired
- * them asked it), which announce changes or apply the deletion rule (decisions 15).
+ * membership rule themselves: those that run inside a member's change (the RPC that fired or
+ * called them asked it), which apply the deletion rule (decisions 15) or drop a "(removed)" line
+ * no longer needed.
  */
-const COOK_PLAN_LIST_TRIGGERS = ['private.remove_cook_plan_recipe_lines'];
+const COOK_PLAN_LIST_TRIGGERS = ['private.drop_cook_plan_line_if_unneeded', 'private.remove_cook_plan_recipe_lines'];
 
 /**
  * The database functions (public and private) that read or write Cook Plan lines, amounts or who

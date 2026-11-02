@@ -271,6 +271,36 @@ test.each(['removes it from the plan', 'deletes the Recipe'] as const)(
   },
 );
 
+test('a "(removed)" line goes once nobody has it claimed or checked off: unclaimed, or unchecked; one still claimed or checked stays', async () => {
+  const { sam, jo, kim, planId, bread, usernames } = await plan();
+  const list = await sam.data.getCookPlanList(planId);
+  await jo.data.claim(planId, lineOf(list, 'butter').id);
+  await kim.data.checkOffCookPlanItem(planId, lineOf(list, 'chive').id);
+  // Parsley is both: kim claimed it and sam bought it.
+  await kim.data.claim(planId, lineOf(list, 'parsley').id);
+  await sam.data.checkOffCookPlanItem(planId, lineOf(list, 'parsley').id);
+  expect(await jo.data.removeRecipeFromCookPlan(planId, bread)).toEqual({ status: 'removed' });
+  const names = async () => (await sam.data.getCookPlanList(planId)).items.map((i) => i.ingredient.name);
+  expect(await names()).toEqual(['butter', 'chive', 'garlic', 'olive oil', 'parsley', 'salt', 'spaghetti']);
+
+  await jo.data.unclaim(planId, lineOf(list, 'butter').id);
+  await kim.data.uncheckCookPlanItem(planId, lineOf(list, 'chive').id);
+  await kim.data.unclaim(planId, lineOf(list, 'parsley').id);
+  expect(await names()).toEqual(['garlic', 'olive oil', 'parsley', 'salt', 'spaghetti']);
+  expect(readList(await jo.data.getCookPlanList(planId), usernames).find((l) => l.line === 'parsley')).toEqual({
+    line: 'parsley',
+    amounts: [['Garlic bread (removed)', 'a handful']],
+    whoHas: [sam.username],
+    claimedBy: null,
+    checkedBy: sam.username,
+  });
+  // Unchecking leaves the Pantry alone, as ever.
+  expect(await pantryNames(kim)).toEqual(['chive']);
+
+  await sam.data.uncheckCookPlanItem(planId, lineOf(list, 'parsley').id);
+  expect(await names()).toEqual(['garlic', 'olive oil', 'salt', 'spaghetti']);
+});
+
 test('after "We cooked it", Claims answer gone, but checking off and unchecking still work and fill the buyer’s Pantry', async () => {
   const { sam, jo, planId, usernames } = await plan();
   const list = await sam.data.getCookPlanList(planId);
