@@ -404,3 +404,33 @@ test('a copy that waited on the owner deleting their last Cook Log (and so the R
   expect(await kim.data.getRecipe(shakshuka)).toBeNull();
   expect((await kim.data.getRanking(sam.userId)).liked).toEqual([]);
 });
+
+test('an unfriend landing between the Friends check and the reads answers notFound, not an empty profile or page', async () => {
+  const [kim] = await signInOnPhones('kim', 1);
+  expect((await kim.data.setUsername(uniqueUsername('kim'))).status).toBe('set');
+  const sam = await signInWithUsername('sam');
+  await befriend(sam, kim);
+  const porridge = await sam.data.createRecipe({ title: 'Porridge', lines: [], steps: [] });
+  for (let i = 0; i < 21; i++) expect((await sam.data.addCookLog(porridge, { cookedOn: '2026-10-01' })).status).toBe('added');
+  await ranked(sam, porridge, 'liked');
+  const profile = await kim.data.getFriendProfile(sam.userId);
+  if (profile.status !== 'found' || profile.cookLogs.next === null) throw new Error('No second page.');
+  const after = profile.cookLogs.next;
+
+  // The profile: kim's phone has found sam in his Friends list; its Ranking read waits while sam unfriends him.
+  const ranking = kim.holdNextRequest('ranking_entries');
+  const opening = kim.data.getFriendProfile(sam.userId);
+  await ranking.reached;
+  await sam.data.unfriend(kim.userId);
+  ranking.release();
+  expect(await opening).toEqual({ status: 'notFound' });
+
+  // "Show more": the same, on the next page's read.
+  await befriend(sam, kim);
+  const logs = kim.holdNextRequest('/rest/v1/cook_logs');
+  const paging = kim.data.getFriendCookLogs(sam.userId, after);
+  await logs.reached;
+  await sam.data.unfriend(kim.userId);
+  logs.release();
+  expect(await paging).toEqual({ status: 'notFound' });
+});

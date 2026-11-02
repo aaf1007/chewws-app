@@ -2064,12 +2064,15 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   /**
    * A Friend's profile (decisions 19): username, "Friends since", their Ranking with Scores (the
    * ranking engine's), and their first 20 Cook Logs, newest first. `notFound` alike for a stranger,
-   * an unfriended user, yourself and an id nobody has: each is simply not in your Friends list.
+   * an unfriended user, yourself and an id nobody has: each is simply not in your Friends list. The
+   * list is asked again after the reads, so an unfriend meanwhile is `notFound` too.
    */
   async function getFriendProfile(userId: UserId): Promise<FriendProfileResult> {
     const friend = await friendWithId(userId);
     if (!friend) return { status: 'notFound' };
     const [ranking, cookLogs] = await Promise.all([getRanking(friend.id), cookLogPageOf(friend.id, null)]);
+    // Unfriended while those were read, they read as nothing: say so, not an empty profile.
+    if (!(await friendWithId(userId))) return { status: 'notFound' };
     return {
       status: 'found',
       id: friend.id,
@@ -2084,7 +2087,10 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   async function getFriendCookLogs(userId: UserId, after: CookLogCursor): Promise<FriendCookLogsResult> {
     const friend = await friendWithId(userId);
     if (!friend) return { status: 'notFound' };
-    return { status: 'found', ...(await cookLogPageOf(friend.id, after)) };
+    const page = await cookLogPageOf(friend.id, after);
+    // Unfriended while it was read, the page reads as empty: say so, not "nothing more".
+    if (!(await friendWithId(userId))) return { status: 'notFound' };
+    return { status: 'found', ...page };
   }
 
   /**
