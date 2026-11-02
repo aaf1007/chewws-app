@@ -5,8 +5,10 @@ import { StyleSheet, View } from 'react-native';
 import {
   ActionButtons,
   AddField,
+  BandPicker,
   Button,
   CompanionPicker,
+  ComparisonCard,
   CookLogCard,
   DayPicker,
   DraftBanner,
@@ -435,6 +437,19 @@ export default function UiGallery() {
         <PersonRow username="rosa_2024" detail="Requested" actions={[{ label: 'Cancel', onPress: noop, tone: 'muted' }]} />
         <PersonRow username="a_username_twenty_ch" detail="Friends since 28 Oct 2026" />
       </View>
+
+      <SectionHeader title="Band picker" />
+      <BandPicker
+        bands={[
+          { value: 'liked', label: 'Liked', range: '6.7–10', icon: 'heart-outline' },
+          { value: 'fine', label: 'Fine', range: '3.4–6.6', icon: 'remove-circle-outline' },
+          { value: 'disliked', label: 'Didn’t like', range: '0–3.3', icon: 'thumbs-down-outline' },
+        ]}
+        onPick={noop}
+      />
+
+      <SectionHeader title="Comparison card" />
+      <ComparisonCard title="Shakshuka with feta and a very long name" step="Comparison 2" onBetter={noop} onWorse={noop} />
     </Screen>
   );
 }

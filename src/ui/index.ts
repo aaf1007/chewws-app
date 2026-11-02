@@ -1,6 +1,8 @@
 export { ActionButtons, type Action } from './action-buttons';
 export { AddField } from './add-field';
+export { BandPicker, type BandOption } from './band-picker';
 export { Button, type ButtonVariant } from './button';
+export { ComparisonCard } from './comparison-card';
 export { CompanionPicker } from './companion-picker';
 export { CookLogCard } from './cook-log-card';
 export { DayPicker, formatDay, localToday } from './day-picker';
