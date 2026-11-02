@@ -240,7 +240,9 @@ export default function CookPlanScreen() {
           action={active ? { label: 'Add a Recipe', onPress: () => router.push({ pathname: '/cook-plan/[id]/add-recipe', params }) } : undefined}
         />
         {plan.recipes.length === 0 ? (
-          <Text tone="textMuted">{cookPlanTitle(plan)}. Add one of yours; everyone in the plan can open it.</Text>
+          <Text tone="textMuted">
+            {active ? `${cookPlanTitle(plan)}. Add one of yours; everyone in the plan can open it.` : 'No Recipes were in this plan.'}
+          </Text>
         ) : (
           plan.recipes.map((recipe) => (
             <ListRow
