@@ -1,4 +1,4 @@
-import type { CookPlan, CookPlanList, CookPlanListItem, RecipeCookPlan, UserId } from '@/data';
+import type { CookPlan, CookPlanList, CookPlanListItem, CookPlanPrompt, CookPlanPromptStep, CookPlanRecipe, RecipeCookPlan, UserId } from '@/data';
 import { formatDay } from '@/ui';
 
 const handles = (usernames: readonly (string | null)[]) =>
@@ -15,6 +15,49 @@ export function cookPlanDetail(plan: CookPlan, me: UserId | null): string {
   const who = others ? `with ${others}` : 'Just you so far';
   return plan.cookOn ? `${who} · ${formatDay(plan.cookOn)}` : who;
 }
+
+/** The day a time was, on this phone, as `YYYY-MM-DD`. */
+function dayOf(at: string): string {
+  const date = new Date(at);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/** When a cooked plan was cooked, and by whom: "Cooked Sat 2 Nov by @sam", "Cooked Sat 2 Nov by you". */
+export function cookedDetail(plan: CookPlan, me: UserId | null): string | null {
+  if (plan.status !== 'cooked') return null;
+  const by = plan.cookedBy === null ? null : plan.cookedBy === me ? 'you' : plan.members.find((m) => m.id === plan.cookedBy)?.username;
+  const day = `Cooked ${formatDay(dayOf(plan.cookedAt))}`;
+  return by ? `${day} by ${by === 'you' ? by : `@${by}`}` : day;
+}
+
+/** Whose a plan's Recipe is: "Yours", "@sam's", "Someone else's". */
+export const recipeOwnerText = (recipe: CookPlanRecipe, me: UserId | null) =>
+  recipe.owner.id === me ? 'Yours' : recipe.owner.username ? `@${recipe.owner.username}'s` : 'Someone else’s';
+
+/** What a prompt's step says it does next (decisions 18). */
+export function promptStepLabel(step: CookPlanPromptStep): string {
+  switch (step.kind) {
+    case 'logged':
+      return 'Logged';
+    case 'logYours':
+      return 'Log it';
+    case 'useYourCopy':
+      return 'Use your copy';
+    case 'saveYourCopy':
+      return 'Save your copy first';
+  }
+}
+
+/** The prompt's heading on the Cook Plans tab: "You cooked Shakshuka and Dal with @sam". */
+export function promptTitle(prompt: CookPlanPrompt): string {
+  const titles = prompt.recipes.map((r) => r.recipe.title);
+  const what = titles.length <= 1 ? (titles[0] ?? 'it') : `${titles.slice(0, -1).join(', ')} and ${titles[titles.length - 1]}`;
+  const who = handles(prompt.companions.map((c) => c.username));
+  return who ? `You cooked ${what} with ${who}` : `You cooked ${what}`;
+}
+
+export const PROMPT_MESSAGE = 'Log how each Recipe went, then rank it. Both are up to you.';
 
 /** The warning before deleting a Recipe that's in Cook Plans: "It'll leave your Cook Plan with @sam." */
 export function leavesCookPlansWarning(plans: readonly RecipeCookPlan[]): string | null {

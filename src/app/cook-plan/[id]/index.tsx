@@ -3,28 +3,61 @@ import { useCallback, useState } from 'react';
 import { Alert, View } from 'react-native';
 
 import { hasCode, messageOf } from '@/auth/errors';
-import { cookPlanDetail, cookPlanTitle } from '@/components/cook-plan-copy';
+import {
+  PROMPT_MESSAGE,
+  cookPlanDetail,
+  cookPlanTitle,
+  cookedDetail,
+  promptStepLabel,
+  recipeOwnerText,
+} from '@/components/cook-plan-copy';
 import { useWhileFocused } from '@/components/use-while-focused';
 import {
   parseCookPlanId,
+  type CookPlan,
   type CookPlanListView,
   type CookPlanRead,
   type CookPlanMember,
+  type CookPlanPrompt,
   type CookPlanRecipe,
   type UserId,
 } from '@/data';
 import { data } from '@/data/app';
 import { useSession } from '@/session';
-import { Button, DayPicker, EmptyState, ListRow, NavRow, PersonRow, Screen, SectionHeader, SyncNotice, Text, spacing } from '@/ui';
+import {
+  Button,
+  CookedPrompt,
+  DayPicker,
+  EmptyState,
+  ListRow,
+  NavRow,
+  PersonRow,
+  Screen,
+  SectionHeader,
+  SyncNotice,
+  Text,
+  spacing,
+} from '@/ui';
 
-async function loadPlan(rawId: string): Promise<CookPlanRead> {
+/** The plan, and once it's cooked the user's prompt for it (decisions 18), which needs a connection. */
+async function loadPlan(rawId: string): Promise<CookPlanRead & { prompt: CookPlanPrompt | null }> {
+  let read: CookPlanRead;
   try {
-    return await data.readCookPlan(parseCookPlanId(rawId));
+    read = await data.readCookPlan(parseCookPlanId(rawId));
   } catch (e) {
-    if (hasCode(e, 'invalid_cook_plan_id')) return { plan: null, offline: false };
+    if (hasCode(e, 'invalid_cook_plan_id')) return { plan: null, offline: false, prompt: null };
     throw e;
   }
+  const prompt =
+    read.plan?.status === 'cooked' && !read.offline
+      ? ((await data.cookPlanPrompts([read.plan]).catch(() => []))[0] ?? null)
+      : null;
+  return { ...read, prompt };
 }
+
+/** Opens the step for one of a cooked plan's Recipes: its Cook Log form, or saving a copy first. */
+const openPromptStep = (plan: CookPlan, recipe: CookPlanRecipe) =>
+  router.push({ pathname: '/cook-plan/[id]/log/[recipeId]', params: { id: plan.id, recipeId: recipe.id } });
 
 /** Who someone in the plan is to the user: "You", who started it, or who invited them. */
 function memberDetail(member: CookPlanMember, members: CookPlanMember[], me: UserId | null): string {
@@ -35,8 +68,7 @@ function memberDetail(member: CookPlanMember, members: CookPlanMember[], me: Use
   return you ? `You, invited by ${by}` : `Invited by ${by}`;
 }
 
-const recipeDetail = (recipe: CookPlanRecipe, me: UserId | null) =>
-  recipe.owner.id === me ? 'Yours' : recipe.owner.username ? `@${recipe.owner.username}'s` : 'Someone else’s';
+const recipeDetail = recipeOwnerText;
 
 /** "3 to buy · 1 claimed by you": what's left on the plan's list, once it has been read. */
 function listDetail(view: CookPlanListView | null, me: UserId | null): string {
@@ -54,6 +86,8 @@ function listDetail(view: CookPlanListView | null, me: UserId | null): string {
  * in it, with "Invite" for more of your Friends. Anyone can leave; the plan goes with its last
  * member. While it's open, anyone's change to the plan shows at once. With no signal it's the
  * copy the phone last read, said so: its list opens, and what needs a connection is turned off.
+ * "We cooked it" (decisions 18), after a confirm, moves it to the archive for everyone: then it's
+ * read-only, and the user's prompt to log and rank each Recipe shows until done or "Not now".
  */
 export default function CookPlanScreen() {
   const rawId = useLocalSearchParams<{ id: string }>().id;
@@ -108,6 +142,22 @@ export default function CookPlanScreen() {
   };
   const notActive = 'This Cook Plan has been cooked; it can’t change now.';
 
+  const markCooked = () =>
+    Alert.alert('We cooked it?', 'The plan moves to Cooked for everyone in it, and can’t be changed after. There’s no undo.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Yes, we cooked it',
+        onPress: () =>
+          change(async () => {
+            const { status } = await data.markCookPlanCooked(plan.id);
+            return status === 'notFound' ? 'You’re not in this Cook Plan any more.' : null;
+          }),
+      },
+    ]);
+
+  const prompt = state.status === 'loaded' ? state.value.prompt : null;
+  const dismissPrompt = () => change(async () => ((await data.dismissCookPlanPrompt(plan.id)).status === 'notFound' ? 'You’re not in this Cook Plan any more.' : null));
+
   const setDay = (day: string | null) =>
     change(async () => {
       const { status } = await data.setCookPlanDate(plan.id, day);
@@ -150,10 +200,32 @@ export default function CookPlanScreen() {
       <Text tone="textMuted" testID="cook-plan-detail">
         {cookPlanDetail(plan, me)}
       </Text>
+      {plan.status === 'cooked' ? (
+        <Text tone="textMuted" testID="cook-plan-cooked">
+          {cookedDetail(plan, me)}
+        </Text>
+      ) : null}
       {offline ? (
         <SyncNotice status="offline" message="You're offline. This is your Cook Plan as it was last loaded." testID="cook-plan-offline" />
       ) : null}
       {error ? <Text tone="danger">{error}</Text> : null}
+
+      {prompt ? (
+        <CookedPrompt
+          title="You cooked it!"
+          message={PROMPT_MESSAGE}
+          recipes={prompt.recipes.map(({ recipe, step }, i) => ({
+            key: recipe.id,
+            title: recipe.title,
+            detail: recipeDetail(recipe, me),
+            ...(step.kind === 'logged'
+              ? { status: 'done', done: promptStepLabel(step) }
+              : { status: 'toDo', action: promptStepLabel(step), onPress: () => openPromptStep(plan, recipe), testID: `prompt-recipe-${i + 1}` }),
+          }))}
+          onDismiss={dismissPrompt}
+          testID="cooked-prompt"
+        />
+      ) : null}
 
       {active ? (
         <View style={{ gap: spacing.sm }}>
@@ -204,6 +276,7 @@ export default function CookPlanScreen() {
         ))}
       </View>
 
+      {active ? <Button label="We cooked it" icon="checkmark-done" onPress={markCooked} testID="we-cooked-it" /> : null}
       <Button label="Leave Cook Plan" variant="danger" icon="exit-outline" onPress={leave} disabled={offline} />
     </Screen>
   );
