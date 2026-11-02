@@ -50,6 +50,8 @@ put_back() {
   exit "$status"
 }
 trap put_back EXIT
+# Keep the Mac from idle-sleeping until this run ends (closing the lid on battery still sleeps it).
+caffeinate -i -w $$ >/dev/null 2>&1 &
 trap 'exit 130' INT
 trap 'exit 143' TERM
 for _ in $(seq 50); do
@@ -77,6 +79,8 @@ export MAESTRO_DRIVER_STARTUP_TIMEOUT="${MAESTRO_DRIVER_STARTUP_TIMEOUT:-360000}
 # How long one flow may take, the driver's start included (the longest flows take about 4 minutes,
 # and the driver up to 6 more). A flow past it is stopped and fails the run: a hung simulator driver
 # (an XCTest request that never answers) would otherwise hold Maestro, and this run, for ever.
+# It's wall-clock time ($SECONDS), so time the Mac spends asleep counts: counting `sleep 1`s
+# instead, a flow that started as the lid closed ran for 2 hours.
 flow_timeout="${E2E_FLOW_TIMEOUT:-900}"
 maestro_pid=""
 stop_maestro() {
@@ -108,14 +112,18 @@ for flow in "${flows[@]}"; do
   scripts/stack-ready.sh
   maestro test "$flow" &
   maestro_pid=$!
-  waited=0
-  while kill -0 "$maestro_pid" 2>/dev/null && [ "$waited" -lt "$flow_timeout" ]; do
+  started=$SECONDS
+  awake=0
+  while kill -0 "$maestro_pid" 2>/dev/null && [ $((SECONDS - started)) -lt "$flow_timeout" ]; do
     sleep 1
-    waited=$((waited + 1))
+    awake=$((awake + 1))
   done
   if kill -0 "$maestro_pid" 2>/dev/null; then
     stop_maestro
     echo "== $flow: no result after ${flow_timeout}s (E2E_FLOW_TIMEOUT), so Maestro was stopped." >&2
+    if [ $((SECONDS - started - awake)) -gt 60 ]; then
+      echo "The Mac was asleep for about $((SECONDS - started - awake))s of it (pmset -g log | grep -E ' (Sleep|Wake) ')." >&2
+    fi
     echo "The simulator's driver may be hung; see the newest ~/.maestro/tests/*/maestro.log." >&2
     echo "Terminate the app (xcrun simctl terminate booted com.ant1007.recipeapp) before running again." >&2
     failed+=("$flow (timed out)")

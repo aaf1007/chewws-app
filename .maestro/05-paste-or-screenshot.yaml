@@ -10,6 +10,9 @@
 # DRAFT_FIXTURES=1: canned TikTok, page and Claude answers (any screenshot reads as the miso salmon),
 # no network. The screenshot goes through the local Storage for real.
 appId: com.ant1007.recipeapp
+env:
+  # It saves a link, so the app asks for notifications; the flow answers (subflows/deny-notifications.yaml).
+  NOTIFICATIONS: unset
 onFlowStart:
   - runScript: scripts/add-photo.js
 ---
@@ -25,6 +28,7 @@ onFlowStart:
     id: "add-screenshot"
 - tapOn:
     id: "save-link"
+- runFlow: subflows/deny-notifications.yaml
 - assertVisible: "There was nothing to read it from, so fill it in from the Reel in Drafts."
 - tapOn: "Done"
 

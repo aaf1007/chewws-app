@@ -1,0 +1,15 @@
+# Answers the system's notification prompt with "Don't Allow". The app asks after the first saved
+# link (ticket 07); a flow that saves one sets `NOTIFICATIONS: unset` in its env and runs this right
+# after that save, before its next tap. Left to `notifications: deny`, Maestro answers the prompt
+# only when it next reads the screen, so a tap that goes out as the prompt appears lands on it and
+# is lost (flow 06's "View Drafts", 2 Nov).
+#   - runFlow: subflows/deny-notifications.yaml
+appId: com.ant1007.recipeapp
+---
+- extendedWaitUntil:
+    visible: ".*Would Like to Send You Notifications.*"
+    timeout: 10000
+- tapOn: "Don.t Allow"
+- extendedWaitUntil:
+    notVisible: ".*Would Like to Send You Notifications.*"
+    timeout: 10000
