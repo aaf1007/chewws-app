@@ -29,7 +29,10 @@ appId: com.ant1007.recipeapp
       id: "friend-ranking"
     timeout: 10000
 - assertVisible: "@sam"
-- assertVisible: "Friends since .*"
+# sam became a Friend just now (sam-cooked-and-ranked.js), so "Friends since" is today, written
+# day, month, year whatever the phone's language.
+- runScript: scripts/today-as-shown.js
+- assertVisible: "Friends since ${output.today}"
 
 # His Ranking, with Scores: alone in Liked 8.4, alone in Didn't like 1.7.
 - assertVisible: "Shakshuka, #1, Score 8.4"
