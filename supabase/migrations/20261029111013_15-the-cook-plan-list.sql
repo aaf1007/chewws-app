@@ -75,10 +75,12 @@ create policy "Members read the Recipe amounts on their Cook Plans' lines"
 -- Building the list ------------------------------------------------------------------------------
 
 -- As in ticket 14, plus `lines`: the list engine's lines for the Recipe (toListLines with no skip,
--- decisions 15), a JSON array of {ingredient_id, amount_texts}. An Ingredient that isn't on one of
--- the Recipe's lines, or comes twice, is refused (22023), as add_recipe_to_shopping_list does. Each
--- joins the plan's line for it, or makes one, with this Recipe's amounts beside the others'; a
--- line's Claim and check are left as they are. Left out, `lines` is none.
+-- decisions 15), a JSON array of {ingredient_id, amount_texts}, one for each of the Recipe's
+-- Ingredients, exactly: an Ingredient that isn't on one of the Recipe's lines, comes twice, or is
+-- left out is refused (22023), so the plan's list always has all of a Recipe. Each joins the
+-- plan's line for it, or makes one, with this Recipe's amounts beside the others'; a line's Claim
+-- and check are left as they are. Left out, `lines` is none, which only a Recipe with no
+-- Ingredients matches.
 drop function public.add_recipe_to_cook_plan(uuid, uuid);
 
 create function public.add_recipe_to_cook_plan(plan_id uuid, recipe_id uuid, lines jsonb default '[]'::jsonb)
@@ -131,8 +133,15 @@ begin
   ) or (
     select count(*) <> count(distinct (line ->> 'ingredient_id')::uuid)
     from jsonb_array_elements(add_recipe_to_cook_plan.lines) as line
+  ) or exists (
+    select 1 from public.recipe_lines rl
+    where rl.recipe_id = add_recipe_to_cook_plan.recipe_id
+      and not exists (
+        select 1 from jsonb_array_elements(add_recipe_to_cook_plan.lines) as line
+        where (line ->> 'ingredient_id')::uuid = rl.ingredient_id
+      )
   ) then
-    raise exception 'Only the Recipe''s own Ingredients can be added with it, each once.' using errcode = '22023';
+    raise exception 'A Recipe is added with each of its own Ingredients, once.' using errcode = '22023';
   end if;
 
   insert into public.cook_plan_recipes (plan_id, recipe_id, added_by)

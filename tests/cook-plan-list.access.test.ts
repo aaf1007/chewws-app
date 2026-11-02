@@ -223,6 +223,34 @@ test("adding a Recipe with Ingredients that aren't its own, or one of them twice
   await expectUnchanged();
 });
 
+test("adding a Recipe with only some of its Ingredients, or with none named, is refused and changes nothing", async () => {
+  const { sam, planId, expectUnchanged } = await plan();
+  const toast = await sam.data.createRecipe({
+    title: 'Toast',
+    lines: [
+      { originalText: 'Bread', amountText: '2 slices', ingredientName: 'bread' },
+      { originalText: 'Jam', amountText: '1 tbsp', ingredientName: 'jam' },
+    ],
+    steps: [],
+  });
+  const bread = (await sam.data.getRecipe(toast))?.lines[0].ingredient.id ?? '';
+
+  const partial = await sam.client.rpc('add_recipe_to_cook_plan', {
+    plan_id: planId,
+    recipe_id: toast,
+    lines: [{ ingredient_id: bread, amount_texts: ['2 slices'] }],
+  });
+  expect(partial.error).toMatchObject({ code: '22023' });
+  const missing = await sam.client.rpc('add_recipe_to_cook_plan', { plan_id: planId, recipe_id: toast });
+  expect(missing.error).toMatchObject({ code: '22023' });
+  expect((await sam.data.getCookPlan(planId))?.recipes.map((r) => r.title)).toEqual(['Garlic bread']);
+  await expectUnchanged();
+
+  // A Recipe with no Ingredients is added with none.
+  const water = await sam.data.createRecipe({ title: 'Water', lines: [], steps: [] });
+  expect((await sam.client.rpc('add_recipe_to_cook_plan', { plan_id: planId, recipe_id: water })).data).toEqual({ status: 'added' });
+});
+
 test('a change that changes nothing answers gone or superseded, never applied, and a change names the plan it is for', async () => {
   const { sam, jo, planId, ids, expectUnchanged } = await plan();
   const rpc = (fn: 'claim_cook_plan_item' | 'unclaim_cook_plan_item' | 'cook_plan_check_off' | 'cook_plan_uncheck', user: Attacker, itemId: string, extra = {}) =>
