@@ -4,15 +4,27 @@
 // all; a check-off goes into the checker's own Pantry. When a Recipe leaves the plan, its lines
 // nobody claimed or checked off go, and the rest stay as "(removed)". Races hold one side in a
 // second database session (CODING_STANDARDS.md).
+import { randomUUID } from 'node:crypto';
+
 import { expect, test, vi } from 'vitest';
 
-import type { CookPlanId, CookPlanList, CookPlanListView, CookPlanListItem, DataLayer, RecipeInput, UserId } from '../src/data';
+import type {
+  CookPlanId,
+  CookPlanList,
+  CookPlanListView,
+  CookPlanListItem,
+  DataLayer,
+  RecipeId,
+  RecipeInput,
+  UserId,
+} from '../src/data';
 import {
   holdCookPlanCheckOff,
   holdCookPlanClaim,
   holdCookPlanRecipeAddWithLines,
   markCookPlanCookedInDatabase,
   signInOnPhones,
+  startCookPlanRecipeAdd,
   signInWithUsername,
   uniqueUsername,
   type TestPhone,
@@ -386,6 +398,63 @@ test('a line checked off while its Recipe is removed stays, "(removed)", and the
     checkedBy: jo.username,
   });
   expect(await pantryNames(jo)).toEqual(['parsley']);
+});
+
+/** An Ingredient name no other test uses: letters only, ending so the matcher leaves it as it is. */
+const freshIngredient = () =>
+  `${randomUUID()
+    .replace(/-/g, '')
+    .slice(0, 10)
+    .replace(/[0-9a-f]/g, (c) => String.fromCharCode(97 + parseInt(c, 16)))}q`;
+
+test('a Recipe added while another sharing two of its Ingredients is removed never deadlocks: the removal goes first, then the add', async () => {
+  const { sam, jo, kim, planId, usernames } = await plan();
+  // sam's spice rub, with two Ingredients of its own, chosen so that the add below locks their
+  // lines in the opposite order to the removal: an add goes by Ingredient, the removal by line.
+  let found: { rub: RecipeId; names: string[]; first: CookPlanListItem } | null = null;
+  for (let attempt = 0; attempt < 30 && !found; attempt += 1) {
+    const names = [freshIngredient(), freshIngredient()];
+    const rub = await sam.data.createRecipe({
+      title: 'Spice rub',
+      lines: names.map((name) => ({ originalText: `1 tsp ${name}`, amountText: '1 tsp', ingredientName: name })),
+      steps: [],
+    });
+    expect(await sam.data.addRecipeToCookPlan(planId, rub)).toEqual({ status: 'added' });
+    const [first, second] = (await sam.data.getCookPlanList(planId)).items
+      .filter((i) => names.includes(i.ingredient.name))
+      .sort((a, b) => (a.id < b.id ? -1 : 1));
+    if (first.ingredient.id > second.ingredient.id) found = { rub, names, first };
+    else expect(await sam.data.removeRecipeFromCookPlan(planId, rub)).toEqual({ status: 'removed' });
+  }
+  if (!found) throw new Error('Never found two lines in opposite orders.');
+  const { rub, names, first } = found;
+  const rubTwo = await jo.data.createRecipe({
+    title: 'Rub two',
+    lines: names.map((name) => ({ originalText: `2 tsp ${name}`, amountText: '2 tsp', ingredientName: name })),
+    steps: [],
+  });
+  const lines = ((await jo.data.getRecipe(rubTwo))?.lines ?? []).map((l) => ({ ingredientId: l.ingredient.id, amountTexts: ['2 tsp'] }));
+
+  // kim claims the line the removal locks first, and hasn't committed: sam's removal waits at it.
+  // jo's add starts meanwhile and waits too. Then kim's Claim lands.
+  const held = await holdCookPlanClaim(kim, planId, first.id, new Date());
+  const removing = sam.data.removeRecipeFromCookPlan(planId, rub);
+  await held.waitForWaiting(1);
+  const adding = await startCookPlanRecipeAdd(jo, planId, rubTwo, lines);
+  await adding.waitUntilBlocked();
+  await held.commit();
+
+  expect(await removing).toEqual({ status: 'removed' });
+  expect(await adding.finish()).toEqual({ status: 'answered', rows: [{ answer: { status: 'added' } }] });
+  const list = readList(await sam.data.getCookPlanList(planId), usernames).filter((l) => names.includes(l.line));
+  expect(list.find((l) => l.line === first.ingredient.name)).toEqual({
+    line: first.ingredient.name,
+    amounts: [['Spice rub (removed)', '1 tsp'], ['Rub two', '2 tsp']],
+    whoHas: [],
+    claimedBy: kim.username,
+    checkedBy: null,
+  });
+  expect(list.find((l) => l.line !== first.ingredient.name)?.amounts).toEqual([['Rub two', '2 tsp']]);
 });
 
 /** Every view a member's Cook Plan list screen would get, while watching it. */

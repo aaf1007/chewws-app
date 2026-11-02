@@ -183,9 +183,13 @@ as $$
 declare
   touched uuid[];
 begin
-  -- Its lines, locked in id order, before deciding what goes: a Claim, check-off or another
-  -- Recipe's amount (an add) on one of them, made meanwhile, waits for this, or finishes first and
-  -- is seen by the statements below, so the line stays.
+  -- The plan row first, as an add takes it before its lines: one change to a plan's Recipes at a
+  -- time, so an add and a removal never lock shared lines in opposite orders (a deadlock). An add
+  -- made meanwhile waits for this, or finishes first and is seen below.
+  perform 1 from public.cook_plans p where p.id = old.plan_id for update;
+  -- Its lines, locked in id order, before deciding what goes: a Claim or check-off on one of them,
+  -- made meanwhile, waits for this, or finishes first and is seen by the statements below, so the
+  -- line stays.
   select array_agg(i.id order by i.id) into touched from (
     select i.id from public.cook_plan_items i
     where i.plan_id = old.plan_id

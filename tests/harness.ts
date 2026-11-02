@@ -890,3 +890,67 @@ export async function cookPlanListPolicies(): Promise<string[]> {
   );
   return rows.map((r) => r.name);
 }
+
+/** What a call started in a second session answered, once it finished. */
+export type StartedCallResult = { status: 'answered'; rows: Record<string, unknown>[] } | { status: 'failed'; code: string };
+
+/**
+ * For race tests only: `user` making one call on another phone, started and not awaited, so it may
+ * stop at a lock someone else holds. `waitUntilBlocked()` resolves once it waits on a lock;
+ * `finish()` waits for the call, commits it (or rolls it back if it failed) and answers what it did,
+ * with the SQLSTATE of a failure (40P01 for a deadlock).
+ */
+export async function startCallAs(user: Someone, sql: string, params: unknown[]) {
+  const session = new pg.Client({ connectionString: inject('supabase').dbUrl });
+  await session.connect();
+  await session.query('begin');
+  await session.query("select set_config('request.jwt.claims', $1, true)", [
+    JSON.stringify({ sub: user.userId, role: 'authenticated' }),
+  ]);
+  await session.query('set local role authenticated');
+  const { rows } = await session.query<{ pid: number }>('select pg_backend_pid() as pid');
+  const pid = rows[0].pid;
+  const call: Promise<StartedCallResult> = session.query(sql, params).then(
+    (result) => ({ status: 'answered', rows: result.rows }),
+    (e: unknown) => ({
+      status: 'failed',
+      code: typeof e === 'object' && e !== null && 'code' in e ? String(e.code) : String(e),
+    }),
+  );
+  return {
+    async waitUntilBlocked() {
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        const [row] = await asDatabaseOwner<{ waiting: boolean }>(
+          `select coalesce(bool_or(wait_event_type = 'Lock'), false) as waiting from pg_stat_activity where pid = $1`,
+          [pid],
+        );
+        if (row.waiting) return;
+        if (Date.now() > deadline) throw new Error('The started call never waited on a lock.');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    },
+    async finish(): Promise<StartedCallResult> {
+      const result = await call;
+      await session.query(result.status === 'answered' ? 'commit' : 'rollback');
+      await session.end();
+      return result;
+    },
+  };
+}
+
+/**
+ * For race tests only: `user` adding their Recipe to a Cook Plan on another phone, with its list
+ * lines, started and not awaited (see `startCallAs`).
+ */
+export const startCookPlanRecipeAdd = (
+  user: Someone,
+  planId: string,
+  recipeId: string,
+  lines: { ingredientId: string; amountTexts: string[] }[],
+) =>
+  startCallAs(user, 'select public.add_recipe_to_cook_plan($1, $2, $3::jsonb) as answer', [
+    planId,
+    recipeId,
+    JSON.stringify(lines.map((l) => ({ ingredient_id: l.ingredientId, amount_texts: l.amountTexts }))),
+  ]);
