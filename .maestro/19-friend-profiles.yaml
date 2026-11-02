@@ -1,0 +1,83 @@
+# Ticket 19: Friend profiles. sam is the dev user's Friend, with Shakshuka, Dal and Toast logged and
+# Shakshuka (Liked) and Dal (Didn't like) ranked (scripts/sam-cooked-and-ranked.js). The dev user
+# opens sam's profile from Friends: his username, "Friends since", his Ranking with Scores and his
+# Cook Logs, newest first. They open his ranked Shakshuka, save their own copy, and are offered
+# "Open your copy". Then sam unfriends them on his phone (scripts/sam-unfriends-dev.js) while the
+# profile is open: the next read of it (coming back to it) says "Profile not found".
+# Run with `npm run e2e -- .maestro/19-friend-profiles.yaml` (the scripts ask
+# scripts/net-control.mjs, which scripts/e2e.sh runs). One phone, no network. That a stranger and an
+# unfriended user read nothing, and a Friend only ranked or logged Recipes, is proved in
+# tests/friend-profiles.test.ts and tests/friend-profiles.access.test.ts.
+appId: com.ant1007.recipeapp
+---
+- runScript: scripts/sam-cooked-and-ranked.js
+- runFlow: subflows/sign-in-dev.yaml
+
+# Friends > sam opens his profile.
+- tapOn:
+    id: "tab-profile"
+- tapOn:
+    id: "friends-row"
+- extendedWaitUntil:
+    visible:
+      id: "friend-sam"
+    timeout: 10000
+- tapOn:
+    id: "friend-sam"
+- extendedWaitUntil:
+    visible:
+      id: "friend-ranking"
+    timeout: 10000
+- assertVisible: "@sam"
+- assertVisible: "Friends since .*"
+
+# His Ranking, with Scores: alone in Liked 8.4, alone in Didn't like 1.7.
+- assertVisible: "Shakshuka, #1, Score 8.4"
+- assertVisible: "Dal, #1, Score 1.7"
+
+# His Cook Logs, newest first: Toast and Dal yesterday (Toast logged last), Shakshuka before, with
+# the dev user.
+- scrollUntilVisible:
+    element:
+      id: "friend-cook-log-3"
+    direction: DOWN
+    timeout: 30000
+- assertVisible: "Cook Log, Toast, .*"
+- assertVisible: "Cook Log, Dal, .*"
+- assertVisible: "Cook Log, Shakshuka, .*, with @dev"
+- assertVisible: "Smoky, extra feta"
+- assertNotVisible: "Show more Cook Logs"
+
+# His ranked Shakshuka: read it, and save your own copy.
+- scrollUntilVisible:
+    element: "Shakshuka, #1, Score 8.4"
+    direction: UP
+    timeout: 30000
+- tapOn: "Shakshuka, #1, Score 8.4"
+- extendedWaitUntil:
+    visible: "@sam's Recipe"
+    timeout: 10000
+- assertVisible: "4 eggs"
+- tapOn: "Save your own copy"
+- extendedWaitUntil:
+    visible: "Open your copy"
+    timeout: 10000
+- assertVisible: "Saved to your library."
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible:
+      id: "friend-ranking"
+    timeout: 10000
+
+# sam unfriends the dev user while the profile is open. Opening his Recipe now finds nothing, and
+# coming back, the profile is read again: not found, as for anyone who isn't a Friend.
+- runScript: scripts/sam-unfriends-dev.js
+- tapOn: "Dal, #1, Score 1.7"
+- extendedWaitUntil:
+    visible: "Recipe not found"
+    timeout: 10000
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "Profile not found"
+    timeout: 10000
+- assertNotVisible: "Shakshuka, #1, Score 8.4"
