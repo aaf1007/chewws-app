@@ -466,6 +466,40 @@ export type SetCookPlanDateResult = { status: 'set' | 'notActive' | 'notFound' }
 /** What `copyRecipe` did: made the user's own copy, or couldn't (they may not read it, or it's gone). */
 export type CopyRecipeResult = { status: 'copied'; recipeId: RecipeId } | { status: 'notFound' };
 
+/**
+ * What "We cooked it" did (decisions 18). Only `cooked` changed anything; `alreadyCooked`: another
+ * member (or another phone) marked it first; `notFound`: the user isn't in that plan.
+ */
+export type MarkCookPlanCookedResult = { status: 'cooked' | 'alreadyCooked' | 'notFound' };
+
+/** What "Not now" on a cooked plan's prompt did, for this user only. Only `dismissed` changed anything. */
+export type DismissCookPlanPromptResult = { status: 'dismissed' | 'notCooked' | 'notFound' };
+
+/**
+ * What the prompt offers for one of a cooked plan's Recipes (decisions 18). `logged`: the user has a
+ * Cook Log from this plan on it (or on their copy of it). `logYours`: it's theirs, to log as it is.
+ * `useYourCopy`: someone else's, and the user already has their own copy (`copyId`, the newest),
+ * which the log and Ranking go on. `saveYourCopy`: someone else's, with no copy yet: save one first.
+ */
+export type CookPlanPromptStep =
+  | { kind: 'logged' }
+  | { kind: 'logYours' }
+  | { kind: 'useYourCopy'; copyId: RecipeId }
+  | { kind: 'saveYourCopy' };
+
+/**
+ * A cooked plan's prompt for the signed-in user (decisions 18): each of its Recipes with what to do
+ * next, and what a Cook Log from it starts with: `cookedOn`, the plan's day if it had one that isn't
+ * in the future, else the day it was marked cooked on this phone; `companions`, everyone else in the
+ * plan, Friends or not.
+ */
+export type CookPlanPrompt = {
+  planId: CookPlanId;
+  cookedOn: string;
+  companions: { id: UserId; username: string | null }[];
+  recipes: { recipe: CookPlanRecipe; step: CookPlanPromptStep }[];
+};
+
 /** A photo on a Cook Log, as a link valid for an hour (null when no link could be made: no signal). */
 export type CookLogPhoto = { id: CookLogPhotoId; url: string | null };
 
