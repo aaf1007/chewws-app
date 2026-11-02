@@ -1818,14 +1818,19 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
 
   /**
    * Deletes one of the user's Cook Logs and its photos (best effort), and says whether its Recipe
-   * is still Cooked or is Saved again (its last log gone).
+   * is still Cooked or is Saved again (its last log gone). A log already gone (a delete sent again
+   * after its answer was lost) answers `notFound`, and its photos still go: the folder is the
+   * user's own, and no log of theirs has that id.
    */
   async function deleteCookLog(logId: CookLogId): Promise<DeleteCookLogResult> {
     const me = await currentUserId();
     const { data, error } = await client.rpc('delete_cook_log', { id: logId });
     if (error) fail(error);
     const status = statusOf('delete_cook_log', data, ['deleted', 'notFound']);
-    if (status === 'notFound') return { status };
+    if (status === 'notFound') {
+      await removeCookLogPhotos(me, logId);
+      return { status };
+    }
     const recipe = fieldOf(data, 'recipe');
     if (recipe !== 'cooked' && recipe !== 'saved') throw new DataError('unknown', 'delete_cook_log answered oddly.');
     await removeCookLogPhotos(me, logId);

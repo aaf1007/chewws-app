@@ -9,6 +9,7 @@ import type { CookLog, CookLogId, CookLogInput, RecipeId, RecipeInput } from '..
 import { FULL_RECIPE } from '../supabase/functions/_shared/draft-fixtures';
 import {
   holdCookLogAdd,
+  signInOnPhones,
   holdCookLogCompanionsAdd,
   holdCookLogDelete,
   signInWithUsername,
@@ -371,6 +372,23 @@ test('two phones deleting one Cook Log at once: one deletes it, the other is tol
   expect(await deleting).toEqual({ status: 'notFound' });
   expect(await me.data.listCookLogs(recipe)).toEqual([]);
   expect(await me.data.searchRecipes('', { cooked: true })).toEqual([]);
+});
+
+test('a delete sent again after its answer was lost still removes the photos', async () => {
+  const [phone] = await signInOnPhones('cook', 1);
+  const recipe = await phone.data.createRecipe(shakshuka);
+  const id = await added(phone, recipe, { cookedOn: '2026-10-30', photos: [{ kind: 'new', jpeg: screenshotBytes() }] });
+  expect(await storedCookLogPhotos(phone)).toHaveLength(1);
+
+  // The delete reaches the server, but the signal drops before its answer comes back.
+  phone.loseNextAnswer('delete_cook_log');
+  await expect(phone.data.deleteCookLog(id)).rejects.toMatchObject({ code: 'offline' });
+  expect(await phone.data.listCookLogs(recipe)).toEqual([]);
+  expect(await storedCookLogPhotos(phone)).toHaveLength(1);
+
+  // Sent again: the log is gone already, and its photo goes now.
+  expect(await phone.data.deleteCookLog(id)).toEqual({ status: 'notFound' });
+  expect(await storedCookLogPhotos(phone)).toEqual([]);
 });
 
 test('a Cook Log can have at most 4 photos, however they are added', async () => {
