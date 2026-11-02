@@ -3,6 +3,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
 import { useEffect } from 'react';
 
+import { useDraftReadyNotifications } from '@/notifications';
 import { SessionProvider, useSession } from '@/session';
 import { colors } from '@/ui';
 
@@ -20,6 +21,7 @@ export default function RootLayout() {
 
 function RootNavigator() {
   const session = useSession();
+  useDraftReadyNotifications(session);
 
   useEffect(() => {
     if (session.status !== 'loading') SplashScreen.hideAsync();

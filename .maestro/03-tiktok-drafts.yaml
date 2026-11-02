@@ -5,6 +5,9 @@
 # The share sheet can't be driven here; it opens the save screen with the shared link, which the
 # recipeapp://save?url=… link below does too (the share path itself was checked by hand).
 appId: com.ant1007.recipeapp
+env:
+  # It saves a link, so the app asks for notifications; the flow answers (subflows/deny-notifications.yaml).
+  NOTIFICATIONS: unset
 ---
 - runFlow: subflows/sign-in-dev.yaml
 - assertVisible: "No recipes yet"
@@ -19,6 +22,7 @@ appId: com.ant1007.recipeapp
 - assertVisible: "TikTok, TikTok video, https://www.tiktok.com/@pastaqueen/video/7400000000000000001"
 - tapOn:
     id: "save-link"
+- runFlow: subflows/deny-notifications.yaml
 - assertVisible: "Saved as a Draft"
 - tapOn: "View Drafts"
 
