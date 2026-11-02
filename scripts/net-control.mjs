@@ -16,7 +16,9 @@
 // sam adding a Recipe to the dev user's plan's list, claiming a line on it, checking it has the dev
 // user's changes, and taking his Recipe out), and /dev-cooked-recipes (ticket 17: the dev user's
 // Cooked Recipes, two of them ranked), and /plans-with-sam and /sam-marks-plan-cooked (ticket 18:
-// two Cook Plans with sam; sam marking the newest one cooked); nothing else. Listens on 127.0.0.1 only.
+// two Cook Plans with sam; sam marking the newest one cooked), and /sam-cooked-and-ranked and
+// /sam-unfriends-dev (ticket 19: sam a Friend with Cook Logs and a Ranking; sam unfriending the dev
+// user); nothing else. Listens on 127.0.0.1 only.
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
@@ -48,6 +50,8 @@ const commands = {
   '/dev-cooked-recipes': [process.execPath, [script('./e2e-db.mjs'), 'dev-cooked-recipes']],
   '/plans-with-sam': [process.execPath, [script('./e2e-db.mjs'), 'plans-with-sam']],
   '/sam-marks-plan-cooked': [process.execPath, [script('./e2e-db.mjs'), 'sam-marks-plan-cooked']],
+  '/sam-cooked-and-ranked': [process.execPath, [script('./e2e-db.mjs'), 'sam-cooked-and-ranked']],
+  '/sam-unfriends-dev': [process.execPath, [script('./e2e-db.mjs'), 'sam-unfriends-dev']],
 };
 
 createServer((req, res) => {

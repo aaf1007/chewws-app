@@ -1231,6 +1231,13 @@ export type Database = {
           with_usernames: string[]
         }[]
       }
+      recipe_titles: {
+        Args: { recipe_ids: string[] }
+        Returns: {
+          id: string
+          title: string
+        }[]
+      }
       register_push_token: { Args: { token: string }; Returns: undefined }
       remove_recipe_from_cook_plan: {
         Args: { plan_id: string; recipe_id: string }

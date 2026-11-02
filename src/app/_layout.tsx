@@ -75,6 +75,7 @@ function RootNavigator() {
         <Stack.Screen name="drafts" options={{ title: '' }} />
         <Stack.Screen name="draft/[id]" options={{ title: '' }} />
         <Stack.Screen name="friends" options={{ title: '' }} />
+        <Stack.Screen name="friend/[id]" options={{ title: '' }} />
         <Stack.Screen name="share-shopping-list" options={{ title: '' }} />
         <Stack.Screen name="cook-plan/new" options={{ title: '' }} />
         <Stack.Screen name="cook-plan/[id]/index" options={{ title: '' }} />

@@ -62,6 +62,13 @@
 //   node scripts/e2e-db.mjs sam-marks-plan-cooked
 //     sam marks the newest active Cook Plan the dev user started that he is in cooked
 //     (mark_cook_plan_cooked, as sam): "We cooked it" on his phone.
+//   node scripts/e2e-db.mjs sam-cooked-and-ranked
+//     sam and the dev user become Friends, and sam writes Shakshuka, Dal and Toast, logs Shakshuka
+//     two days ago ("Smoky, extra feta", with the dev user), Dal and Toast yesterday, and ranks
+//     Shakshuka in Liked and Dal in Didn't like (ticket 19), all as sam, as his phone would. Toast is
+//     logged, not ranked.
+//   node scripts/e2e-db.mjs sam-unfriends-dev
+//     sam unfriends the dev user (unfriend, as sam).
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -390,6 +397,32 @@ const commands = {
     const [{ answer }] = await asUser(SAM, 'select public.mark_cook_plan_cooked($1) as answer', [planId]);
     if (answer.status !== 'cooked') throw new Error(`sam's "We cooked it": ${JSON.stringify(answer)}`);
     console.log(`sam marked ${planId} cooked`);
+  },
+  async 'sam-cooked-and-ranked'() {
+    await befriend(SAM, DEV_USER);
+    const ids = {};
+    for (const [title, line, daysAgo, notes, companions] of [
+      ['Shakshuka', { original_text: '4 eggs', amount_text: '4', ingredient_name: 'egg' }, 2, 'Smoky, extra feta', [DEV_USER]],
+      ['Dal', { original_text: '200g lentils', amount_text: '200g', ingredient_name: 'lentil' }, 1, 'Too salty', []],
+      ['Toast', { original_text: '2 slices bread', amount_text: '2 slices', ingredient_name: 'bread' }, 1, null, []],
+    ]) {
+      ids[title] = await samWrites(title, [line]);
+      const [{ logged }] = await asUser(
+        SAM,
+        "select public.add_cook_log(gen_random_uuid(), $1, (now() at time zone 'utc')::date - $2::int, $3, $4::uuid[]) as logged",
+        [ids[title], daysAgo, notes, companions],
+      );
+      if (logged.status !== 'added') throw new Error(`sam's ${title}: ${JSON.stringify(logged)}`);
+    }
+    for (const [title, band] of [['Shakshuka', 'liked'], ['Dal', 'disliked']]) {
+      const [{ placed }] = await asUser(SAM, 'select public.place_in_ranking($1, $2, 1, $3::uuid[]) as placed', [ids[title], band, []]);
+      if (placed.status !== 'placed') throw new Error(`ranking sam's ${title}: ${JSON.stringify(placed)}`);
+    }
+    console.log("sam is the dev user's Friend, with three Cook Logs and two Recipes ranked");
+  },
+  async 'sam-unfriends-dev'() {
+    await asUser(SAM, 'select public.unfriend($1)', [DEV_USER]);
+    console.log('sam unfriended the dev user');
   },
   async 'alex-accepts'() {
     const [{ answer }] = await asUser(ALEX, 'select public.respond_to_friend_request($1, true) as answer', [DEV_USER]);
