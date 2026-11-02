@@ -29,6 +29,16 @@
 //     beans and Oat milk checked off by the dev user, and Dish soap from sam.
 //   node scripts/e2e-db.mjs sam-stops-sharing
 //     sam stops sharing their list with the dev user (stop_sharing_shopping_list, as sam).
+//   node scripts/e2e-db.mjs befriend-sam
+//     sam and the dev user become Friends (sam asks, the dev user accepts), so the dev user has
+//     someone to invite into a Cook Plan (ticket 14).
+//   node scripts/e2e-db.mjs sam-adds-recipe-to-plan
+//     sam writes "Sam's shakshuka" and adds it to the newest Cook Plan the dev user started that sam
+//     is in (create_recipe, add_recipe_to_cook_plan, as sam).
+//   node scripts/e2e-db.mjs sam-invites-dev
+//     sam starts a Cook Plan with his "Sam's flatbread" in it and invites the dev user (as sam), and
+//     .maestro/assets/cook-plan-invite.apns, "@sam invited you to cook: Sam's flatbread", goes to the
+//     app on the booted simulator, as the notify function would send it through Expo.
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -90,6 +100,18 @@ async function samAdds(text) {
   const [list] = await query('select id from public.shopping_lists where owner_id = $1', [SAM]);
   const [{ added }] = await asUser(SAM, 'select public.add_manual_item($1, $2, $3) as added', [list.id, text, text.toLowerCase()]);
   if (added !== 'added') throw new Error(`sam's ${text}: ${added}`);
+}
+
+/** sam writes a Recipe by hand, as his phone would, and answers its id. */
+async function samWrites(title, lines) {
+  const [{ id }] = await asUser(SAM, 'select public.create_recipe($1, $2, $3) as id', [title, ['Simmer, then serve.'], JSON.stringify(lines)]);
+  return id;
+}
+
+/** sam adds his Recipe to a Cook Plan, as his phone would. */
+async function samAddsToPlan(planId, recipeId) {
+  const [{ answer }] = await asUser(SAM, 'select public.add_recipe_to_cook_plan($1, $2) as answer', [planId, recipeId]);
+  if (answer.status !== 'added') throw new Error(`sam's add: ${JSON.stringify(answer)}`);
 }
 
 /** Delivers a notification to the app on the booted simulator, as the push service would. */
@@ -175,6 +197,37 @@ const commands = {
     const [{ answer }] = await asUser(SAM, 'select public.stop_sharing_shopping_list($1) as answer', [DEV_USER]);
     if (answer.status !== 'stopped') throw new Error(`sam's stop: ${JSON.stringify(answer)}`);
     console.log('sam stopped sharing their list with the dev user');
+  },
+  async 'befriend-sam'() {
+    await befriend(SAM, DEV_USER);
+    console.log('sam and the dev user are Friends');
+  },
+  async 'sam-adds-recipe-to-plan'() {
+    const [plan] = await query(
+      `select p.id from public.cook_plans p
+       join public.cook_plan_members m on m.plan_id = p.id and m.user_id = $2
+       where p.creator_id = $1 and p.status = 'active' order by p.created_at desc limit 1`,
+      [DEV_USER, SAM],
+    );
+    if (!plan) throw new Error('sam is in no Cook Plan of the dev user.');
+    const recipeId = await samWrites("Sam's shakshuka", [
+      { original_text: '4 eggs', amount_text: '4', ingredient_name: 'egg' },
+      { original_text: '1 tin tomatoes', amount_text: '1 tin', ingredient_name: 'tomato' },
+    ]);
+    await samAddsToPlan(plan.id, recipeId);
+    console.log(`sam added his shakshuka to ${plan.id}`);
+  },
+  async 'sam-invites-dev'() {
+    const [{ planId }] = await asUser(SAM, 'select public.create_cook_plan(null) as "planId"', []);
+    await samAddsToPlan(planId, await samWrites("Sam's flatbread", [
+      { original_text: '300g flour', amount_text: '300g', ingredient_name: 'flour' },
+    ]));
+    const [{ answer }] = await asUser(SAM, 'select public.invite_to_cook_plan($1, $2) as answer', [planId, DEV_USER]);
+    if (answer.status !== 'invited') throw new Error(`sam's invite: ${JSON.stringify(answer)}`);
+    simulatorPush('cook-plan-invite.apns', (payload) => {
+      payload.body.cookPlanId = planId;
+    });
+    console.log(`sam invited the dev user to ${planId}`);
   },
   async 'alex-accepts'() {
     const [{ answer }] = await asUser(ALEX, 'select public.respond_to_friend_request($1, true) as answer', [DEV_USER]);

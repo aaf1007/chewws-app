@@ -72,6 +72,10 @@ function RootNavigator() {
         <Stack.Screen name="draft/[id]" options={{ title: '' }} />
         <Stack.Screen name="friends" options={{ title: '' }} />
         <Stack.Screen name="share-shopping-list" options={{ title: '' }} />
+        <Stack.Screen name="cook-plan/new" options={{ title: '' }} />
+        <Stack.Screen name="cook-plan/[id]/index" options={{ title: '' }} />
+        <Stack.Screen name="cook-plan/[id]/invite" options={{ title: '' }} />
+        <Stack.Screen name="cook-plan/[id]/add-recipe" options={{ title: '' }} />
         <Stack.Screen name="username" options={{ title: '' }} />
       </Stack.Protected>
       <Stack.Protected guard={session.status === 'signedOut'}>

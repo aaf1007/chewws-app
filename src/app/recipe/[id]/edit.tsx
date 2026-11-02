@@ -8,10 +8,13 @@ import { EmptyState, Screen } from '@/ui';
 export default function EditRecipe() {
   const state = useRecipe(useLocalSearchParams<{ id: string }>().id);
 
-  if (state.status !== 'loaded') {
+  // Someone else's Recipe (one in a Cook Plan) is theirs to edit; you edit your own copy.
+  if (state.status !== 'loaded' || state.recipe.status === 'someoneElses') {
     return (
       <Screen>
-        {state.status === 'loading' ? null : (
+        {state.status === 'loading' ? null : state.status === 'loaded' ? (
+          <EmptyState icon="alert-circle-outline" title="Not your Recipe" message="Save your own copy to change it." />
+        ) : (
           <EmptyState icon="alert-circle-outline" title="Recipe not found" message={state.message} />
         )}
       </Screen>

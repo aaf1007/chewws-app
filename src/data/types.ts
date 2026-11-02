@@ -4,6 +4,7 @@ export type IngredientId = string & { readonly __brand: 'IngredientId' };
 export type ShoppingListId = string & { readonly __brand: 'ShoppingListId' };
 export type ShoppingListItemId = string & { readonly __brand: 'ShoppingListItemId' };
 export type TagId = string & { readonly __brand: 'TagId' };
+export type CookPlanId = string & { readonly __brand: 'CookPlanId' };
 
 /**
  * A user's Profile. `username` is null until they choose one. Your own Profile also says when you
@@ -148,7 +149,8 @@ type RecipeFields = {
 
 /**
  * A Recipe in the user's library (`reviewed`), or a `draft` the Draft builder fills in and the
- * user hasn't reviewed yet, with where its build is.
+ * user hasn't reviewed yet, with where its build is, or `someoneElses`: another user's Recipe the
+ * user may read (one in a Cook Plan they're in, decisions 14), which they can copy but not change.
  */
 export type Recipe =
   | (RecipeFields & {
@@ -157,6 +159,18 @@ export type Recipe =
       tags: Tag[];
       /** When the user marked it Want to Cook; null when it isn't marked. */
       wantToCookSince: string | null;
+      /**
+       * Present on a copy of someone else's Recipe (`copyRecipe`): whose it was, by username, while
+       * the user may still see their Profile ("Saved from @sam"; null once they can't).
+       */
+      savedFrom?: { username: string | null };
+    })
+  | (RecipeFields & {
+      status: 'someoneElses';
+      /** Whose it is: their username while the user may see their Profile, else null. */
+      owner: { id: UserId; username: string | null };
+      /** The user's newest copy of it, if they have one ("Open your copy"). */
+      yourCopy: RecipeId | null;
     })
   | (RecipeFields & {
       status: 'draft';
@@ -320,6 +334,72 @@ export type ShoppingListView =
   /** Couldn't be read, and this phone has never seen it (code `offline` with no signal). */
   | { status: 'failed'; error: DataError; sync: ListSync; notSaved: NotSavedListChange[] };
 
+/** Someone in a Cook Plan: who, who invited them (null: they started it), and when they joined. */
+export type CookPlanMember = {
+  id: UserId;
+  /** Null only for a user with no username yet. */
+  username: string | null;
+  invitedBy: UserId | null;
+  joinedAt: string;
+};
+
+/** A Recipe in a Cook Plan: whose it is (their username while the user may see it) and who added it. */
+export type CookPlanRecipe = {
+  id: RecipeId;
+  title: string;
+  owner: { id: UserId; username: string | null };
+  addedBy: UserId | null;
+  addedAt: string;
+};
+
+/**
+ * A Cook Plan the signed-in user is in (decisions 14): its optional day (`cookOn`, a calendar date
+ * `YYYY-MM-DD`, no time or zone), everyone in it (by username) and its Recipes, oldest added first.
+ * `active` until "We cooked it" (ticket 18) makes it `cooked`.
+ */
+export type CookPlan = {
+  id: CookPlanId;
+  creatorId: UserId | null;
+  cookOn: string | null;
+  createdAt: string;
+  members: CookPlanMember[];
+  recipes: CookPlanRecipe[];
+} & ({ status: 'active' } | { status: 'cooked'; cookedAt: string; cookedBy: UserId | null });
+
+/** What inviting a Friend into a Cook Plan did. Only `invited` changed anything. */
+export type InviteToCookPlanResult = {
+  status: 'invited' | 'notFriends' | 'alreadyMember' | 'full' | 'notActive' | 'notFound';
+};
+
+/** What `createCookPlan` did: the new plan, and how each Friend's invite went. */
+export type CreateCookPlanResult = {
+  planId: CookPlanId;
+  invites: { friendId: UserId; status: InviteToCookPlanResult['status'] }[];
+};
+
+/**
+ * What adding a Recipe to a Cook Plan did. `noSuchRecipe`: the user has no reviewed Recipe by that
+ * id (only your own can be added). Only `added` changed anything.
+ */
+export type AddRecipeToCookPlanResult = {
+  status: 'added' | 'alreadyAdded' | 'full' | 'noSuchRecipe' | 'notActive' | 'notFound';
+};
+
+/** What removing a Recipe from a Cook Plan did. Only `removed` changed anything. */
+export type RemoveRecipeFromCookPlanResult = { status: 'removed' | 'notInPlan' | 'notActive' | 'notFound' };
+
+/** What leaving a Cook Plan did: left (and whether the plan went with you, its last member), or not in it. */
+export type LeaveCookPlanResult = { status: 'left'; planDeleted: boolean } | { status: 'notMember' };
+
+/** What setting a Cook Plan's day did. */
+export type SetCookPlanDateResult = { status: 'set' | 'notActive' | 'notFound' };
+
+/** What `copyRecipe` did: made the user's own copy, or couldn't (they may not read it, or it's gone). */
+export type CopyRecipeResult = { status: 'copied'; recipeId: RecipeId } | { status: 'notFound' };
+
+/** An active Cook Plan one of the user's Recipes is in, with the others in it, by username. */
+export type RecipeCookPlan = { id: CookPlanId; cookOn: string | null; withUsernames: string[] };
+
 export type IdTokenProvider = 'apple' | 'google';
 
 export class DataError extends Error {
@@ -412,6 +492,27 @@ export function parseTagId(raw: string): TagId {
   }
   // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the one brand constructor
   return raw as TagId;
+}
+
+export function parseCookPlanId(raw: string): CookPlanId {
+  if (!UUID.test(raw)) {
+    throw new DataError('invalid_cook_plan_id', `Not a Cook Plan id: ${raw}`);
+  }
+  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the one brand constructor
+  return raw as CookPlanId;
+}
+
+/**
+ * The Cook Plan a tapped "Cook Plan invite" notification opens, from its data `{ kind:
+ * 'cookPlanInvite', cookPlanId }` (decisions 14). Null for any other notification, or data that
+ * isn't that.
+ */
+export function parseCookPlanInvitePush(data: unknown): CookPlanId | null {
+  if (typeof data !== 'object' || data === null) return null;
+  const kind: unknown = Reflect.get(data, 'kind');
+  const cookPlanId: unknown = Reflect.get(data, 'cookPlanId');
+  if (kind !== 'cookPlanInvite' || typeof cookPlanId !== 'string' || !UUID.test(cookPlanId)) return null;
+  return parseCookPlanId(cookPlanId);
 }
 
 export function parseShoppingListItemId(raw: string): ShoppingListItemId {

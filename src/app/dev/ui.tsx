@@ -6,6 +6,7 @@ import {
   ActionButtons,
   AddField,
   Button,
+  DayPicker,
   DraftBanner,
   EmptyState,
   FilterTiles,
@@ -68,6 +69,7 @@ export default function UiGallery() {
   const [query, setQuery] = useState('');
   const [view, setView] = useState<'list' | 'map'>('list');
   const [whichList, setWhichList] = useState('mine');
+  const [cookOn, setCookOn] = useState<string | null>('2026-11-02');
   const [title, setTitle] = useState('Garlic bread');
   const [line, setLine] = useState({
     originalText: '2 cloves garlic, minced',
@@ -271,6 +273,9 @@ export default function UiGallery() {
         value={whichList}
         onChange={setWhichList}
       />
+
+      <SectionHeader title="Day picker" />
+      <DayPicker value={cookOn} onChange={setCookOn} today="2026-10-31" />
 
       <SectionHeader title="Floating segment" />
       <View style={styles.segmentArea}>

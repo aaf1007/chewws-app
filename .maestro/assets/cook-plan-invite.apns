@@ -1,0 +1,7 @@
+{
+  "Simulator Target Bundle": "com.ant1007.recipeapp",
+  "aps": {
+    "alert": { "title": "Cook Plan invite", "body": "@sam invited you to cook: Sam's flatbread" }
+  },
+  "body": { "kind": "cookPlanInvite", "cookPlanId": "00000000-0000-4000-8000-000000000000" }
+}

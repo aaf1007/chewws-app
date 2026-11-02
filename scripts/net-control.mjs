@@ -9,7 +9,10 @@
 // seeded sam asking the dev user to be Friends, with the push; the seeded alex_cooks accepting the
 // dev user's request), and /befriend-alex, /sam-shares-list, /sam-adds-item, /check-sams-list and
 // /sam-stops-sharing (ticket 13: alex_cooks a Friend to share with; sam sharing their list with the
-// dev user, adding to it, checking it has the dev user's changes, and stopping); nothing else. Listens on 127.0.0.1 only.
+// dev user, adding to it, checking it has the dev user's changes, and stopping), and /befriend-sam,
+// /sam-adds-recipe-to-plan and /sam-invites-dev (ticket 14: sam a Friend to invite; sam adding a
+// Recipe of his to the dev user's Cook Plan; sam inviting the dev user to his own, with the push);
+// nothing else. Listens on 127.0.0.1 only.
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +34,9 @@ const commands = {
   '/sam-adds-item': [process.execPath, [script('./e2e-db.mjs'), 'sam-adds-item']],
   '/check-sams-list': [process.execPath, [script('./e2e-db.mjs'), 'check-sams-list']],
   '/sam-stops-sharing': [process.execPath, [script('./e2e-db.mjs'), 'sam-stops-sharing']],
+  '/befriend-sam': [process.execPath, [script('./e2e-db.mjs'), 'befriend-sam']],
+  '/sam-adds-recipe-to-plan': [process.execPath, [script('./e2e-db.mjs'), 'sam-adds-recipe-to-plan']],
+  '/sam-invites-dev': [process.execPath, [script('./e2e-db.mjs'), 'sam-invites-dev']],
 };
 
 createServer((req, res) => {

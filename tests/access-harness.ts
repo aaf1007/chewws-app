@@ -141,6 +141,11 @@ export function inProcessDraftBuilds(fakes: DraftFakes = {}) {
 export type Notifications = {
   /** Every push sent, in order, through the recording push sender (none really goes). */
   pushesSent(): PushMessage[];
+  /**
+   * Kicks the notify function as this user, for anything, as a tampered app could; the server
+   * decides whether a push is due.
+   */
+  kick(request: NotifyRequest): Promise<void>;
 };
 
 /**
@@ -165,7 +170,7 @@ export function inProcessNotifications(client: SupabaseClient<Database>, fakes: 
     if (error) throw error;
     await notify(data.user.id, request, { rpc, sendPush });
   };
-  const notifications: Notifications = { pushesSent: push.sent };
+  const notifications: Notifications = { pushesSent: push.sent, kick: sendNotification };
   return { notifications, sendNotification };
 }
 
