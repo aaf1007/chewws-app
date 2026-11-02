@@ -28,12 +28,16 @@ export function formatDay(day: Day, today: Day = localToday()): string {
  * Which day something is planned for, or none: pills for "No day", "Today", "Tomorrow" and the
  * next two weeks ("Sat 2 Nov"), scrolling sideways. A day already chosen outside them (a past one,
  * say) shows as its own pill after "No day". The chosen one is filled with the accent.
+ *
+ * `range="past"`, for a day something happened (a Cook Log's): "Today", "Yesterday" and the days
+ * before, newest first, and no "No day".
  */
 export function DayPicker({
   value,
   onChange,
   today = localToday(),
   days = 14,
+  range = 'next',
   testID,
 }: {
   value: Day | null;
@@ -41,12 +45,15 @@ export function DayPicker({
   today?: Day;
   /** How many days from today to offer. */
   days?: number;
+  range?: 'next' | 'past';
   testID?: string;
 }) {
-  const offered = Array.from({ length: days }, (_, i) => plusDays(today, i));
-  const label = (day: Day, i: number) => (i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : formatDay(day, today));
+  const step = range === 'past' ? -1 : 1;
+  const offered = Array.from({ length: days }, (_, i) => plusDays(today, i * step));
+  const near = range === 'past' ? 'Yesterday' : 'Tomorrow';
+  const label = (day: Day, i: number) => (i === 0 ? 'Today' : i === 1 ? near : formatDay(day, today));
   const options = [
-    { value: 'none', label: 'No day' },
+    ...(range === 'next' ? [{ value: 'none', label: 'No day' }] : []),
     ...(value !== null && !offered.includes(value) ? [{ value, label: formatDay(value, today) }] : []),
     ...offered.map((day, i) => ({ value: day, label: label(day, i) })),
   ];

@@ -6,6 +6,8 @@ import {
   ActionButtons,
   AddField,
   Button,
+  CompanionPicker,
+  CookLogCard,
   DayPicker,
   DraftBanner,
   EmptyState,
@@ -18,6 +20,7 @@ import {
   ListSwitcher,
   NavRow,
   PersonRow,
+  PhotoStrip,
   ScoreBadge,
   Screen,
   ScreenshotField,
@@ -70,6 +73,12 @@ export default function UiGallery() {
   const [view, setView] = useState<'list' | 'map'>('list');
   const [whichList, setWhichList] = useState('mine');
   const [cookOn, setCookOn] = useState<string | null>('2026-11-02');
+  const [cookedOn, setCookedOn] = useState<string | null>('2026-10-30');
+  const [cookedWith, setCookedWith] = useState<string[]>(['sam']);
+  const [stripPhotos, setStripPhotos] = useState([
+    { key: 'a', uri: photo('photo-1565299624946-b28f40a0ae38').uri },
+    { key: 'b', uri: null },
+  ]);
   const [title, setTitle] = useState('Garlic bread');
   const [line, setLine] = useState({
     originalText: '2 cloves garlic, minced',
@@ -276,6 +285,7 @@ export default function UiGallery() {
 
       <SectionHeader title="Day picker" />
       <DayPicker value={cookOn} onChange={setCookOn} today="2026-10-31" />
+      <DayPicker value={cookedOn} onChange={setCookedOn} today="2026-10-31" range="past" />
 
       <SectionHeader title="Floating segment" />
       <View style={styles.segmentArea}>
@@ -376,6 +386,40 @@ export default function UiGallery() {
       <SectionHeader title="Steps" />
       <StepRow number={1} text="Mash the garlic into the butter." />
       <StepRow number={2} text="Spread on the bread and bake for 10 minutes, until the edges are golden." />
+
+      <SectionHeader title="Photo strip" />
+      <PhotoStrip
+        photos={stripPhotos}
+        onRemove={(key) => setStripPhotos((all) => all.filter((p) => p.key !== key))}
+        onAdd={() => setStripPhotos((all) => [...all, { key: `p${all.length + 1}${Date.now()}`, uri: null }])}
+        max={4}
+      />
+
+      <SectionHeader title="Companion picker" />
+      <CompanionPicker
+        people={[
+          { id: 'sam', username: 'sam' },
+          { id: 'jo', username: 'jo' },
+          { id: 'alex', username: 'alex_cooks' },
+        ]}
+        chosen={cookedWith}
+        onToggle={(id) => setCookedWith((all) => (all.includes(id) ? all.filter((c) => c !== id) : [...all, id]))}
+      />
+
+      <SectionHeader title="Cook Log cards" />
+      <View>
+        <CookLogCard
+          day="Sat 2 Nov"
+          companions={['sam', 'jo']}
+          notes="Less cumin next time. The crème fraîche on top was the best part."
+          photos={[
+            { key: 'a', uri: photo('photo-1565299624946-b28f40a0ae38').uri },
+            { key: 'b', uri: photo('photo-1512621776951-a57141f2eefd').uri },
+          ]}
+          onPress={noop}
+        />
+        <CookLogCard day="Tue 15 Oct" companions={[]} notes={null} photos={[]} onPress={noop} />
+      </View>
 
       <SectionHeader title="Person rows" />
       <View>
