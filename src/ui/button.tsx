@@ -20,6 +20,7 @@ export function Button({
   variant = 'filled',
   icon,
   disabled = false,
+  selected,
   testID,
 }: {
   label: string;
@@ -27,6 +28,8 @@ export function Button({
   variant?: ButtonVariant;
   icon?: IconName;
   disabled?: boolean;
+  /** For a button that's on or off (Want to Cook): says which to assistive tech and tests. */
+  selected?: boolean;
   testID?: string;
 }) {
   const tone = LABEL_TONE[variant];
@@ -34,7 +37,7 @@ export function Button({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ disabled }}
+      accessibilityState={{ disabled, selected }}
       disabled={disabled}
       onPress={onPress}
       testID={testID}

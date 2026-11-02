@@ -18,15 +18,30 @@ export function toBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+/** How long a failed download waits before its one more try. */
+const DOWNLOAD_RETRY_MS = 500;
+
 /**
- * `loadScreenshot` for the Draft builder, over `download` (the bytes stored at a path). Something
- * that isn't a JPEG, or is too big, is refused rather than sent to Claude as one.
+ * `loadScreenshot` for the Draft builder, over `download` (the bytes stored at a path). A download
+ * that fails is tried once more, half a second later: Storage fails a read of an image while it's
+ * being replaced (the phone sending a save again as the build starts). Something that isn't a
+ * JPEG, or is too big, is refused rather than sent to Claude as one.
  */
 export function screenshotLoader(
   download: (path: string, signal: AbortSignal) => Promise<ArrayBuffer>,
 ): (path: string, signal: AbortSignal) => Promise<Screenshot> {
+  const downloadTwice = async (path: string, signal: AbortSignal) => {
+    try {
+      return await download(path, signal);
+    } catch {
+      signal.throwIfAborted();
+      await new Promise((resolve) => setTimeout(resolve, DOWNLOAD_RETRY_MS));
+      signal.throwIfAborted();
+      return download(path, signal);
+    }
+  };
   return async (path, signal) => {
-    const bytes = new Uint8Array(await download(path, signal));
+    const bytes = new Uint8Array(await downloadTwice(path, signal));
     if (bytes.length > MAX_SCREENSHOT_BYTES) throw new Error(`The screenshot at ${path} is ${bytes.length} bytes.`);
     if (!isJpeg(bytes)) throw new Error(`The screenshot at ${path} isn't a JPEG.`);
     return { mediaType: 'image/jpeg', base64: toBase64(bytes) };

@@ -7,6 +7,8 @@ export {
 export { memoryStorage, type KeyValueStorage } from './change-queue';
 export { createDataLayer, type DataLayer, type DataLayerOptions } from './data-layer';
 export { normaliseIngredientName } from './ingredient-matcher';
+export { searchWords, type SearchWord } from './search-words';
+export { checkTagName, normaliseTagName, tagKey, tidyTagNames, type TagNameCheck } from './tag-name';
 export { validateRecipeInput, type RecipeInputError } from './recipe-input';
 export { createSessionStorage, type AuthStorage, type SessionStorage } from './session-storage';
 export {
@@ -14,6 +16,7 @@ export {
   couldNotReadSource,
   parseRecipeId,
   parseShoppingListItemId,
+  parseTagId,
   type CaptionInput,
   type CheckState,
   type DraftBuild,
@@ -42,5 +45,7 @@ export {
   type ShoppingListView,
   type SourcePlatform,
   type SourceVideo,
+  type Tag,
+  type TagId,
   type UserId,
 } from './types';

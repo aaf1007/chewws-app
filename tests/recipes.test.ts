@@ -180,6 +180,8 @@ test('another signed-in user cannot read, edit or delete the Recipe', async () =
       { originalText: '1 Baguettes', amountText: '1', ingredient: anIngredient('baguette') },
     ],
     steps: ['Mash the garlic into the butter.', 'Spread on the bread and bake for 10 minutes.'],
+    tags: [],
+    wantToCookSince: null,
     createdAt: expect.any(String),
     updatedAt: expect.any(String),
   });

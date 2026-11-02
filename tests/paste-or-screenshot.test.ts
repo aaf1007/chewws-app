@@ -27,7 +27,7 @@ import { pageAdapter } from '../supabase/functions/_shared/page-reader';
 import { createSafeFetch } from '../supabase/functions/_shared/safe-fetch';
 import { screenshotLoader } from '../supabase/functions/_shared/screenshot';
 import { tiktokOEmbedAdapter } from '../supabase/functions/_shared/source-reader';
-import { backdateDraftBuild, countLinkSaves, signInTestUser, type DraftFakes, type TestUser } from './harness';
+import { backdateDraftBuild, countLinkSaves, signInOnPhones, signInTestUser, type DraftFakes, type TestUser } from './harness';
 import { SCREENSHOT_BASE64, screenshotBytes } from './screenshot-fixture';
 
 const REEL = 'https://www.instagram.com/reel/C1a2b3c4d5e/';
@@ -280,6 +280,30 @@ test('the screenshot loader sends Claude only a JPEG of a size it takes', async 
   await expect(load(huge)).rejects.toThrow('bytes');
 });
 
+test('a screenshot download that fails (the image being replaced as it is read) is tried once more', async () => {
+  const jpeg = new Uint8Array(screenshotBytes());
+  let tries = 0;
+  const flaky = screenshotLoader(async () => {
+    tries += 1;
+    if (tries === 1) throw new Error('Internal Server Error');
+    return jpeg.slice().buffer;
+  });
+  await expect(flaky('u/r.jpg', new AbortController().signal)).resolves.toEqual({
+    mediaType: 'image/jpeg',
+    base64: SCREENSHOT_BASE64,
+  });
+  expect(tries).toBe(2);
+
+  // Twice is enough: a download that keeps failing fails the build.
+  let attempts = 0;
+  const broken = screenshotLoader(async () => {
+    attempts += 1;
+    throw new Error('gone');
+  });
+  await expect(broken('u/r.jpg', new AbortController().signal)).rejects.toThrow('gone');
+  expect(attempts).toBe(2);
+});
+
 test('a TikTok whose oEmbed gives no caption is “couldn’t read it”, then a pasted caption builds it, read through the real oEmbed adapter', async () => {
   // TikTok's oEmbed as it answers since October 2026: the player, and no title, author or thumbnail.
   const oEmbed = tiktokOEmbedAdapter(
@@ -464,6 +488,56 @@ test('a save with a screenshot sent twice at once makes one Draft, one image and
   ]);
   expect(await countLinkSaves(a)).toBe(1);
   expect(await bytesAt((await a.data.getRecipe(draftId))?.sourceVideo?.screenshotUrl)).toBe(SCREENSHOT_BASE64);
+});
+
+test('a save sent again after its Draft was made leaves the screenshot its build is reading alone', async () => {
+  // Hold the build where it downloads the screenshot, as if the resend landed during the download.
+  const { promise: resent, resolve: resendDone } = Promise.withResolvers<void>();
+  const { promise: downloading, resolve: reachedDownload } = Promise.withResolvers<void>();
+  const claude = recording();
+  const a = await signInTestUser('a', {
+    ...claude.fakes,
+    beforeScreenshotDownload: async () => {
+      reachedDownload();
+      await resent;
+    },
+  });
+  const draftId = a.data.newDraftId();
+
+  await a.data.saveFromLink({ url: REEL, screenshot: screenshotBytes(), draftId });
+  await downloading;
+  // The same save sent again (its answer was lost), with the bytes the phone has now.
+  const other = new Uint8Array([...new Uint8Array(screenshotBytes()), 0]);
+  await a.data.saveFromLink({ url: REEL, screenshot: other.buffer, draftId });
+  resendDone();
+  await a.drafts.settled();
+
+  expect(claude.given.map((m) => m.screenshot?.base64)).toEqual([SCREENSHOT_BASE64]);
+  expect(await a.data.getRecipe(draftId)).toMatchObject({ title: 'Miso-glazed salmon', build: { status: 'built' } });
+  expect(await bytesAt((await a.data.getRecipe(draftId))?.sourceVideo?.screenshotUrl)).toBe(SCREENSHOT_BASE64);
+  expect(await countLinkSaves(a)).toBe(1);
+});
+
+test('a save tried again before its Draft was made sends the screenshot the phone has now', async () => {
+  const claude = recording();
+  const [phone] = await signInOnPhones('a', 1, { fakes: claude.fakes });
+  const draftId = phone.data.newDraftId();
+
+  // The first try uploads its screenshot, then loses the signal before the save itself goes out.
+  const save = phone.holdNextRequest('save_from_link');
+  const first = phone.data.saveFromLink({ url: REEL, screenshot: screenshotBytes(), draftId });
+  await save.reached;
+  phone.goOffline();
+  save.release();
+  await expect(first).rejects.toMatchObject({ code: 'offline' });
+  phone.goOnline();
+
+  // Tried again with another screenshot: the Draft is built from that one.
+  const changed = new Uint8Array([...new Uint8Array(screenshotBytes()), 1]);
+  await phone.data.saveFromLink({ url: REEL, screenshot: changed.buffer, draftId });
+  await phone.drafts.settled();
+
+  expect(claude.given.map((m) => m.screenshot?.base64)).toEqual([Buffer.from(changed).toString('base64')]);
 });
 
 test('a caption added twice at once builds the Draft once, as one Retry', async () => {

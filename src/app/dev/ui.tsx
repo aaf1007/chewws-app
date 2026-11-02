@@ -24,7 +24,10 @@ import {
   SourceVideoCard,
   StepEditor,
   StepRow,
+  SuggestedTagChip,
   SyncNotice,
+  TagChip,
+  TagChips,
   Text,
   TextField,
   colors,
@@ -69,6 +72,8 @@ export default function UiGallery() {
     ingredientName: 'garlic',
   });
   const [step, setStep] = useState('Mash the garlic into the butter.');
+  const [kept, setKept] = useState<Record<string, boolean>>({ Italian: true, Dinner: false, quick: true });
+  const [wantToCook, setWantToCook] = useState(false);
 
   return (
     <Screen scroll>
@@ -110,6 +115,13 @@ export default function UiGallery() {
       <Button label="Plain" variant="plain" onPress={noop} />
       <Button label="Disabled" disabled onPress={noop} />
       <Button label="Danger" variant="danger" icon="trash-outline" onPress={noop} />
+      <Button
+        label="Want to Cook"
+        variant={wantToCook ? 'filled' : 'outlined'}
+        icon={wantToCook ? 'flame' : 'flame-outline'}
+        selected={wantToCook}
+        onPress={() => setWantToCook((on) => !on)}
+      />
 
       <SectionHeader title="Filter tiles" />
       <FilterTiles
@@ -157,6 +169,24 @@ export default function UiGallery() {
         <ListRow title="Lemon pasta" meta={['No photo, with Score']} score={10} onMore={noop} />
         <ListRow title="Green salad" titleSuffix="10 min" meta={['No photo, no Score']} />
       </View>
+
+      <SectionHeader title="Tag chips" />
+      <TagChips>
+        <TagChip name="Italian" onRemove={noop} />
+        <TagChip name="Crème de la crème" onRemove={noop} />
+        <TagChip name="A Tag with a long name of forty letters" onRemove={noop} />
+        <TagChip name="No remove" />
+      </TagChips>
+      <TagChips>
+        {Object.entries(kept).map(([name, selected]) => (
+          <SuggestedTagChip
+            key={name}
+            name={name}
+            selected={selected}
+            onPress={() => setKept((all) => ({ ...all, [name]: !selected }))}
+          />
+        ))}
+      </TagChips>
 
       <SectionHeader title="Nav row" />
       <NavRow icon="document-text-outline" label="Drafts (2)" detail="1 ready to review" onPress={noop} />
