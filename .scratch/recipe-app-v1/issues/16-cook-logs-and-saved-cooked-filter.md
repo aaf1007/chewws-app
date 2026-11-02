@@ -4,11 +4,11 @@
 
 **Blocked by:** 02 (Write a Recipe by hand), 11 (Usernames and Friends).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The user can add a Cook Log with date, notes, photos and cooked-with Friends (e2e owed: data layer and tests pass; the screens wait on `.maestro/16-cook-logs.yaml` passing on the simulator)
-- [ ] Several Cook Logs per Recipe are allowed; each can be edited or deleted (e2e owed: data layer and tests pass; the screens wait on `.maestro/16-cook-logs.yaml` passing on the simulator)
-- [ ] A Recipe with a Cook Log shows as Cooked; deleting its last Cook Log makes it Saved again (e2e owed: data layer and tests pass; the screens wait on `.maestro/16-cook-logs.yaml` passing on the simulator)
-- [ ] The library filters by Saved vs Cooked (e2e owed: data layer and tests pass; the screens wait on `.maestro/16-cook-logs.yaml` passing on the simulator)
+- [x] The user can add a Cook Log with date, notes, photos and cooked-with Friends (data layer and tests; flow 16 passes on the simulator)
+- [x] Several Cook Logs per Recipe are allowed; each can be edited or deleted (data layer and tests; flow 16 passes on the simulator)
+- [x] A Recipe with a Cook Log shows as Cooked; deleting its last Cook Log makes it Saved again (data layer and tests; flow 16 passes on the simulator)
+- [x] The library filters by Saved vs Cooked (data layer and tests; flow 16 passes on the simulator)
 - [x] Photos are stored as the user's own images
 - [x] Data-layer tests: a Friend can read the user's Cook Logs, a stranger can't, and an unfriended user no longer can
