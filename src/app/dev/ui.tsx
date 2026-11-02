@@ -342,6 +342,30 @@ export default function UiGallery() {
         <ShoppingListRow name="Garlic bread" action={{ label: 'Remove', onPress: noop }} />
       </View>
 
+      <SectionHeader title="Cook Plan list rows" />
+      <View>
+        <ShoppingListRow
+          name="butter"
+          details={['Garlic bread · 4 tbsp', 'Shakshuka · 1 knob']}
+          notes={[{ icon: 'home-outline', text: '@sam and @jo have it' }]}
+          check={{ checked: false, onPress: noop }}
+          action={{ label: 'Claim', onPress: noop }}
+        />
+        <ShoppingListRow
+          name="garlic"
+          details={['Garlic bread · 2 cloves']}
+          notes={[{ icon: 'hand-left-outline', text: "You're buying it", mine: true }]}
+          check={{ checked: false, onPress: noop }}
+          action={{ label: 'Unclaim', onPress: noop }}
+        />
+        <ShoppingListRow
+          name="parsley"
+          details={['Herb butter (removed) · 1 bunch', 'Checked off by @sam']}
+          notes={[{ icon: 'hand-left-outline', text: '@jo is buying it' }]}
+          check={{ checked: true, onPress: noop }}
+        />
+      </View>
+
       <SectionHeader title="Sync notices" />
       <SyncNotice status="offline" message="You're offline. 3 changes will sync when you're back online." />
       <SyncNotice status="offline" message="You're offline. This is your list as it was last loaded." />
