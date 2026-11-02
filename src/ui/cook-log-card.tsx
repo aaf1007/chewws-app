@@ -8,6 +8,7 @@ import { colors, hairline, spacing } from './theme';
 /**
  * One time a Recipe was cooked, as a row in its list of Cook Logs: the day in bold ("Sat 2 Nov"),
  * who it was cooked with ("with @sam, @jo"), the notes and the photos. Pressing it opens the log.
+ * It's one element to VoiceOver (and Maestro), so its label carries the notes too.
  */
 export function CookLogCard({
   day,
@@ -27,10 +28,11 @@ export function CookLogCard({
   testID?: string;
 }) {
   const withWhom = companions.length > 0 ? `with ${companions.map((name) => `@${name}`).join(', ')}` : null;
+  const heading = ['Cook Log', day, withWhom].filter(Boolean).join(', ');
   return (
     <Pressable
       accessibilityRole={onPress ? 'button' : undefined}
-      accessibilityLabel={['Cook Log', day, withWhom].filter(Boolean).join(', ')}
+      accessibilityLabel={notes ? `${heading}. ${notes}` : heading}
       disabled={!onPress}
       onPress={onPress}
       testID={testID}
