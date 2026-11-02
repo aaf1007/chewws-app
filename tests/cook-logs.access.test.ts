@@ -194,6 +194,31 @@ test("nobody else adds, edits or deletes a Cook Log on someone's Recipe, a Frien
   await expectUnchanged();
 });
 
+test('the server refuses what the app never sends: a day past tomorrow, notes over 2000 characters, more than 4 photos', async () => {
+  const { kim, recipe, logId } = await logged();
+  const later = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10);
+  const tooLong = 'é'.repeat(2001);
+  const fivePhotos = Array.from({ length: 5 }, () => crypto.randomUUID());
+  const add = (args: { cooked_on?: string; notes?: string; photos?: string[] }) =>
+    kim.client.rpc('add_cook_log', { id: crypto.randomUUID(), recipe_id: recipe, cooked_on: '2026-10-30', ...args });
+
+  expect((await add({ cooked_on: later })).error?.code).toBe('22023');
+  expect((await add({ cooked_on: '2999-01-01' })).error?.code).toBe('22023');
+  expect((await add({ notes: tooLong })).error?.code).toBe('22001');
+  expect((await add({ photos: fivePhotos })).error?.code).toBe('22023');
+
+  const edit = (args: { cooked_on?: string; notes?: string; add_photos?: string[] }) =>
+    kim.client.rpc('edit_cook_log', { id: logId, ...args });
+  expect((await edit({ cooked_on: later })).error?.code).toBe('22023');
+  expect((await edit({ notes: tooLong })).error?.code).toBe('22001');
+  expect((await edit({ add_photos: fivePhotos })).data).toEqual({ status: 'tooManyPhotos' });
+
+  // Exactly 2000 characters and tomorrow are fine, as the app allows them.
+  const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+  expect((await add({ cooked_on: tomorrow, notes: 'é'.repeat(2000) })).data).toEqual({ status: 'added' });
+  expect((await kim.data.listCookLogs(recipe)).map((l) => l.cookedOn)).toEqual([tomorrow, '2026-10-30']);
+});
+
 test('a user can only log their own reviewed Recipes, with Friends as companions, and photos they uploaded', async () => {
   const { kim, jo, ex, stranger, recipe, photoPath } = await logged();
   const own = await stranger.data.createRecipe({ title: 'Toast', lines: [], steps: [] });
