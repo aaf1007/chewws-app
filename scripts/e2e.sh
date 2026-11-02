@@ -4,6 +4,7 @@
 #   scripts/e2e.sh .maestro/dev-sign-in-and-out.yaml
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. scripts/supabase-cli.sh
 
 if [ "$#" -gt 0 ]; then
   flows=("$@")

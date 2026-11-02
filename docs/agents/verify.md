@@ -2,6 +2,10 @@
 
 A ticket is done when `npm run verify` and `npm run e2e` are both green and the new behaviour has a test or a flow.
 
+## The Supabase CLI
+
+The project pins the Supabase CLI to one version, the `supabase` devDependency in `package.json` (`2.109.1`, the same one CI installs in `.github/workflows/verify.yml`). `npm install` puts it in `node_modules/.bin`, so `npm run db:*` and `npx supabase` use it; `npx supabase --version` must print `2.109.1`. Every script that runs the CLI (`dev:up`, `e2e`, `stack-ready.sh`, `functions.sh`, `db:types:check`) sources `scripts/supabase-cli.sh`, which puts that CLI first on `PATH` and stops at once, before any reset, when the `supabase` it finds is another version. Don't call a bare `npx supabase@latest` or an unpinned global CLI: in ticket 15 one fetched 2.122.0, whose `db reset` wiped the local database and then hung pulling new images. Upgrading means changing the version in `package.json` and in `verify.yml` together, then `npm run db:types`.
+
 ## 1. Data layer
 
 ```sh
