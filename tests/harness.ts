@@ -626,6 +626,7 @@ export async function signInOnPhones(
           now: () => (clock === null ? Date.now() : clock),
           startDraftBuild,
           refreshSourceVideo: inProcessSourceRefresh(client, fakes),
+          refreshWaitMs: fakes.refreshWaitMs,
           sendNotification,
         });
         return {

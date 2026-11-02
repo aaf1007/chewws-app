@@ -181,7 +181,7 @@ const UNCLAIMED_KICK_AFTER_MS = 30_000;
 const BUILD_ATTEMPTS = 3;
 /** YouTube data older than this is read again before it's shown (YouTube's API terms). */
 const YOUTUBE_DATA_MAX_AGE_MS = 30 * 24 * 60 * 60_000;
-/** How long opening a Recipe waits for that refresh before showing what's stored. */
+/** How long opening a Recipe waits for that refresh before showing what's stored, by default. */
 const REFRESH_WAIT_MS = 5_000;
 /** The private bucket of the users' own images: the screenshots they add (decisions 05). */
 const RECIPE_IMAGES = 'recipe-images';
@@ -666,6 +666,8 @@ export type DataLayerOptions = {
    * refresh in-process, with fake platforms.
    */
   refreshSourceVideo?: (recipeId: RecipeId) => Promise<void>;
+  /** How long opening a Recipe waits for that refresh before showing what's stored: 5 s by default. */
+  refreshWaitMs?: number;
   /**
    * Asks the server to send the push a user's action earns someone else ("Friend request"), and
    * settles once it has asked. By default it calls the `notify` Edge Function (10 s at most), which
@@ -689,6 +691,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   const live = options.liveUpdates ?? true;
   const storage = options.storage ?? memoryStorage();
   const now = options.now ?? Date.now;
+  const refreshWaitMs = options.refreshWaitMs ?? REFRESH_WAIT_MS;
   const newId = options.newId ?? (() => crypto.randomUUID());
   const startDraftBuild =
     options.startDraftBuild ??
@@ -1671,7 +1674,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   async function getRecipe(id: RecipeId): Promise<Recipe | null> {
     let row = await readRecipe(id);
     if (row && isStaleYouTube(row.source_video, now())) {
-      await waitAtMost(REFRESH_WAIT_MS, requestSourceRefresh(id));
+      await waitAtMost(refreshWaitMs, requestSourceRefresh(id));
       row = await readRecipe(id);
     }
     if (!row) return getSomeoneElsesRecipe(id);

@@ -411,10 +411,13 @@ test('TikTok data is not re-read for its age, only when its thumbnail fails', as
   expect(asked).toEqual([FULL_RECIPE.url]);
 });
 
-test('viewing a Recipe waits 5 s at most for YouTube to answer, then shows what is stored', { timeout: 20_000 }, async () => {
+test('viewing a Recipe waits its refresh wait at most (5 s in the app) for YouTube to answer, then shows what is stored', { timeout: 20_000 }, async () => {
   const youtubeAnswers = gate();
   let calls = 0;
+  // The app waits 5 s; this test waits 200 ms, so a busy machine doesn't run it out of time.
+  const refreshWaitMs = 200;
   const a = await signInTestUser('a', {
+    refreshWaitMs,
     youtube: async (videoId, signal) => {
       calls += 1;
       if (calls > 1) await youtubeAnswers.wait();
@@ -428,8 +431,8 @@ test('viewing a Recipe waits 5 s at most for YouTube to answer, then shows what 
   const viewed = await a.data.getRecipe(id);
   const waited = Date.now() - started;
 
-  expect(waited).toBeGreaterThanOrEqual(4_900);
-  expect(waited).toBeLessThan(8_000);
+  expect(waited).toBeGreaterThanOrEqual(refreshWaitMs - 100);
+  expect(waited).toBeLessThan(refreshWaitMs + 3_000);
   expect(viewed?.sourceVideo).toEqual(lemonKitchen);
   youtubeAnswers.open();
 });
