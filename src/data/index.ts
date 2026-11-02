@@ -8,6 +8,7 @@ export { memoryStorage, type KeyValueStorage } from './change-queue';
 export { createDataLayer, type DataLayer, type DataLayerOptions } from './data-layer';
 export { normaliseIngredientName } from './ingredient-matcher';
 export { friendsListName } from './list-names';
+export { localDay } from './local-day';
 export { searchWords, type SearchWord } from './search-words';
 export { checkTagName, normaliseTagName, tagKey, tidyTagNames, type TagNameCheck } from './tag-name';
 export type { RankingSession } from './ranking-engine';
@@ -50,10 +51,13 @@ export {
   type CookPlansRead,
   type CookPlanRecipeAmounts,
   type CookPlanMember,
+  type CookPlanPrompt,
+  type CookPlanPromptStep,
   type CookPlanRecipe,
   type CopyRecipeResult,
   type CreateCookPlanResult,
   type DeleteCookLogResult,
+  type DismissCookPlanPromptResult,
   type DraftBuild,
   type DraftBuildFailure,
   type DraftSummary,
@@ -72,6 +76,7 @@ export {
   type LeaveSharedShoppingListResult,
   type ListPerson,
   type ListSync,
+  type MarkCookPlanCookedResult,
   type NotSavedListChange,
   type OtherProfile,
   type Pantry,
