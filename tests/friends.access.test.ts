@@ -13,6 +13,7 @@ import {
 } from './access-harness';
 import {
   backdateFriendRequestPushes,
+  friendshipReadersNotAllowed,
   functionsRestatingTheFriendRule,
   seedUsersWithUsernames,
   uniqueUsername,
@@ -242,4 +243,8 @@ test('a pair gets at most one "Friend request" push in 7 days, however often the
 
 test('whether two users are Friends is decided in one place, private.are_friends', async () => {
   expect(await functionsRestatingTheFriendRule()).toEqual([]);
+});
+
+test('nothing but the Friend rule and the friendship functions reads friendships, status compared or not', async () => {
+  expect(await friendshipReadersNotAllowed()).toEqual([]);
 });

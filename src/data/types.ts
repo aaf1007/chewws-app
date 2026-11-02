@@ -528,6 +528,42 @@ export type EditCookLogResult =
  */
 export type DeleteCookLogResult = { status: 'deleted'; recipe: 'cooked' | 'saved' } | { status: 'notFound' };
 
+/**
+ * A Ranking's three bands, best first (decisions 17): Liked (Scores 6.7–10), Fine (3.4–6.6) and
+ * Didn't like (0–3.3).
+ */
+export type RankingBand = 'liked' | 'fine' | 'disliked';
+
+/**
+ * A Recipe in a Ranking: its band, its place in that band (1 = best) and its Score (0–10, one
+ * decimal), made by the ranking engine. `title` is null for a Friend's Recipe the user can't read
+ * (ticket 19 lets Friends read ranked Recipes). `rankedAt`: when it was last placed.
+ */
+export type RankedRecipe = {
+  recipeId: RecipeId;
+  title: string | null;
+  band: RankingBand;
+  position: number;
+  score: number;
+  rankedAt: string;
+};
+
+/** A user's whole Ranking, each band best first. */
+export type Ranking = Record<RankingBand, RankedRecipe[]>;
+
+/** One of the Recipes a new one is compared with: "Better or worse than Shakshuka?". */
+export type RankingCandidate = { recipeId: RecipeId; title: string };
+
+/**
+ * What `placeInRanking` did. Only `placed` changed anything: the Recipe is at `position` in `band`
+ * with that Score. `bandChanged`: another phone changed the band meanwhile, so nothing was placed
+ * and the comparisons start again. `notCooked`: it has no Cook Log (only Cooked Recipes are
+ * ranked). `noSuchRecipe`: the user has no Recipe by that id.
+ */
+export type PlaceInRankingResult =
+  | { status: 'placed'; band: RankingBand; position: number; score: number }
+  | { status: 'bandChanged' | 'notCooked' | 'noSuchRecipe' };
+
 /** An active Cook Plan one of the user's Recipes is in, with the others in it, by username. */
 export type RecipeCookPlan = { id: CookPlanId; cookOn: string | null; withUsernames: string[] };
 

@@ -1057,3 +1057,128 @@ export async function cookLogPolicies(): Promise<string[]> {
   );
   return rows.map((r) => r.name);
 }
+
+/**
+ * For race tests only: `user` placing their Recipe in their Ranking on another phone
+ * (place_in_ranking, at `position` in `bandSeen`, the band's Recipe ids best first as the phone read
+ * them), not committed yet.
+ */
+export const holdPlacement = (user: Someone, recipeId: string, band: string, position: number, bandSeen: string[]) =>
+  holdCallAs(user, 'select public.place_in_ranking($1, $2::public.ranking_band, $3, $4::uuid[])', [
+    recipeId,
+    band,
+    position,
+    bandSeen,
+  ]);
+
+/** For race tests only: `user` deleting their Recipe on another phone, as `deleteRecipe` does, not committed yet. */
+export const holdRecipeDelete = (user: Someone, recipeId: string) =>
+  holdCallAs(user, 'delete from public.recipes where id = $1', [recipeId]);
+
+/** The functions allowed to decide who sees a user's activity (Cook Logs, Ranking): the rule itself. */
+const ACTIVITY_RULE = ['private.can_see_activity_of'];
+
+/**
+ * The database functions (public and private), other than the activity rule, that read a Ranking
+ * or Cook Logs (their companions, photos or the photos' bucket) and call private.are_friends
+ * themselves, instead of asking private.can_see_activity_of (decisions 16, 17).
+ */
+export async function functionsRestatingTheActivityRule(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private')
+       and not (n.nspname || '.' || p.proname = any ($1))
+       and p.prosrc ~* '(ranking_entries|cook_logs|cook_log_companions|cook_log_photos|cook-log-photos)'
+       and p.prosrc ~* 'are_friends'
+     order by 1`,
+    [ACTIVITY_RULE],
+  );
+  return rows.map((r) => r.name);
+}
+
+/** The functions that ask the activity rule (private.can_see_activity_of), by name. */
+export async function functionsAskingTheActivityRule(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private')
+       and not (n.nspname || '.' || p.proname = any ($1))
+       and p.prosrc ~* 'can_see_activity_of'
+     order by 1`,
+    [ACTIVITY_RULE],
+  );
+  return rows.map((r) => r.name);
+}
+
+/** Every row-level policy on ranking_entries, as `table cmd: using | check` on one line. */
+export async function rankingPolicies(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select tablename || ' ' || cmd || ': '
+       || regexp_replace(coalesce(qual, with_check), '\\s+', ' ', 'g') as name
+     from pg_policies
+     where schemaname = 'public' and tablename = 'ranking_entries'
+     order by 1`,
+    [],
+  );
+  return rows.map((r) => r.name);
+}
+
+/**
+ * The database functions that write a Ranking (`insert into`, `update`, `delete from`
+ * ranking_entries), and whether each takes the user's Ranking lock itself (private.lock_ranking),
+ * as `name: locks | doesn't lock`.
+ */
+export async function rankingWriters(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname || ': '
+       || case when p.prosrc ~* 'lock_ranking' then 'locks' else 'doesn''t lock' end as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private')
+       and p.prosrc ~* '(insert\\s+into|update|delete\\s+from)\\s+(public\\.)?ranking_entries'
+     order by 1`,
+    [],
+  );
+  return rows.map((r) => r.name);
+}
+
+/**
+ * The functions allowed to read `friendships` themselves: the Friend rule and ticket 11's friendship
+ * functions, which send, answer, cancel, end and list requests and Friends (decisions 11). Anything
+ * else asks private.are_friends or private.friend_ids.
+ */
+const FRIENDSHIP_READERS = [
+  'private.are_friends',
+  'private.can_see_profile',
+  'private.friend_ids',
+  'private.relationship_with',
+  'public.cancel_friend_request',
+  'public.claim_friend_request_push',
+  'public.list_friend_requests',
+  'public.list_friends',
+  'public.respond_to_friend_request',
+  'public.send_friend_request',
+  'public.unfriend',
+];
+
+/**
+ * Every database function (in any schema of the app's) or row-level policy that mentions the
+ * `friendships` table and isn't on the allowed list: one deciding who is a Friend for itself, with
+ * or without comparing a status. As `schema.name`, or `policy schema.table: name`.
+ */
+export async function friendshipReadersNotAllowed(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname not in ('pg_catalog', 'information_schema')
+       and not (n.nspname || '.' || p.proname = any ($1))
+       and p.prosrc ~* '\\mfriendships\\M'
+     union all
+     select 'policy ' || schemaname || '.' || tablename || ': ' || policyname
+     from pg_policies
+     where coalesce(qual, '') ~* '\\mfriendships\\M' or coalesce(with_check, '') ~* '\\mfriendships\\M'
+     order by 1`,
+    [FRIENDSHIP_READERS],
+  );
+  return rows.map((r) => r.name);
+}

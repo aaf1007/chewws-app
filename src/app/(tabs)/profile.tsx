@@ -38,6 +38,13 @@ export default function Profile() {
           testID="friends-row"
         />
         <NavRow
+          icon="podium-outline"
+          label="Your Ranking"
+          detail="Everything you’ve ranked, with Scores"
+          onPress={() => router.push('/ranking')}
+          testID="ranking-row"
+        />
+        <NavRow
           icon="at-outline"
           label="Change username"
           onPress={() => router.push({ pathname: '/username', params: { current: profile?.username ?? '' } })}

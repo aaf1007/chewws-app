@@ -44,6 +44,14 @@ import {
   type LostCookPlan,
   type LostSharedList,
 } from './list-storage';
+import {
+  RANKING_BANDS,
+  answerComparison,
+  scoreOf,
+  skipComparisons,
+  startRankingSession,
+  type RankingSession,
+} from './ranking-engine';
 import { validateRecipeInput } from './recipe-input';
 import { searchWords } from './search-words';
 import { MAX_REVIEW_TAGS, checkTagName, normaliseTagName, tagKey, tidyTagNames } from './tag-name';
@@ -106,6 +114,10 @@ import {
   type OtherProfile,
   type Pantry,
   type Profile,
+  type PlaceInRankingResult,
+  type RankedRecipe,
+  type Ranking,
+  type RankingBand,
   type Recipe,
   type RecipeId,
   type RecipeCookPlan,
@@ -1897,6 +1909,80 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
         updatedAt: row.updated_at,
       };
     });
+  }
+
+  /**
+   * A user's Ranking (decisions 17): the three bands, each best first, with every Recipe's Score
+   * made by the ranking engine. The user's own by default; a Friend's when they may see it (their
+   * titles stay null until ticket 19 lets Friends read ranked Recipes). Anyone else's is empty.
+   */
+  async function getRanking(userId?: UserId): Promise<Ranking> {
+    const who = userId ?? (await currentUserId());
+    const { data, error } = await client
+      .from('ranking_entries')
+      .select('recipe_id, band, position, ranked_at, recipe:recipes(title)')
+      .eq('user_id', who)
+      .order('band')
+      .order('position');
+    if (error) fail(error);
+    const ranking: Ranking = { liked: [], fine: [], disliked: [] };
+    for (const band of RANKING_BANDS) {
+      const rows = data.filter((row) => row.band === band);
+      ranking[band] = rows.map(
+        (row): RankedRecipe => ({
+          recipeId: parseRecipeId(row.recipe_id),
+          title: row.recipe?.title ?? null,
+          band,
+          position: row.position,
+          score: scoreOf(band, row.position, rows.length),
+          rankedAt: row.ranked_at,
+        }),
+      );
+    }
+    return ranking;
+  }
+
+  /**
+   * Starts placing one of the user's Cooked Recipes in `band`: reads that band, best first,
+   * without the Recipe (it may be ranked already), and returns the first comparison, or the Recipe
+   * placed at once when the band is empty. Answer with `answerComparison`, or `skipComparisons`,
+   * then `placeInRanking`.
+   */
+  async function startRanking(recipeId: RecipeId, band: RankingBand): Promise<RankingSession> {
+    const me = await currentUserId();
+    const { data, error } = await client
+      .from('ranking_entries')
+      .select('recipe_id, recipe:recipes(title)')
+      .eq('user_id', me)
+      .eq('band', band)
+      .neq('recipe_id', recipeId)
+      .order('position');
+    if (error) fail(error);
+    const others = data.map((row) => ({ recipeId: parseRecipeId(row.recipe_id), title: row.recipe?.title ?? '' }));
+    return startRankingSession(recipeId, band, others);
+  }
+
+  /**
+   * Puts the Recipe where a finished session placed it, moving it if it was ranked already (out of
+   * its old band, whose Scores close up). `bandChanged` when the band isn't as the session read it
+   * any more, in its Recipes or their order (another phone ranked or re-ranked meanwhile): start
+   * again with `startRanking`.
+   */
+  async function placeInRanking(session: RankingSession): Promise<PlaceInRankingResult> {
+    if (session.status !== 'placed') {
+      throw new DataError('ranking_not_finished', 'Answer the comparisons, or skip them, first.');
+    }
+    const { data, error } = await client.rpc('place_in_ranking', {
+      recipe_id: session.recipeId,
+      band: session.band,
+      position: session.position,
+      band_seen: [...session.bandSeen],
+    });
+    if (error) fail(error);
+    const status = statusOf('place_in_ranking', data, ['placed', 'bandChanged', 'notCooked', 'noSuchRecipe']);
+    if (status !== 'placed') return { status };
+    const { band, position } = session;
+    return { status, band, position, score: scoreOf(band, position, session.bandSeen.length + 1) };
   }
 
   /**
@@ -3726,6 +3812,11 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     editCookLog,
     deleteCookLog,
     listCookLogs,
+    getRanking,
+    startRanking,
+    answerComparison,
+    skipComparisons,
+    placeInRanking,
     createCookPlan,
     inviteToCookPlan,
     setCookPlanDate,

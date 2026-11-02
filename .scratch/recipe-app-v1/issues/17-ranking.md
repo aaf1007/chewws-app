@@ -8,12 +8,12 @@ Skipping the comparisons places it at the middle of its band. Scores are spread 
 
 **Blocked by:** 16 (Cook Logs and the Saved/Cooked filter).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Only Cooked Recipes can be ranked
-- [ ] Picking a band, then answering comparisons, places the Recipe by binary search within that band
-- [ ] Skipping places the Recipe at the middle of its band
-- [ ] Scores follow the even-spread formula and update when the band changes
-- [ ] The user sees their full Ranking in order with Scores
-- [ ] Re-ranking moves the Recipe; deleting a Recipe removes it and recomputes its band
-- [ ] Data-layer tests: a known sequence of answers yields the expected position and Score; a band of 100 needs at most 7 comparisons; Friends can read a Ranking, strangers can't
+- [x] Only Cooked Recipes can be ranked
+- [x] Picking a band, then answering comparisons, places the Recipe by binary search within that band (data layer and tests; flow 17 passes on the simulator)
+- [x] Skipping places the Recipe at the middle of its band (data layer and tests; flow 17 passes on the simulator)
+- [x] Scores follow the even-spread formula and update when the band changes
+- [x] The user sees their full Ranking in order with Scores (data layer and tests; flow 17 passes on the simulator)
+- [x] Re-ranking moves the Recipe; deleting a Recipe removes it and recomputes its band (data layer and tests; flow 17 passes on the simulator)
+- [x] Data-layer tests: a known sequence of answers yields the expected position and Score; a band of 100 needs at most 7 comparisons; Friends can read a Ranking, strangers can't

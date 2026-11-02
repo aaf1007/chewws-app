@@ -12,8 +12,9 @@ type LogsState = { status: 'loading' } | { status: 'loaded'; logs: CookLog[] } |
 /**
  * A Recipe's Cook Logs, newest day first, read again whenever the screen comes back into focus
  * (after adding or editing one), with "Add Cook Log". Each opens to be edited or deleted.
+ * `onLoaded` hears the logs each time they're read (the Recipe's Ranking section needs them).
  */
-export function RecipeCookLogs({ recipeId }: { recipeId: RecipeId }) {
+export function RecipeCookLogs({ recipeId, onLoaded }: { recipeId: RecipeId; onLoaded?: (logs: CookLog[]) => void }) {
   const [state, setState] = useState<LogsState>({ status: 'loading' });
 
   useFocusEffect(
@@ -21,11 +22,17 @@ export function RecipeCookLogs({ recipeId }: { recipeId: RecipeId }) {
       let live = true;
       data
         .listCookLogs(recipeId)
-        .then((logs) => live && setState({ status: 'loaded', logs }))
+        .then((logs) => {
+          if (!live) return;
+          setState({ status: 'loaded', logs });
+          onLoaded?.(logs);
+        })
         .catch((e: unknown) => live && setState({ status: 'failed', message: messageOf(e) }));
       return () => {
         live = false;
       };
+      // onLoaded is the screen's, fixed per screen.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [recipeId]),
   );
 

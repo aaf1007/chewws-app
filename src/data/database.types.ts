@@ -549,6 +549,45 @@ export type Database = {
         }
         Relationships: []
       }
+      ranking_entries: {
+        Row: {
+          band: Database["public"]["Enums"]["ranking_band"]
+          position: number
+          ranked_at: string
+          recipe_id: string
+          user_id: string
+        }
+        Insert: {
+          band: Database["public"]["Enums"]["ranking_band"]
+          position: number
+          ranked_at?: string
+          recipe_id: string
+          user_id: string
+        }
+        Update: {
+          band?: Database["public"]["Enums"]["ranking_band"]
+          position?: number
+          ranked_at?: string
+          recipe_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ranking_entries_recipe_id_fkey"
+            columns: ["recipe_id"]
+            isOneToOne: true
+            referencedRelation: "recipes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ranking_entries_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       recipe_lines: {
         Row: {
           amount_text: string | null
@@ -1170,6 +1209,15 @@ export type Database = {
           username: string
         }[]
       }
+      place_in_ranking: {
+        Args: {
+          band: Database["public"]["Enums"]["ranking_band"]
+          band_seen: string[]
+          position: number
+          recipe_id: string
+        }
+        Returns: Json
+      }
       recipe_cook_plans: {
         Args: { recipe_id: string }
         Returns: {
@@ -1307,6 +1355,7 @@ export type Database = {
         | "source_refused"
       draft_build_status: "building" | "built" | "failed"
       friendship_status: "pending" | "accepted" | "declined"
+      ranking_band: "liked" | "fine" | "disliked"
       recipe_status: "draft" | "reviewed"
       source_platform: "tiktok" | "youtube" | "instagram" | "web"
     }
@@ -1451,6 +1500,7 @@ export const Constants = {
       ],
       draft_build_status: ["building", "built", "failed"],
       friendship_status: ["pending", "accepted", "declined"],
+      ranking_band: ["liked", "fine", "disliked"],
       recipe_status: ["draft", "reviewed"],
       source_platform: ["tiktok", "youtube", "instagram", "web"],
     },
