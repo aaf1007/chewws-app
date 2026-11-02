@@ -2,6 +2,7 @@
 # Fails when src/data/database.types.ts doesn't match the local database's schema.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. scripts/supabase-cli.sh
 
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT

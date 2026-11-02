@@ -955,3 +955,105 @@ export const startCookPlanRecipeAdd = (
     recipeId,
     JSON.stringify(lines.map((l) => ({ ingredient_id: l.ingredientId, amount_texts: l.amountTexts }))),
   ]);
+
+/**
+ * The Cook Log photos in Storage in `user`'s folder of cook-log-photos, as `{cook log id}/{photo
+ * id}.jpg`, whoever may see them (decisions 16).
+ */
+export async function storedCookLogPhotos(user: Someone): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select substr(name, length($1) + 2) as name from storage.objects
+     where bucket_id = 'cook-log-photos' and name like $1 || '/%' order by name`,
+    [user.userId],
+  );
+  return rows.map((r) => r.name);
+}
+
+/** For race tests only: `user` adding a Cook Log (by id, with `companions`) on another phone, not committed yet. */
+export const holdCookLogAdd = (user: Someone, id: string, recipeId: string, cookedOn: string, companions: string[] = []) =>
+  holdCallAs(user, 'select public.add_cook_log($1, $2, $3::date, null, $4::uuid[])', [id, recipeId, cookedOn, companions]);
+
+/** For race tests only: `user` adding companions to their Cook Log on another phone, not committed yet. */
+export const holdCookLogCompanionsAdd = (user: Someone, id: string, companions: string[]) =>
+  holdCallAs(user, 'select public.edit_cook_log($1, add_companions => $2::uuid[])', [id, companions]);
+
+/** For race tests only: `user` deleting their Cook Log on another phone, not committed yet. */
+export const holdCookLogDelete = (user: Someone, id: string) =>
+  holdCallAs(user, 'select public.delete_cook_log($1)', [id]);
+
+/**
+ * The functions allowed to decide who reads Cook Logs: the read rule itself (decisions 16). Any
+ * other function that reads a Cook Log table and asks are_friends decides it for itself.
+ */
+const COOK_LOG_READ_RULE = ['private.can_read_cook_logs_of'];
+
+/**
+ * The database functions (public and private), other than the read rule, that read Cook Logs,
+ * their companions or photos (or the photos' bucket) and call private.are_friends themselves,
+ * instead of asking private.can_read_cook_logs_of.
+ */
+export async function functionsRestatingTheCookLogReadRule(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private')
+       and not (n.nspname || '.' || p.proname = any ($1))
+       and p.prosrc ~* '(cook_logs|cook_log_companions|cook_log_photos|cook-log-photos)'
+       and p.prosrc ~* 'are_friends'
+     order by 1`,
+    [COOK_LOG_READ_RULE],
+  );
+  return rows.map((r) => r.name);
+}
+
+/**
+ * The functions that add Cook Log companions (`insert into … cook_log_companions`), and for each
+ * whether it asks the companion rule, private.can_be_cook_log_companion, as `name: asks | doesn't ask`.
+ */
+export async function cookLogCompanionWriters(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname || ': '
+       || case when p.prosrc ~* 'can_be_cook_log_companion' then 'asks' else 'doesn''t ask' end as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private')
+       and p.prosrc ~* 'insert\\s+into\\s+(public\\.)?cook_log_companions'
+     order by 1`,
+    [],
+  );
+  return rows.map((r) => r.name);
+}
+
+/**
+ * Every function other than the companion rule that reads Cook Log companions and calls
+ * private.are_friends: whom someone may cook with, decided outside private.can_be_cook_log_companion.
+ */
+export async function functionsRestatingTheCompanionRule(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private')
+       and not (n.nspname || '.' || p.proname = any ($1))
+       and p.prosrc ~* 'cook_log_companions'
+       and p.prosrc ~* 'are_friends'
+     order by 1`,
+    [['private.can_be_cook_log_companion', ...COOK_LOG_READ_RULE]],
+  );
+  return rows.map((r) => r.name);
+}
+
+/**
+ * Every row-level policy on the Cook Log tables and the cook-log-photos bucket, as
+ * `table cmd: using | check` on one line.
+ */
+export async function cookLogPolicies(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select tablename || ' ' || cmd || ': '
+       || regexp_replace(coalesce(qual, with_check), '\\s+', ' ', 'g') as name
+     from pg_policies
+     where (schemaname = 'public' and tablename in ('cook_logs', 'cook_log_companions', 'cook_log_photos'))
+        or (schemaname = 'storage' and coalesce(qual, with_check) ~ 'cook-log-photos')
+     order by 1`,
+    [],
+  );
+  return rows.map((r) => r.name);
+}

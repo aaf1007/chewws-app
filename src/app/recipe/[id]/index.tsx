@@ -4,6 +4,7 @@ import { Alert, View } from 'react-native';
 
 import { messageOf } from '@/auth/errors';
 import { leavesCookPlansWarning } from '@/components/cook-plan-copy';
+import { RecipeCookLogs } from '@/components/recipe-cook-logs';
 import { RecipeTags } from '@/components/recipe-tags';
 import { SourceVideoLink } from '@/components/source-video';
 import { useRecipe } from '@/components/use-recipe';
@@ -105,6 +106,7 @@ export default function RecipeDetail() {
         </>
       ) : null}
       <RecipeBody recipe={recipe} />
+      {recipe.status === 'reviewed' ? <RecipeCookLogs recipeId={id} /> : null}
 
       {error ? <Text tone="danger">{error}</Text> : null}
       <View style={{ gap: spacing.sm }}>

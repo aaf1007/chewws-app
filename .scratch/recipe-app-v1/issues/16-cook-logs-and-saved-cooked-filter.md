@@ -4,11 +4,11 @@
 
 **Blocked by:** 02 (Write a Recipe by hand), 11 (Usernames and Friends).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The user can add a Cook Log with date, notes, photos and cooked-with Friends
-- [ ] Several Cook Logs per Recipe are allowed; each can be edited or deleted
-- [ ] A Recipe with a Cook Log shows as Cooked; deleting its last Cook Log makes it Saved again
-- [ ] The library filters by Saved vs Cooked
-- [ ] Photos are stored as the user's own images
-- [ ] Data-layer tests: a Friend can read the user's Cook Logs, a stranger can't, and an unfriended user no longer can
+- [x] The user can add a Cook Log with date, notes, photos and cooked-with Friends (data layer and tests; flow 16 passes on the simulator)
+- [x] Several Cook Logs per Recipe are allowed; each can be edited or deleted (data layer and tests; flow 16 passes on the simulator)
+- [x] A Recipe with a Cook Log shows as Cooked; deleting its last Cook Log makes it Saved again (data layer and tests; flow 16 passes on the simulator)
+- [x] The library filters by Saved vs Cooked (data layer and tests; flow 16 passes on the simulator)
+- [x] Photos are stored as the user's own images
+- [x] Data-layer tests: a Friend can read the user's Cook Logs, a stranger can't, and an unfriended user no longer can

@@ -11,7 +11,7 @@ import {
   type AddedCaption,
 } from '@/components/caption-inputs';
 import { dailyLimitMessage, platformName, sourceText } from '@/components/draft-copy';
-import { prepareScreenshot } from '@/components/screenshot';
+import { prepareImage } from '@/components/picked-image';
 import { DailyLimitError, checkSharedLink, type DetectedSource, type RecipeId } from '@/data';
 import { data } from '@/data/app';
 import { registerForDraftReady } from '@/notifications';
@@ -58,7 +58,7 @@ export default function SaveLink() {
   // A screenshot shared with the link is scaled down like one picked here.
   useEffect(() => {
     if (!sharedImage) return;
-    prepareScreenshot(sharedImage)
+    prepareImage(sharedImage)
       .then((screenshot) => setAdded((now) => (now.screenshot ? now : { ...now, screenshot })))
       .catch((e: unknown) => setImageError(messageOf(e)));
   }, [sharedImage]);
