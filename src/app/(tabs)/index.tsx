@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { FlatList, View } from 'react-native';
 
 import { messageOf } from '@/auth/errors';
+import { cookedDetail } from '@/components/cook-log-copy';
 import type { DraftSummary, RecipeSummary } from '@/data';
 import { data } from '@/data/app';
 import {
@@ -27,7 +28,7 @@ const FILTERS = [
 
 type LibraryState =
   | { status: 'loading' }
-  | { status: 'loaded'; recipes: RecipeSummary[]; drafts: DraftSummary[] }
+  | { status: 'loaded'; recipes: RecipeSummary[]; drafts: DraftSummary[]; allCooked: boolean }
   | { status: 'error'; message: string };
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -51,12 +52,19 @@ function draftsDetail(drafts: DraftSummary[]): string {
     .join(' · ');
 }
 
-/** The Recipes a filter shows, searched when the user has typed something. */
+/**
+ * The Recipes a filter shows, searched when the user has typed something: Want to Cook; Saved, the
+ * ones not cooked yet; or Cooked, the ones with a Cook Log (decisions 16).
+ */
 function recipesFor(filter: LibraryFilter, query: string): Promise<RecipeSummary[]> {
-  const wantToCook = filter === 'wantToCook';
-  if (query.trim() !== '') return data.searchRecipes(query, { wantToCook });
-  return wantToCook ? data.listWantToCook() : data.listMyRecipes();
+  if (filter === 'wantToCook') {
+    return query.trim() !== '' ? data.searchRecipes(query, { wantToCook: true }) : data.listWantToCook();
+  }
+  return data.searchRecipes(query, { cooked: filter === 'cooked' });
 }
+
+/** Whether the user has Cooked Recipes, so an empty Saved tile can say everything's been cooked. */
+const hasCooked = async () => (await data.searchRecipes('', { cooked: true })).length > 0;
 
 /** `value`, once it has stopped changing for `ms`. */
 function usePaused<T>(value: T, ms: number): T {
@@ -68,11 +76,12 @@ function usePaused<T>(value: T, ms: number): T {
   return paused;
 }
 
-/** What the list shows when it has no Recipes in it. */
-function emptyStateOf(filter: LibraryFilter, query: string) {
+/** What the list shows when it has no Recipes in it. `allCooked`: Saved is empty as all are Cooked. */
+function emptyStateOf(filter: LibraryFilter, query: string, allCooked: boolean) {
   if (query.trim() !== '') {
     // At the top, not centred: the keyboard is up while searching.
-    const where = filter === 'wantToCook' ? 'your Want to Cook list' : 'your Recipes';
+    const where =
+      filter === 'wantToCook' ? 'your Want to Cook list' : filter === 'cooked' ? 'your Cooked Recipes' : 'your Saved Recipes';
     return (
       <View>
         <SectionHeader title="Results" />
@@ -91,6 +100,25 @@ function emptyStateOf(filter: LibraryFilter, query: string) {
       />
     );
   }
+  if (filter === 'cooked') {
+    return (
+      <EmptyState
+        icon="checkmark-circle-outline"
+        title="Nothing cooked yet"
+        message="Add a Cook Log to a Recipe once you’ve cooked it, and it shows up here."
+      />
+    );
+  }
+  if (allCooked) {
+    return (
+      <EmptyState
+        icon="checkmark-done-outline"
+        title="You’ve cooked them all"
+        message="Every Recipe you’ve saved has a Cook Log, so they’re all under Cooked."
+        action={{ label: 'Write a Recipe', onPress: writeRecipe }}
+      />
+    );
+  }
   return (
     <EmptyState
       icon="book-outline"
@@ -102,7 +130,6 @@ function emptyStateOf(filter: LibraryFilter, query: string) {
 }
 
 export default function Library() {
-  // "Cooked" is visual only until Cook Logs (ticket 16): it shows every Recipe, as "Saved" does.
   const [filter, setFilter] = useState<LibraryFilter>('saved');
   const [query, setQuery] = useState('');
   const searched = usePaused(query, SEARCH_PAUSE_MS);
@@ -111,8 +138,11 @@ export default function Library() {
   useFocusEffect(
     useCallback(() => {
       let live = true;
+      const allCooked = async (recipes: RecipeSummary[]) =>
+        filter === 'saved' && searched.trim() === '' && recipes.length === 0 && (await hasCooked());
       Promise.all([recipesFor(filter, searched), data.listDrafts()])
-        .then(([recipes, drafts]) => live && setState({ status: 'loaded', recipes, drafts }))
+        .then(async ([recipes, drafts]) => ({ recipes, drafts, allCooked: await allCooked(recipes) }))
+        .then((loaded) => live && setState({ status: 'loaded', ...loaded }))
         .catch((e: unknown) => live && setState({ status: 'error', message: messageOf(e) }));
       return () => {
         live = false;
@@ -120,7 +150,8 @@ export default function Library() {
     }, [filter, searched]),
   );
 
-  const listTitle = searched.trim() !== '' ? 'Results' : filter === 'wantToCook' ? 'Want to Cook' : 'Recipes';
+  const listTitle =
+    searched.trim() !== '' ? 'Results' : filter === 'wantToCook' ? 'Want to Cook' : filter === 'cooked' ? 'Cooked' : 'Recipes';
 
   return (
     <Screen title="Library">
@@ -136,7 +167,7 @@ export default function Library() {
       ) : null}
       <FilterTiles options={FILTERS} value={filter} onChange={setFilter} />
       {state.status === 'error' ? <Text tone="danger">{state.message}</Text> : null}
-      {state.status === 'loaded' && state.recipes.length === 0 ? emptyStateOf(filter, searched) : null}
+      {state.status === 'loaded' && state.recipes.length === 0 ? emptyStateOf(filter, searched, state.allCooked) : null}
       {state.status === 'loaded' && state.recipes.length > 0 ? (
         <FlatList
           data={state.recipes}
@@ -154,6 +185,7 @@ export default function Library() {
               title={item.title}
               meta={[
                 `${count(item.lineCount, 'ingredient', 'ingredients')} · ${count(item.stepCount, 'step', 'steps')}`,
+                ...(item.cooked ? [cookedDetail(item.cooked)] : []),
               ]}
               onPress={() => router.push({ pathname: '/recipe/[id]', params: { id: item.id } })}
             />
