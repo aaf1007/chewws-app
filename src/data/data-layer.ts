@@ -52,6 +52,8 @@ import { checkUsername, usernameSearchQuery } from './username';
 import {
   DailyLimitError,
   DataError,
+  parseCookLogId,
+  parseCookLogPhotoId,
   parseCookPlanId,
   parseCookPlanItemId,
   parseIngredientId,
@@ -60,9 +62,15 @@ import {
   parseShoppingListItemId,
   parseTagId,
   parseUserId,
+  type AddCookLogResult,
   type AddRecipeToCookPlanResult,
   type CheckState,
   type ClaimState,
+  type CookLog,
+  type CookLogId,
+  type CookLogInput,
+  type CookLogPhotoId,
+  type CookLogPhotoInput,
   type CookPlan,
   type CookPlanId,
   type CookPlanItemId,
@@ -76,9 +84,11 @@ import {
   type CookPlansRead,
   type CopyRecipeResult,
   type CreateCookPlanResult,
+  type DeleteCookLogResult,
   type DraftBuild,
   type DraftBuildFailure,
   type DraftSummary,
+  type EditCookLogResult,
   type FoundUser,
   type Friend,
   type FriendRequest,
@@ -142,7 +152,7 @@ const SOURCE_VIDEO = `source_video:source_videos(${SOURCE_VIDEO_COLUMNS})`;
 const RECIPE_WITH_LINES = `*, recipe_lines(position, original_text, amount_text, ingredient:ingredients(id, name)), recipe_tags(tag:tags(id, name)), ${SOURCE_VIDEO}`;
 
 /** A reviewed Recipe as the library lists it. */
-const RECIPE_SUMMARY = 'id, title, steps, created_at, recipe_lines(count)';
+const RECIPE_SUMMARY = 'id, title, steps, created_at, recipe_lines(count), cook_logs(cooked_on)';
 
 const DRAFT_SUMMARY = `id, title, status, recipe_found, build_status, build_failure, build_attempts, build_started_at, created_at, ${SOURCE_VIDEO}`;
 
@@ -162,6 +172,12 @@ const RECIPE_IMAGES = 'recipe-images';
 const SCREENSHOT_URL_SECONDS = 60 * 60;
 /** The longest caption a user can paste (the 05 migration checks it too). */
 const MAX_CAPTION_LENGTH = 10_000;
+/** The private bucket of Cook Log photos, the users' own images (decisions 16). */
+const COOK_LOG_PHOTOS = 'cook-log-photos';
+/** Photos per Cook Log, and the longest notes (the 16 migration checks both too). */
+const MAX_COOK_LOG_PHOTOS = 4;
+const MAX_COOK_LOG_NOTES_LENGTH = 2000;
+const COOK_LOG_COLUMNS = 'id, user_id, recipe_id, cooked_on, notes, cook_plan_id, created_at, updated_at, cook_log_photos(id, position)';
 
 const FAILURES: Record<BuildFailureRow, DraftBuildFailure> = {
   source_unavailable: 'sourceUnavailable',
@@ -243,6 +259,49 @@ const COOK_PLAN_COLUMNS = 'id, creator_id, cook_on, status, cooked_at, cooked_by
 type CookPlanPersonRow = Database['public']['Views']['cook_plan_people']['Row'];
 type CookPlanRecipeListRow = Database['public']['Views']['cook_plan_recipe_list']['Row'];
 
+/** The calendar day `days` after `now`'s on this phone, as `YYYY-MM-DD`. */
+function localDay(now: number, days = 0): string {
+  const date = new Date(now);
+  date.setDate(date.getDate() + days);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/**
+ * The day a Cook Log says the Recipe was cooked: a calendar date `YYYY-MM-DD` that exists, no
+ * later than tomorrow on this phone (decisions 16). Anything else is refused.
+ */
+function toCookedOn(day: string, now: number): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day.trim());
+  const date = match ? new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))) : null;
+  if (!match || !date || date.toISOString().slice(0, 10) !== match[0]) {
+    throw new DataError('invalid_date', 'Pick the day you cooked it.');
+  }
+  if (match[0] > localDay(now, 1)) throw new DataError('invalid_date', 'A Cook Log can’t be dated later than tomorrow.');
+  return match[0];
+}
+
+/** A Cook Log's notes as typed: trimmed, null when blank. Too long is refused. */
+function toCookLogNotes(notes: string | null | undefined): string | null {
+  const trimmed = notes?.trim() || null;
+  if (trimmed !== null && trimmed.length > MAX_COOK_LOG_NOTES_LENGTH) {
+    throw new DataError('notes_too_long', `Notes can be at most ${MAX_COOK_LOG_NOTES_LENGTH} characters.`);
+  }
+  return trimmed;
+}
+
+/** A Cook Log's photos as given, refused when there are more than 4. */
+function toCookLogPhotos(photos: readonly CookLogPhotoInput[] | undefined): readonly CookLogPhotoInput[] {
+  const given = photos ?? [];
+  if (given.length > MAX_COOK_LOG_PHOTOS) {
+    throw new DataError('too_many_photos', `A Cook Log can have at most ${MAX_COOK_LOG_PHOTOS} photos.`);
+  }
+  return given;
+}
+
+/** The path of a Cook Log photo: `{user id}/{cook log id}/{photo id}.jpg`, its owner's folder. */
+const cookLogPhotoPath = (owner: UserId, logId: CookLogId, photoId: CookLogPhotoId) => `${owner}/${logId}/${photoId}.jpg`;
+
 /** A caption as pasted: trimmed, null when blank. Too long a caption is refused. */
 function toPastedCaption(caption: string | null | undefined): string | null {
   const trimmed = caption?.trim() || null;
@@ -266,14 +325,21 @@ function toSuggestedTags(suggested: string[], myTags: Tag[]): string[] {
 }
 
 function toRecipeSummary(
-  row: Pick<RecipeRow, 'id' | 'title' | 'steps' | 'created_at'> & { recipe_lines: { count: number }[] },
+  row: Pick<RecipeRow, 'id' | 'title' | 'steps' | 'created_at'> & {
+    recipe_lines: { count: number }[];
+    cook_logs: { cooked_on: string }[];
+  },
 ): RecipeSummary {
+  // Cooked once it has a Cook Log (decisions 16). Days are `YYYY-MM-DD`, so they sort as text.
+  const days = row.cook_logs.map((log) => log.cooked_on).sort();
+  const lastCookedOn = days[days.length - 1];
   return {
     id: parseRecipeId(row.id),
     title: row.title,
     lineCount: row.recipe_lines[0]?.count ?? 0,
     stepCount: row.steps.length,
     createdAt: row.created_at,
+    ...(lastCookedOn === undefined ? {} : { cooked: { count: days.length, lastCookedOn } }),
   };
 }
 
@@ -1362,15 +1428,26 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     if (!data) throw new DataError('recipe_not_found', 'That Recipe no longer exists.');
   }
 
-  /** Deletes the Recipe, and the screenshot the user added to it, if any. */
+  /**
+   * Deletes the Recipe, and the screenshot the user added to it, if any. Its Cook Logs go with it,
+   * and their photos too.
+   */
   async function deleteRecipe(id: RecipeId): Promise<void> {
+    const logs = await client.from('cook_logs').select('id, user_id').eq('recipe_id', id);
+    if (logs.error) fail(logs.error);
     const { data, error } = await client.from('recipes').delete().eq('id', id).select('owner_id');
     if (error) fail(error);
     const deleted = data[0];
     if (!deleted) throw new DataError('recipe_not_found', 'That Recipe no longer exists.');
     // A Recipe's screenshot, if it has one, is at its one path. Best effort: the Recipe is gone
     // either way, and an image left behind is only ever its owner's, at a path no Recipe has now.
-    await removeScreenshot(parseUserId(deleted.owner_id), id);
+    const owner = parseUserId(deleted.owner_id);
+    await Promise.all([
+      removeScreenshot(owner, id),
+      ...logs.data
+        .filter((log) => log.user_id === owner)
+        .map((log) => removeCookLogPhotos(owner, parseCookLogId(log.id))),
+    ]);
   }
 
   /** The path of a Recipe's screenshot: `{owner id}/{recipe id}.jpg`, the only one it can have. */
@@ -1378,10 +1455,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
 
   /** Removes a Recipe's screenshot from Storage, if it's there. Never fails. */
   async function removeScreenshot(owner: UserId, recipeId: RecipeId): Promise<void> {
-    await client.storage
-      .from(RECIPE_IMAGES)
-      .remove([screenshotPath(owner, recipeId)])
-      .catch(() => {});
+    await removeImages(RECIPE_IMAGES, [screenshotPath(owner, recipeId)]);
   }
 
   /**
@@ -1401,11 +1475,48 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
    * (no signal) is left out, and the screen shows the card without its picture.
    */
   async function screenshotUrlsOf(videos: (SourceVideoColumns | null)[]): Promise<ScreenshotUrls> {
-    const paths = videos.flatMap((video) => (video?.screenshot_path ? [video.screenshot_path] : []));
+    return signedUrlsOf(RECIPE_IMAGES, videos.flatMap((video) => (video?.screenshot_path ? [video.screenshot_path] : [])));
+  }
+
+  /**
+   * Links (an hour long) to the user's own images in a private bucket (decisions 05 and 16), by
+   * path. A link that can't be made (no signal, or not theirs to read) is left out.
+   */
+  async function signedUrlsOf(bucket: string, paths: string[]): Promise<ReadonlyMap<string, string>> {
     if (paths.length === 0) return new Map();
-    const { data, error } = await client.storage.from(RECIPE_IMAGES).createSignedUrls(paths, SCREENSHOT_URL_SECONDS);
+    const { data, error } = await client.storage.from(bucket).createSignedUrls(paths, SCREENSHOT_URL_SECONDS);
     if (error) return new Map();
     return new Map(data.flatMap((signed) => (signed.path && signed.signedUrl ? [[signed.path, signed.signedUrl]] : [])));
+  }
+
+  /**
+   * Uploads one of the user's own images (a JPEG the phone already scaled down, decisions 05) to
+   * `path` in a private bucket. With `replace`, it takes the place of one already there; without,
+   * one already there stays and this answers 'exists'. Refused, it fails with `{what}_not_saved`.
+   */
+  async function uploadImage(
+    bucket: string,
+    path: string,
+    jpeg: ArrayBuffer,
+    { replace, what }: { replace: boolean; what: 'screenshot' | 'photo' },
+  ): Promise<'uploaded' | 'exists'> {
+    const { error } = await client.storage.from(bucket).upload(path, jpeg, { contentType: 'image/jpeg', upsert: replace });
+    if (!error) return 'uploaded';
+    const status: unknown = Reflect.get(error, 'status');
+    if (!replace && (status === 409 || Reflect.get(error, 'statusCode') === '409')) return 'exists';
+    if (typeof status === 'number' && status > 0) {
+      throw new DataError(`${what}_not_saved`, `The ${what} couldn't be saved: ${error.message}`, { cause: error });
+    }
+    throw new DataError('offline', "No connection. Try again when you're back online.", { cause: error });
+  }
+
+  /** Removes some of the user's images from a bucket, if they're there. Never fails. */
+  async function removeImages(bucket: string, paths: string[]): Promise<void> {
+    if (paths.length === 0) return;
+    await client.storage
+      .from(bucket)
+      .remove(paths)
+      .catch(() => {});
   }
 
   /**
@@ -1420,16 +1531,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     { replace }: { replace: boolean },
   ): Promise<'uploaded' | 'exists'> {
     const me = await currentUserId();
-    const { error } = await client.storage
-      .from(RECIPE_IMAGES)
-      .upload(screenshotPath(me, recipeId), jpeg, { contentType: 'image/jpeg', upsert: replace });
-    if (!error) return 'uploaded';
-    const status: unknown = Reflect.get(error, 'status');
-    if (!replace && (status === 409 || Reflect.get(error, 'statusCode') === '409')) return 'exists';
-    if (typeof status === 'number' && status > 0) {
-      throw new DataError('screenshot_not_saved', `The screenshot couldn't be saved: ${error.message}`, { cause: error });
-    }
-    throw new DataError('offline', "No connection. Try again when you're back online.", { cause: error });
+    return uploadImage(RECIPE_IMAGES, screenshotPath(me, recipeId), jpeg, { replace, what: 'screenshot' });
   }
 
   /**
@@ -1568,6 +1670,217 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     return { status, recipeId: parseRecipeId(copied) };
   }
 
+  /** A new id for a Cook Log about to be added; the screen keeps it for every try of one save. */
+  function newCookLogId(): CookLogId {
+    return parseCookLogId(newId());
+  }
+
+  /**
+   * Uploads a Cook Log's new photos into the user's own folder, before the log is saved
+   * (decisions 16), and answers their new ids in order. If any fails, the ones that went up are
+   * removed again and nothing is saved.
+   */
+  async function uploadCookLogPhotos(me: UserId, logId: CookLogId, jpegs: ArrayBuffer[]): Promise<CookLogPhotoId[]> {
+    const ids = jpegs.map(() => parseCookLogPhotoId(newId()));
+    const uploads = await Promise.allSettled(
+      jpegs.map((jpeg, i) =>
+        uploadImage(COOK_LOG_PHOTOS, cookLogPhotoPath(me, logId, ids[i]), jpeg, { replace: false, what: 'photo' }),
+      ),
+    );
+    const failed = uploads.find((upload) => upload.status === 'rejected');
+    if (failed) {
+      await removeImages(
+        COOK_LOG_PHOTOS,
+        ids.filter((_, i) => uploads[i].status === 'fulfilled').map((id) => cookLogPhotoPath(me, logId, id)),
+      );
+      throw failed.reason;
+    }
+    return ids;
+  }
+
+  /**
+   * After photos were uploaded for a write the server then refused: removes them. A write that got
+   * no answer may have gone through, so its uploads stay; deleting the log removes them.
+   */
+  async function cleanUpRefusedPhotos(me: UserId, logId: CookLogId, ids: CookLogPhotoId[], error?: DataError) {
+    if (error?.code === 'offline') return;
+    await removeImages(COOK_LOG_PHOTOS, ids.map((id) => cookLogPhotoPath(me, logId, id)));
+  }
+
+  /** Removes every photo in a Cook Log's folder, those on it and any left from a refused save. Never fails. */
+  async function removeCookLogPhotos(owner: UserId, logId: CookLogId): Promise<void> {
+    const { data } = await client.storage
+      .from(COOK_LOG_PHOTOS)
+      .list(`${owner}/${logId}`)
+      .catch(() => ({ data: null }));
+    await removeImages(COOK_LOG_PHOTOS, (data ?? []).map((file) => `${owner}/${logId}/${file.name}`));
+  }
+
+  /**
+   * Logs a time the user cooked one of their reviewed Recipes (decisions 16): the day (no later
+   * than tomorrow), notes, up to 4 new photos (uploaded first, as the user's own images; if one
+   * can't be, nothing is saved) and the Friends they cooked with. `cookLogId` (from
+   * `newCookLogId`) names the log: send the same one when a save is tried again after no answer.
+   * `cookPlanId`: the Cook Plan it's logged from, whose co-members may then be companions (18).
+   */
+  async function addCookLog(
+    recipeId: RecipeId,
+    input: CookLogInput,
+    options: { cookLogId?: CookLogId; cookPlanId?: CookPlanId } = {},
+  ): Promise<AddCookLogResult> {
+    const cookedOn = toCookedOn(input.cookedOn, now());
+    const notes = toCookLogNotes(input.notes);
+    const jpegs = toCookLogPhotos(input.photos).map((photo) => {
+      if (photo.kind !== 'new') throw new DataError('photo_not_found', 'That photo isn’t on this Cook Log.');
+      return photo.jpeg;
+    });
+    const id = options.cookLogId ?? newCookLogId();
+    const me = await currentUserId();
+    const photoIds = await uploadCookLogPhotos(me, id, jpegs);
+    const { data, error } = await client.rpc('add_cook_log', {
+      id,
+      recipe_id: recipeId,
+      cooked_on: cookedOn,
+      notes: notes ?? undefined,
+      companions: [...new Set(input.companions ?? [])],
+      photos: photoIds,
+      cook_plan_id: options.cookPlanId,
+    });
+    if (error) {
+      const refused = toDataError(error);
+      await cleanUpRefusedPhotos(me, id, photoIds, refused);
+      throw refused;
+    }
+    const status = statusOf('add_cook_log', data, [
+      'added',
+      'noSuchRecipe',
+      'notReviewed',
+      'noSuchCookPlan',
+      'notCompanion',
+      'photoNotUploaded',
+    ]);
+    if (status === 'added') return { status, cookLogId: id };
+    await cleanUpRefusedPhotos(me, id, photoIds);
+    if (status === 'photoNotUploaded') throw new DataError('photo_not_saved', 'A photo couldn’t be saved. Try again.');
+    if (status === 'notCompanion') return { status, userId: companionOf('add_cook_log', data) };
+    return { status };
+  }
+
+  /** The user an answer of `notCompanion` names. */
+  function companionOf(fn: string, answer: Json): UserId {
+    const userId = fieldOf(answer, 'userId');
+    if (typeof userId !== 'string') throw new DataError('unknown', `${fn} answered oddly.`);
+    return parseUserId(userId);
+  }
+
+  /**
+   * Changes one of the user's Cook Logs from `log` (as read) to `edited`, sending only what
+   * changed: the day, the notes, companions added or removed, photos added (uploaded first) or
+   * removed (their images go from Storage after). A companion who isn't a Friend any more stays
+   * unless removed. At most 4 photos.
+   */
+  async function editCookLog(log: CookLog, edited: CookLogInput): Promise<EditCookLogResult> {
+    const cookedOn = edited.cookedOn === log.cookedOn ? null : toCookedOn(edited.cookedOn, now());
+    const notes = toCookLogNotes(edited.notes);
+    const photos = toCookLogPhotos(edited.photos);
+    const wanted = new Set(edited.companions ?? []);
+    const had = new Set(log.companions.map((c) => c.id));
+    const kept = new Set(photos.flatMap((photo) => (photo.kind === 'saved' ? [photo.id] : [])));
+    const removedPhotos = log.photos.filter((photo) => !kept.has(photo.id)).map((photo) => photo.id);
+    const jpegs = photos.flatMap((photo) => (photo.kind === 'new' ? [photo.jpeg] : []));
+    const me = await currentUserId();
+    const added = await uploadCookLogPhotos(me, log.id, jpegs);
+    const { data, error } = await client.rpc('edit_cook_log', {
+      id: log.id,
+      cooked_on: cookedOn ?? undefined,
+      // Blank clears the notes; left out, they stay as they were.
+      notes: notes === log.notes ? undefined : (notes ?? ''),
+      add_companions: [...wanted].filter((id) => !had.has(id)),
+      remove_companions: [...had].filter((id) => !wanted.has(id)),
+      add_photos: added,
+      remove_photos: removedPhotos,
+    });
+    if (error) {
+      const refused = toDataError(error);
+      await cleanUpRefusedPhotos(me, log.id, added, refused);
+      throw refused;
+    }
+    const status = statusOf('edit_cook_log', data, ['edited', 'notFound', 'tooManyPhotos', 'notCompanion', 'photoNotUploaded']);
+    if (status === 'edited') {
+      await removeImages(COOK_LOG_PHOTOS, removedPhotos.map((id) => cookLogPhotoPath(me, log.id, id)));
+      return { status };
+    }
+    await cleanUpRefusedPhotos(me, log.id, added);
+    if (status === 'photoNotUploaded') throw new DataError('photo_not_saved', 'A photo couldn’t be saved. Try again.');
+    if (status === 'notCompanion') return { status, userId: companionOf('edit_cook_log', data) };
+    return { status };
+  }
+
+  /**
+   * Deletes one of the user's Cook Logs and its photos (best effort), and says whether its Recipe
+   * is still Cooked or is Saved again (its last log gone).
+   */
+  async function deleteCookLog(logId: CookLogId): Promise<DeleteCookLogResult> {
+    const me = await currentUserId();
+    const { data, error } = await client.rpc('delete_cook_log', { id: logId });
+    if (error) fail(error);
+    const status = statusOf('delete_cook_log', data, ['deleted', 'notFound']);
+    if (status === 'notFound') return { status };
+    const recipe = fieldOf(data, 'recipe');
+    if (recipe !== 'cooked' && recipe !== 'saved') throw new DataError('unknown', 'delete_cook_log answered oddly.');
+    await removeCookLogPhotos(me, logId);
+    return { status, recipe };
+  }
+
+  /**
+   * A Recipe's Cook Logs the user may read (theirs, or a Friend's, decisions 16), newest day
+   * first: notes, photos (links an hour long) and who they cooked with, by username.
+   */
+  async function listCookLogs(recipeId: RecipeId): Promise<CookLog[]> {
+    const { data, error } = await client
+      .from('cook_logs')
+      .select(COOK_LOG_COLUMNS)
+      .eq('recipe_id', recipeId)
+      .order('cooked_on', { ascending: false })
+      .order('created_at', { ascending: false })
+      .order('id');
+    if (error) fail(error);
+    if (data.length === 0) return [];
+    const photoPaths = data.flatMap((row) =>
+      row.cook_log_photos.map((photo) =>
+        cookLogPhotoPath(parseUserId(row.user_id), parseCookLogId(row.id), parseCookLogPhotoId(photo.id)),
+      ),
+    );
+    const [companions, urls] = await Promise.all([
+      client.rpc('cook_log_companion_list', { cook_log_ids: data.map((row) => row.id) }),
+      signedUrlsOf(COOK_LOG_PHOTOS, photoPaths),
+    ]);
+    if (companions.error) fail(companions.error);
+    return data.map((row) => {
+      const id = parseCookLogId(row.id);
+      const userId = parseUserId(row.user_id);
+      return {
+        id,
+        recipeId: parseRecipeId(row.recipe_id),
+        userId,
+        cookedOn: row.cooked_on,
+        notes: row.notes,
+        companions: companions.data
+          .filter((c) => c.cook_log_id === row.id)
+          .map((c) => ({ id: parseUserId(c.user_id), username: c.username })),
+        photos: [...row.cook_log_photos]
+          .sort((a, b) => a.position - b.position)
+          .map((photo) => {
+            const photoId = parseCookLogPhotoId(photo.id);
+            return { id: photoId, url: urls.get(cookLogPhotoPath(userId, id, photoId)) ?? null };
+          }),
+        cookPlanId: row.cook_plan_id === null ? null : parseCookPlanId(row.cook_plan_id),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+    });
+  }
+
   /**
    * Reads a Recipe's TikTok or YouTube Source Video from its platform again, as when its stored
    * thumbnail URL stops loading (TikTok's expire), and returns the Source Video as stored after.
@@ -1622,12 +1935,17 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
    * `query`: in the title, a Tag's name, or a linked Ingredient's name, without regard to case
    * (decisions 06). An Ingredient is found by the word as the Ingredient matcher reads it, so
    * "tomatoes" finds tomato. With `wantToCook`, only those marked Want to Cook, the most recently
-   * marked first; otherwise newest first. An empty query finds them all.
+   * marked first; otherwise newest first. With `cooked`, only the Cooked ones (true: with a Cook
+   * Log) or only the Saved ones (false: none yet); left out, both (decisions 16). An empty query
+   * finds them all.
    */
-  async function searchRecipes(query: string, options: { wantToCook?: boolean } = {}): Promise<RecipeSummary[]> {
+  async function searchRecipes(
+    query: string,
+    options: { wantToCook?: boolean; cooked?: boolean } = {},
+  ): Promise<RecipeSummary[]> {
     const wantToCook = options.wantToCook ?? false;
     let search = client
-      .rpc('search_recipes', { words: searchWords(query), want_to_cook_only: wantToCook })
+      .rpc('search_recipes', { words: searchWords(query), want_to_cook_only: wantToCook, cooked: options.cooked })
       .select(`${RECIPE_SUMMARY}, want_to_cook_at`);
     if (wantToCook) search = search.order('want_to_cook_at', { ascending: false });
     const { data, error } = await search.order('created_at', { ascending: false }).order('id');
@@ -3384,6 +3702,11 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     deleteRecipe,
     getRecipe,
     copyRecipe,
+    newCookLogId,
+    addCookLog,
+    editCookLog,
+    deleteCookLog,
+    listCookLogs,
     createCookPlan,
     inviteToCookPlan,
     setCookPlanDate,
