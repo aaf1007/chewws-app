@@ -1,0 +1,169 @@
+# Ticket 18: "We cooked it". The dev user has two Cook Plans with sam, a Friend
+# (scripts/plans-with-sam.js): "Dal, Sam's shakshuka" on yesterday and "Toast, Sam's flatbread".
+# They mark the first cooked, confirming first, and see the prompt: they log their own Dal with sam
+# already chosen as cooked with, then rank it; for sam's shakshuka they save their own copy first,
+# then log that. Logged both, the prompt goes, and the plan is under Cooked. Then sam marks the
+# other plan cooked on his phone (scripts/sam-marks-plan-cooked.js) while the dev user has it open:
+# it turns cooked live, with its prompt, and they tap "Not now". Both plans are in the archive.
+# Run with `npm run e2e -- .maestro/18-we-cooked-it.yaml` (the scripts ask scripts/net-control.mjs,
+# which scripts/e2e.sh runs). One phone, no network.
+appId: com.ant1007.recipeapp
+---
+- runScript: scripts/plans-with-sam.js
+- runFlow: subflows/sign-in-dev.yaml
+
+- tapOn:
+    id: "tab-cook-plans"
+- extendedWaitUntil:
+    visible:
+      id: "cook-plans"
+    timeout: 10000
+- assertNotVisible:
+    id: "cooked-plans"
+- tapOn: "Dal, Sam's shakshuka, .*"
+
+# "We cooked it", confirmed first.
+- extendedWaitUntil:
+    visible: "Dal, Yours"
+    timeout: 10000
+- scrollUntilVisible:
+    element:
+      id: "we-cooked-it"
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    id: "we-cooked-it"
+- extendedWaitUntil:
+    visible: "We cooked it?"
+    timeout: 5000
+- assertVisible: "Cancel"
+- tapOn: "Yes, we cooked it"
+
+# The prompt: the dev user's Dal to log, sam's shakshuka to copy first.
+- scrollUntilVisible:
+    element:
+      id: "cooked-prompt"
+    direction: UP
+    timeout: 30000
+- assertVisible: "You cooked it!.*"
+- assertVisible: "Save your copy first: Sam's shakshuka"
+- assertNotVisible:
+    id: "we-cooked-it"
+- assertVisible:
+    id: "cook-plan-cooked"
+
+# Dal: the form starts with sam chosen, then "Rank it".
+- tapOn: "Log it: Dal"
+- extendedWaitUntil:
+    visible: "Add Cook Log"
+    timeout: 10000
+- assertVisible:
+    text: "@sam"
+    selected: true
+- tapOn:
+    id: "cook-log-notes"
+- inputText: "Lentils went soft"
+- hideKeyboard
+- scrollUntilVisible:
+    element:
+      id: "save-cook-log"
+    direction: DOWN
+- tapOn:
+    id: "save-cook-log"
+- extendedWaitUntil:
+    visible:
+      id: "prompt-rank-it"
+    timeout: 10000
+- tapOn:
+    id: "prompt-rank-it"
+- extendedWaitUntil:
+    visible: "How was it?"
+    timeout: 10000
+- tapOn:
+    id: "band-liked"
+- extendedWaitUntil:
+    visible: "#1 in Liked"
+    timeout: 10000
+- tapOn:
+    id: "ranking-done"
+
+# sam's shakshuka: save a copy first, then log the copy, and skip ranking it.
+- extendedWaitUntil:
+    visible: "Logged: Dal"
+    timeout: 10000
+- tapOn: "Save your copy first: Sam's shakshuka"
+- extendedWaitUntil:
+    visible:
+      id: "save-your-copy-first"
+    timeout: 10000
+- assertVisible: "@sam's"
+- tapOn:
+    id: "save-your-copy"
+- extendedWaitUntil:
+    visible: "Sam's shakshuka (your copy)"
+    timeout: 10000
+- assertVisible:
+    text: "@sam"
+    selected: true
+- scrollUntilVisible:
+    element:
+      id: "save-cook-log"
+    direction: DOWN
+- tapOn:
+    id: "save-cook-log"
+- extendedWaitUntil:
+    visible:
+      id: "prompt-skip-ranking"
+    timeout: 10000
+- tapOn:
+    id: "prompt-skip-ranking"
+
+# Both logged: no prompt any more, and the plan is in the archive.
+- extendedWaitUntil:
+    visible:
+      id: "cook-plan-cooked"
+    timeout: 10000
+- assertNotVisible:
+    id: "cooked-prompt"
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible:
+      id: "cooked-plans"
+    timeout: 10000
+- assertVisible: "Dal, Sam's shakshuka, .*Cooked .* by you"
+- assertNotVisible:
+    id: "cook-plans-prompt"
+
+# sam marks the other plan cooked while the dev user has it open: it turns cooked live.
+- tapOn: "Toast, Sam's flatbread, .*"
+- extendedWaitUntil:
+    visible:
+      id: "we-cooked-it"
+    timeout: 10000
+- runScript: scripts/sam-marks-plan-cooked.js
+- extendedWaitUntil:
+    visible:
+      id: "cooked-prompt"
+    timeout: 15000
+- assertVisible: "Cooked .* by @sam"
+- assertVisible: "Log it: Toast"
+- assertVisible: "Save your copy first: Sam's flatbread"
+- tapOn:
+    id: "cooked-prompt-not-now"
+- extendedWaitUntil:
+    notVisible:
+      id: "cooked-prompt"
+    timeout: 10000
+
+# The archive: both plans under Cooked, most recently cooked first, and no prompts.
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible:
+      id: "cooked-plans"
+    timeout: 10000
+- assertVisible: "Toast, Sam's flatbread, .*Cooked .* by @sam"
+- assertVisible: "Dal, Sam's shakshuka, .*Cooked .* by you"
+- assertNotVisible:
+    id: "cook-plans"
+- assertNotVisible:
+    id: "cook-plans-prompt"

@@ -15,7 +15,8 @@
 // and /sam-plans-shakshuka, /sam-claims-egg, /check-plan-list and /sam-removes-shakshuka (ticket 15:
 // sam adding a Recipe to the dev user's plan's list, claiming a line on it, checking it has the dev
 // user's changes, and taking his Recipe out), and /dev-cooked-recipes (ticket 17: the dev user's
-// Cooked Recipes, two of them ranked); nothing else. Listens on 127.0.0.1 only.
+// Cooked Recipes, two of them ranked), and /plans-with-sam and /sam-marks-plan-cooked (ticket 18:
+// two Cook Plans with sam; sam marking the newest one cooked); nothing else. Listens on 127.0.0.1 only.
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
@@ -45,6 +46,8 @@ const commands = {
   '/check-plan-list': [process.execPath, [script('./e2e-db.mjs'), 'check-plan-list']],
   '/sam-removes-shakshuka': [process.execPath, [script('./e2e-db.mjs'), 'sam-removes-shakshuka']],
   '/dev-cooked-recipes': [process.execPath, [script('./e2e-db.mjs'), 'dev-cooked-recipes']],
+  '/plans-with-sam': [process.execPath, [script('./e2e-db.mjs'), 'plans-with-sam']],
+  '/sam-marks-plan-cooked': [process.execPath, [script('./e2e-db.mjs'), 'sam-marks-plan-cooked']],
 };
 
 createServer((req, res) => {
