@@ -1141,3 +1141,44 @@ export async function rankingWriters(): Promise<string[]> {
   );
   return rows.map((r) => r.name);
 }
+
+/**
+ * The functions allowed to read `friendships` themselves: the Friend rule and ticket 11's friendship
+ * functions, which send, answer, cancel, end and list requests and Friends (decisions 11). Anything
+ * else asks private.are_friends or private.friend_ids.
+ */
+const FRIENDSHIP_READERS = [
+  'private.are_friends',
+  'private.can_see_profile',
+  'private.friend_ids',
+  'private.relationship_with',
+  'public.cancel_friend_request',
+  'public.claim_friend_request_push',
+  'public.list_friend_requests',
+  'public.list_friends',
+  'public.respond_to_friend_request',
+  'public.send_friend_request',
+  'public.unfriend',
+];
+
+/**
+ * Every database function (in any schema of the app's) or row-level policy that mentions the
+ * `friendships` table and isn't on the allowed list: one deciding who is a Friend for itself, with
+ * or without comparing a status. As `schema.name`, or `policy schema.table: name`.
+ */
+export async function friendshipReadersNotAllowed(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname not in ('pg_catalog', 'information_schema')
+       and not (n.nspname || '.' || p.proname = any ($1))
+       and p.prosrc ~* '\\mfriendships\\M'
+     union all
+     select 'policy ' || schemaname || '.' || tablename || ': ' || policyname
+     from pg_policies
+     where coalesce(qual, '') ~* '\\mfriendships\\M' or coalesce(with_check, '') ~* '\\mfriendships\\M'
+     order by 1`,
+    [FRIENDSHIP_READERS],
+  );
+  return rows.map((r) => r.name);
+}
