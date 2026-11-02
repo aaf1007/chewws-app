@@ -272,18 +272,21 @@ export type Database = {
           invited_by: string | null
           joined_at: string
           plan_id: string
+          prompt_dismissed_at: string | null
           user_id: string
         }
         Insert: {
           invited_by?: string | null
           joined_at?: string
           plan_id: string
+          prompt_dismissed_at?: string | null
           user_id: string
         }
         Update: {
           invited_by?: string | null
           joined_at?: string
           plan_id?: string
+          prompt_dismissed_at?: string | null
           user_id?: string
         }
         Relationships: [
@@ -1113,6 +1116,7 @@ export type Database = {
         Returns: string
       }
       delete_cook_log: { Args: { id: string }; Returns: Json }
+      dismiss_cook_plan_prompt: { Args: { plan_id: string }; Returns: Json }
       draft_ready_push: { Args: { recipe_id: string }; Returns: Json }
       edit_cook_log: {
         Args: {
@@ -1209,6 +1213,7 @@ export type Database = {
           username: string
         }[]
       }
+      mark_cook_plan_cooked: { Args: { plan_id: string }; Returns: Json }
       place_in_ranking: {
         Args: {
           band: Database["public"]["Enums"]["ranking_band"]
