@@ -570,8 +570,8 @@ export type RankingBand = 'liked' | 'fine' | 'disliked';
 
 /**
  * A Recipe in a Ranking: its band, its place in that band (1 = best) and its Score (0–10, one
- * decimal), made by the ranking engine. `title` is null for a Friend's Recipe the user can't read
- * (ticket 19 lets Friends read ranked Recipes). `rankedAt`: when it was last placed.
+ * decimal), made by the ranking engine. `title` is null only when the Recipe can't be read any more
+ * (unfriended or deleted between reads). `rankedAt`: when it was last placed.
  */
 export type RankedRecipe = {
   recipeId: RecipeId;
@@ -584,6 +584,35 @@ export type RankedRecipe = {
 
 /** A user's whole Ranking, each band best first. */
 export type Ranking = Record<RankingBand, RankedRecipe[]>;
+
+/** One of a Friend's Cook Logs on their profile, with the title of the Recipe it's of. */
+export type FriendCookLog = CookLog & { recipeTitle: string | null };
+
+/** Where the next page of a Friend's Cook Logs starts: just after this log, in their order. */
+export type CookLogCursor = { cookedOn: string; createdAt: string; id: CookLogId };
+
+/** A page of a Friend's Cook Logs, newest day first; `next` is null on the last page. */
+export type FriendCookLogPage = { logs: FriendCookLog[]; next: CookLogCursor | null };
+
+/**
+ * A Friend's profile (decisions 19): their username, when you became Friends, their Ranking with
+ * Scores and the first page of their Cook Logs. Nothing else of theirs: no Pantry, Staples,
+ * Shopping List, Want to Cook, Tags, Drafts, other Recipes or Friends. `notFound` for a stranger,
+ * someone unfriended, yourself or an id nobody has, alike.
+ */
+export type FriendProfileResult =
+  | {
+      status: 'found';
+      id: UserId;
+      username: string;
+      friendsSince: string;
+      ranking: Ranking;
+      cookLogs: FriendCookLogPage;
+    }
+  | { status: 'notFound' };
+
+/** The next page of a Friend's Cook Logs, or `notFound` as for their profile. */
+export type FriendCookLogsResult = ({ status: 'found' } & FriendCookLogPage) | { status: 'notFound' };
 
 /** One of the Recipes a new one is compared with: "Better or worse than Shakshuka?". */
 export type RankingCandidate = { recipeId: RecipeId; title: string };

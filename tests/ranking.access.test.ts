@@ -188,8 +188,8 @@ test('the private Ranking functions are not exposed through the Data API', async
 
 test('who sees a Ranking (and Cook Logs) is decided in one place, and only three functions write a Ranking', async () => {
   expect(await rankingPolicies()).toEqual(['ranking_entries SELECT: private.can_see_activity_of(user_id)']);
-  // The Cook Log read rule is the same rule, asked, not restated.
-  expect(await functionsAskingTheActivityRule()).toEqual(['private.can_read_cook_logs_of']);
+  // The Cook Log read rule is the same rule, asked, not restated; so is the Recipe rule's Friend part (ticket 19).
+  expect(await functionsAskingTheActivityRule()).toEqual(['private.can_read_cook_logs_of', 'private.can_read_recipe']);
   expect(await functionsRestatingTheActivityRule()).toEqual([]);
   expect(await functionsRestatingTheCookLogReadRule()).toEqual([]);
   expect(await functionsRestatingTheFriendRule()).toEqual([]);

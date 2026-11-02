@@ -76,6 +76,7 @@ import {
   type CheckState,
   type ClaimState,
   type CookLog,
+  type CookLogCursor,
   type CookLogId,
   type CookLogInput,
   type CookLogPhotoId,
@@ -103,6 +104,9 @@ import {
   type EditCookLogResult,
   type FoundUser,
   type Friend,
+  type FriendCookLogPage,
+  type FriendCookLogsResult,
+  type FriendProfileResult,
   type FriendRequest,
   type FriendRequestAnswer,
   type FriendRequestResult,
@@ -195,6 +199,13 @@ const COOK_LOG_PHOTOS = 'cook-log-photos';
 const MAX_COOK_LOG_PHOTOS = 4;
 const MAX_COOK_LOG_NOTES_LENGTH = 2000;
 const COOK_LOG_COLUMNS = 'id, user_id, recipe_id, cooked_on, notes, cook_plan_id, created_at, updated_at, cook_log_photos(id, position)';
+/** A Cook Log row as COOK_LOG_COLUMNS reads it. */
+type CookLogRow = Pick<
+  Database['public']['Tables']['cook_logs']['Row'],
+  'id' | 'user_id' | 'recipe_id' | 'cooked_on' | 'notes' | 'cook_plan_id' | 'created_at' | 'updated_at'
+> & { cook_log_photos: { id: string; position: number }[] };
+/** A Friend's Cook Logs come 20 at a time (decisions 19). */
+const FRIEND_COOK_LOGS_PAGE = 20;
 
 const FAILURES: Record<BuildFailureRow, DraftBuildFailure> = {
   source_unavailable: 'sourceUnavailable',
@@ -1956,18 +1967,23 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       .order('created_at', { ascending: false })
       .order('id');
     if (error) fail(error);
-    if (data.length === 0) return [];
-    const photoPaths = data.flatMap((row) =>
+    return toCookLogs(data);
+  }
+
+  /** Cook Log rows as read, with their companions by username and their photos' links. */
+  async function toCookLogs(rows: CookLogRow[]): Promise<CookLog[]> {
+    if (rows.length === 0) return [];
+    const photoPaths = rows.flatMap((row) =>
       row.cook_log_photos.map((photo) =>
         cookLogPhotoPath(parseUserId(row.user_id), parseCookLogId(row.id), parseCookLogPhotoId(photo.id)),
       ),
     );
     const [companions, urls] = await Promise.all([
-      client.rpc('cook_log_companion_list', { cook_log_ids: data.map((row) => row.id) }),
+      client.rpc('cook_log_companion_list', { cook_log_ids: rows.map((row) => row.id) }),
       signedUrlsOf(COOK_LOG_PHOTOS, photoPaths),
     ]);
     if (companions.error) fail(companions.error);
-    return data.map((row) => {
+    return rows.map((row) => {
       const id = parseCookLogId(row.id);
       const userId = parseUserId(row.user_id);
       return {
@@ -1993,9 +2009,88 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   }
 
   /**
+   * The titles of those of these Recipes the user may read (their own, a plan's, or one a Friend
+   * ranked or logged: decisions 19), by id. The others are left out.
+   */
+  async function recipeTitlesOf(ids: readonly RecipeId[]): Promise<ReadonlyMap<RecipeId, string>> {
+    if (ids.length === 0) return new Map();
+    const { data, error } = await client.rpc('recipe_titles', { recipe_ids: [...new Set(ids)] });
+    if (error) fail(error);
+    return new Map(data.map((row) => [parseRecipeId(row.id), row.title]));
+  }
+
+  /** The Friend with this id, or null for anyone else (a stranger, someone unfriended, yourself, nobody). */
+  async function friendWithId(userId: UserId): Promise<Friend | null> {
+    return (await listFriends()).find((friend) => friend.id === userId) ?? null;
+  }
+
+  /**
+   * A page of `userId`'s Cook Logs as the user may read them (a Friend's, decisions 16 and 19),
+   * newest day first, starting just after `after` (from the first when null), each with its
+   * Recipe's title.
+   */
+  async function cookLogPageOf(userId: UserId, after: CookLogCursor | null): Promise<FriendCookLogPage> {
+    let query = client.from('cook_logs').select(COOK_LOG_COLUMNS).eq('user_id', userId);
+    if (after) {
+      // After it in the order below: an earlier day; the same day, added earlier; or the same
+      // moment, a later id. Timestamps are quoted, as they hold PostgREST's reserved characters.
+      const day = after.cookedOn;
+      const at = `"${after.createdAt}"`;
+      query = query.or(
+        `cooked_on.lt.${day},and(cooked_on.eq.${day},created_at.lt.${at}),and(cooked_on.eq.${day},created_at.eq.${at},id.gt.${after.id})`,
+      );
+    }
+    const { data, error } = await query
+      .order('cooked_on', { ascending: false })
+      .order('created_at', { ascending: false })
+      .order('id')
+      .limit(FRIEND_COOK_LOGS_PAGE + 1);
+    if (error) fail(error);
+    const page = data.slice(0, FRIEND_COOK_LOGS_PAGE);
+    const [logs, titles] = await Promise.all([
+      toCookLogs(page),
+      recipeTitlesOf(page.map((row) => parseRecipeId(row.recipe_id))),
+    ]);
+    const last = logs.at(-1);
+    return {
+      logs: logs.map((log) => ({ ...log, recipeTitle: titles.get(log.recipeId) ?? null })),
+      next:
+        data.length > FRIEND_COOK_LOGS_PAGE && last
+          ? { cookedOn: last.cookedOn, createdAt: last.createdAt, id: last.id }
+          : null,
+    };
+  }
+
+  /**
+   * A Friend's profile (decisions 19): username, "Friends since", their Ranking with Scores (the
+   * ranking engine's), and their first 20 Cook Logs, newest first. `notFound` alike for a stranger,
+   * an unfriended user, yourself and an id nobody has: each is simply not in your Friends list.
+   */
+  async function getFriendProfile(userId: UserId): Promise<FriendProfileResult> {
+    const friend = await friendWithId(userId);
+    if (!friend) return { status: 'notFound' };
+    const [ranking, cookLogs] = await Promise.all([getRanking(friend.id), cookLogPageOf(friend.id, null)]);
+    return {
+      status: 'found',
+      id: friend.id,
+      username: friend.username,
+      friendsSince: friend.friendsSince,
+      ranking,
+      cookLogs,
+    };
+  }
+
+  /** The next 20 of a Friend's Cook Logs after `after` (a page's `next`), or `notFound` as for their profile. */
+  async function getFriendCookLogs(userId: UserId, after: CookLogCursor): Promise<FriendCookLogsResult> {
+    const friend = await friendWithId(userId);
+    if (!friend) return { status: 'notFound' };
+    return { status: 'found', ...(await cookLogPageOf(friend.id, after)) };
+  }
+
+  /**
    * A user's Ranking (decisions 17): the three bands, each best first, with every Recipe's Score
-   * made by the ranking engine. The user's own by default; a Friend's when they may see it (their
-   * titles stay null until ticket 19 lets Friends read ranked Recipes). Anyone else's is empty.
+   * made by the ranking engine. The user's own by default; a Friend's when they may see it, its
+   * titles read through the Recipe read rule (decisions 19). Anyone else's is empty.
    */
   async function getRanking(userId?: UserId): Promise<Ranking> {
     const who = userId ?? (await currentUserId());
@@ -2006,13 +2101,17 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       .order('band')
       .order('position');
     if (error) fail(error);
+    // A Friend's Recipe rows are theirs alone (decisions 14); its title comes through the read rule.
+    const titles = await recipeTitlesOf(
+      data.flatMap((row) => (row.recipe === null ? [parseRecipeId(row.recipe_id)] : [])),
+    );
     const ranking: Ranking = { liked: [], fine: [], disliked: [] };
     for (const band of RANKING_BANDS) {
       const rows = data.filter((row) => row.band === band);
       ranking[band] = rows.map(
         (row): RankedRecipe => ({
           recipeId: parseRecipeId(row.recipe_id),
-          title: row.recipe?.title ?? null,
+          title: row.recipe?.title ?? titles.get(parseRecipeId(row.recipe_id)) ?? null,
           band,
           position: row.position,
           score: scoreOf(band, row.position, rows.length),
@@ -3903,6 +4002,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     deleteCookLog,
     listCookLogs,
     getRanking,
+    getFriendProfile,
+    getFriendCookLogs,
     startRanking,
     answerComparison,
     skipComparisons,

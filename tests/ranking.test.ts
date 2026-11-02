@@ -229,8 +229,8 @@ test('Friends read a Ranking with its Scores; a stranger and an unfriended user 
   await ranked(kim, b, 'disliked');
   await kim.data.unfriend(ex.userId);
 
-  // Titles wait for ticket 19 (Friends read ranked Recipes); the order and Scores are there now.
-  expect(await shown(sam.data, kim)).toEqual({ liked: ['1. ? 8.4'], fine: [], disliked: ['1. ? 1.7'] });
+  // Friends read ranked Recipes (ticket 19), so their titles too.
+  expect(await shown(sam.data, kim)).toEqual({ liked: ['1. A 8.4'], fine: [], disliked: ['1. B 1.7'] });
   expect((await sam.data.getRanking(kim.userId)).liked.map((r) => r.recipeId)).toEqual([a]);
   for (const outsider of [stranger, ex]) {
     expect(await shown(outsider.data, kim)).toEqual({ liked: [], fine: [], disliked: [] });
