@@ -12,19 +12,36 @@ import type { NotifyRequest } from '../../supabase/functions/_shared/notifier';
 import {
   createChangeQueue,
   memoryStorage,
+  type Delivered,
   type Delivery,
   type KeyValueStorage,
   type QueuedChange,
 } from './change-queue';
 import type { Database, Json } from './database.types';
 import { normaliseIngredientName } from './ingredient-matcher';
-import { toListLines, withItems, withListChanges, type ListChange, type ListRef } from './list-engine';
+import {
+  isCookPlanChange,
+  isShoppingListChange,
+  toCookPlanList,
+  toListLines,
+  withCookPlanChanges,
+  withItems,
+  withListChanges,
+  type CookPlanListChange,
+  type ListChange,
+  type ShoppingListRef,
+  type WhoHas,
+} from './list-engine';
 import { friendsListName } from './list-names';
 import {
   encodeListChange,
   parseListChange,
+  parseSavedCookPlanIndex,
+  parseSavedCookPlanList,
+  parseSavedCookPlans,
   parseSavedSharedLists,
   parseSavedShoppingList,
+  type LostCookPlan,
   type LostSharedList,
 } from './list-storage';
 import { validateRecipeInput } from './recipe-input';
@@ -36,6 +53,7 @@ import {
   DailyLimitError,
   DataError,
   parseCookPlanId,
+  parseCookPlanItemId,
   parseIngredientId,
   parseRecipeId,
   parseShoppingListId,
@@ -44,10 +62,18 @@ import {
   parseUserId,
   type AddRecipeToCookPlanResult,
   type CheckState,
+  type ClaimState,
   type CookPlan,
   type CookPlanId,
+  type CookPlanItemId,
+  type CookPlanList,
+  type CookPlanListItem,
+  type CookPlanListView,
+  type CookPlanRecipeAmounts,
   type CookPlanMember,
+  type CookPlanRead,
   type CookPlanRecipe,
+  type CookPlansRead,
   type CopyRecipeResult,
   type CreateCookPlanResult,
   type DraftBuild,
@@ -103,6 +129,8 @@ type IngredientRow = Database['public']['Tables']['ingredients']['Row'];
 type RecipeLineRow = Database['public']['Tables']['recipe_lines']['Row'];
 type ShoppingListItemRow = Database['public']['Tables']['shopping_list_items']['Row'];
 type ShoppingListAmountRow = Database['public']['Tables']['shopping_list_amounts']['Row'];
+type CookPlanItemRow = Database['public']['Tables']['cook_plan_items']['Row'];
+type CookPlanAmountRow = Database['public']['Tables']['cook_plan_amounts']['Row'];
 type SourceVideoRow = Database['public']['Tables']['source_videos']['Row'];
 type TagRow = Database['public']['Tables']['tags']['Row'];
 type BuildFailureRow = Database['public']['Enums']['draft_build_failure'];
@@ -211,6 +239,9 @@ type CookPlanRow = Pick<
   Database['public']['Tables']['cook_plans']['Row'],
   'id' | 'creator_id' | 'cook_on' | 'status' | 'cooked_at' | 'cooked_by' | 'created_at'
 >;
+const COOK_PLAN_COLUMNS = 'id, creator_id, cook_on, status, cooked_at, cooked_by, created_at';
+type CookPlanPersonRow = Database['public']['Views']['cook_plan_people']['Row'];
+type CookPlanRecipeListRow = Database['public']['Views']['cook_plan_recipe_list']['Row'];
 
 /** A caption as pasted: trimmed, null when blank. Too long a caption is refused. */
 function toPastedCaption(caption: string | null | undefined): string | null {
@@ -372,6 +403,43 @@ function toShoppingListItem(
 
 /** An item's name as the list shows it. */
 const nameOf = (item: ShoppingListItem) => (item.kind === 'ingredient' ? item.ingredient.name : item.text);
+
+// A Cook Plan with its lines, each with its Ingredient and every Recipe's amounts (decisions 15).
+const COOK_PLAN_WITH_LINES =
+  'id, status, cook_plan_items(id, claimed_by, claimed_at, checked_at, checked_by, ingredient:ingredients(id, name), cook_plan_amounts(recipe_id, recipe_title, amount_texts, created_at))';
+
+function toClaimState(row: Pick<CookPlanItemRow, 'claimed_at' | 'claimed_by'>): ClaimState {
+  return row.claimed_at === null
+    ? { status: 'unclaimed' }
+    : { status: 'claimed', claimedAt: row.claimed_at, claimedBy: row.claimed_by === null ? null : parseUserId(row.claimed_by) };
+}
+
+/** A Cook Plan line as read, before the list engine says who has it. */
+function toCookPlanListItem(
+  row: Pick<CookPlanItemRow, 'id' | 'claimed_at' | 'claimed_by' | 'checked_at' | 'checked_by'> & {
+    ingredient: Pick<IngredientRow, 'id' | 'name'>;
+    cook_plan_amounts: Pick<CookPlanAmountRow, 'recipe_id' | 'recipe_title' | 'amount_texts' | 'created_at'>[];
+  },
+): Omit<CookPlanListItem, 'whoHas'> {
+  const recipes = [...row.cook_plan_amounts]
+    .sort((a, b) => compareText(a.created_at, b.created_at) || compareText(a.recipe_title, b.recipe_title))
+    .map(
+      (amount): CookPlanRecipeAmounts => ({
+        recipe:
+          amount.recipe_id === null
+            ? { status: 'removed', title: amount.recipe_title }
+            : { status: 'inPlan', id: parseRecipeId(amount.recipe_id), title: amount.recipe_title },
+        amountTexts: amount.amount_texts,
+      }),
+    );
+  return {
+    id: parseCookPlanItemId(row.id),
+    ingredient: toIngredient(row.ingredient),
+    recipes,
+    claim: toClaimState(row),
+    check: toCheckState(row),
+  };
+}
 
 function toProfile(row: ProfileRow): Profile {
   return { id: parseUserId(row.id), username: row.username, createdAt: row.created_at };
@@ -678,8 +746,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       const cleared = (await sessionStorage.clear()).map(parseKeptSession).filter((s) => s !== null);
       await remember(null);
       if (me) {
-        const list = shoppingListOf(me);
-        shoppingLists.delete(me);
+        const list = listsOf(me);
+        listsByUser.delete(me);
         await list.discard();
       }
       setSession({ status: 'signedOut' });
@@ -1086,16 +1154,36 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     const { data, error } = await client.rpc('leave_cook_plan', { plan_id: planId });
     if (error) fail(error);
     const status = statusOf('leave_cook_plan', data, ['left', 'notMember']);
+    // Its list goes from the phone, with any changes to it still waiting; the user chose this.
+    const lists = listsOf(await requireListOwner());
+    await lists.ready;
+    await lists.losePlan(planId, false);
+    await lists.dismissLostPlan(planId);
     if (status === 'notMember') return { status };
     const planDeleted = fieldOf(data, 'planDeleted');
     if (typeof planDeleted !== 'boolean') throw new DataError('unknown', 'leave_cook_plan answered oddly.');
     return { status, planDeleted };
   }
 
-  /** Adds one of the signed-in user's reviewed Recipes to an active Cook Plan they're in (at most 10). */
+  /**
+   * Adds one of the signed-in user's reviewed Recipes to an active Cook Plan they're in (at most 10),
+   * and its Ingredients to the plan's list (decisions 15): the list engine's lines for it, with no
+   * Ingredient left off, each joining the line for its Ingredient with this Recipe's amounts kept
+   * apart. Needs a connection.
+   */
   async function addRecipeToCookPlan(planId: CookPlanId, recipeId: RecipeId): Promise<AddRecipeToCookPlanResult> {
-    const { data, error } = await client.rpc('add_recipe_to_cook_plan', { plan_id: planId, recipe_id: recipeId });
+    const recipe = await getRecipe(recipeId);
+    const lines = recipe ? toListLines([recipe]) : [];
+    const { data, error } = await client.rpc('add_recipe_to_cook_plan', {
+      plan_id: planId,
+      recipe_id: recipeId,
+      lines: lines.map((line) => ({
+        ingredient_id: line.ingredient.id,
+        amount_texts: line.amounts.flatMap((a) => a.amountTexts),
+      })),
+    });
     if (error) fail(error);
+    await refreshPlanList(planId);
     return {
       status: statusOf('add_recipe_to_cook_plan', data, [
         'added',
@@ -1112,17 +1200,13 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   async function removeRecipeFromCookPlan(planId: CookPlanId, recipeId: RecipeId): Promise<RemoveRecipeFromCookPlanResult> {
     const { data, error } = await client.rpc('remove_recipe_from_cook_plan', { plan_id: planId, recipe_id: recipeId });
     if (error) fail(error);
+    await refreshPlanList(planId);
     return { status: statusOf('remove_recipe_from_cook_plan', data, ['removed', 'notInPlan', 'notActive', 'notFound']) };
   }
 
   /** Everyone in these Cook Plans, and their Recipes, by plan. */
-  async function cookPlanContents(planIds: CookPlanId[]) {
-    const [people, recipes] = await Promise.all([
-      client.from('cook_plan_people').select('*').in('plan_id', planIds),
-      client.from('cook_plan_recipe_list').select('*').in('plan_id', planIds),
-    ]);
-    if (people.error) fail(people.error);
-    if (recipes.error) fail(recipes.error);
+  /** Each plan's members and Recipes, from the rows of `cook_plan_people` and `cook_plan_recipe_list`. */
+  function cookPlanContentsOf(people: { data: CookPlanPersonRow[] }, recipes: { data: CookPlanRecipeListRow[] }) {
     const members = new Map<string, CookPlanMember[]>();
     for (const row of people.data) {
       if (row.plan_id === null || row.user_id === null || row.joined_at === null) continue;
@@ -1170,24 +1254,90 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   }
 
   /** The Cook Plans the signed-in user is in, newest first, with everyone in them and their Recipes. */
-  async function listCookPlans(): Promise<CookPlan[]> {
-    const { data, error } = await client.rpc('list_cook_plans');
-    if (error) fail(error);
-    const ids = data.map((row) => parseCookPlanId(row.id));
-    if (ids.length === 0) return [];
-    const contentsOf = await cookPlanContents(ids);
-    return data.map((row) => toCookPlan(row, contentsOf(parseCookPlanId(row.id))));
+  /**
+   * The Cook Plans `me` is in (`only`: just that one, if they're in it), as the server has them,
+   * read as `me`; `unreachable` with no signal; `serverFailed` on a server error.
+   */
+  async function fetchCookPlans(
+    me: UserId,
+    only: CookPlanId | null,
+  ): Promise<{ status: 'reached'; plans: CookPlan[] } | { status: 'unreachable' } | { status: 'serverFailed'; error: DataError }> {
+    const read =
+      only === null
+        ? await readAs(me, (token) => client.rpc('list_cook_plans').retry(false).setHeader('Authorization', bearer(token)))
+        : await readAs(me, (token) =>
+            client.from('cook_plans').select(COOK_PLAN_COLUMNS).eq('id', only).retry(false).setHeader('Authorization', bearer(token)),
+          );
+    if (read.status !== 'reached') return read;
+    const rows = read.data ?? [];
+    const ids = rows.map((row) => parseCookPlanId(row.id));
+    if (ids.length === 0) return { status: 'reached', plans: [] };
+    const [people, recipes] = await Promise.all([
+      readAs(me, (token) =>
+        client.from('cook_plan_people').select('*').in('plan_id', ids).retry(false).setHeader('Authorization', bearer(token)),
+      ),
+      readAs(me, (token) =>
+        client.from('cook_plan_recipe_list').select('*').in('plan_id', ids).retry(false).setHeader('Authorization', bearer(token)),
+      ),
+    ]);
+    if (people.status !== 'reached') return people;
+    if (recipes.status !== 'reached') return recipes;
+    const contentsOf = cookPlanContentsOf({ data: people.data ?? [] }, { data: recipes.data ?? [] });
+    return { status: 'reached', plans: rows.map((row) => toCookPlan(row, contentsOf(parseCookPlanId(row.id)))) };
   }
 
-  /** One Cook Plan the signed-in user is in, or null (not in it, or it's gone). */
-  async function getCookPlan(planId: CookPlanId): Promise<CookPlan | null> {
-    const [plan, contentsOf] = await Promise.all([
-      client.from('cook_plans').select('id, creator_id, cook_on, status, cooked_at, cooked_by, created_at').eq('id', planId).maybeSingle(),
-      cookPlanContents([planId]),
-    ]);
-    if (plan.error) fail(plan.error);
-    return plan.data ? toCookPlan(plan.data, contentsOf(planId)) : null;
+  /**
+   * The Cook Plans the signed-in user is in, newest first. Each read is kept on the phone (review of
+   * ticket 15), so with no signal they're the ones it last read, `offline`; never read on this
+   * phone, it fails with code `offline`.
+   */
+  async function readCookPlans(): Promise<CookPlansRead> {
+    const me = await requireListOwner();
+    const lists = listsOf(me);
+    await lists.ready;
+    const fetched = await fetchCookPlans(me, null);
+    if (fetched.status === 'reached') {
+      await lists.keepCookPlans(fetched.plans);
+      if (lists.queue.state().status === 'offline') void lists.queue.sync();
+      return { plans: fetched.plans, offline: false };
+    }
+    if (fetched.status === 'serverFailed') throw fetched.error;
+    lists.queue.markUnreachable();
+    const saved = lists.savedCookPlans();
+    if (!saved) throw needsConnection('Loading your Cook Plans the first time');
+    return { plans: saved, offline: true };
   }
+
+  /**
+   * One Cook Plan the signed-in user is in, or null (not in it, or it's gone: the phone forgets it
+   * and its list). With no signal it's the copy the phone last read, `offline`; one this phone has
+   * never read fails with code `offline`.
+   */
+  async function readCookPlan(planId: CookPlanId): Promise<CookPlanRead> {
+    const me = await requireListOwner();
+    const lists = listsOf(me);
+    await lists.ready;
+    const fetched = await fetchCookPlans(me, planId);
+    if (fetched.status === 'reached') {
+      const plan = fetched.plans[0] ?? null;
+      if (plan) lists.keepCookPlan(plan);
+      else await lists.losePlan(planId, false);
+      if (lists.queue.state().status === 'offline') void lists.queue.sync();
+      return { plan, offline: false };
+    }
+    if (fetched.status === 'serverFailed') throw fetched.error;
+    lists.queue.markUnreachable();
+    if (lists.isLostPlan(planId)) return { plan: null, offline: true };
+    const saved = lists.savedCookPlans()?.find((p) => p.id === planId);
+    if (!saved) throw needsConnection('Opening this Cook Plan the first time');
+    return { plan: saved, offline: true };
+  }
+
+  /** The Cook Plans the signed-in user is in, newest first (with no signal, as last read). */
+  const listCookPlans = async (): Promise<CookPlan[]> => (await readCookPlans()).plans;
+
+  /** One Cook Plan the signed-in user is in, or null (not in it, or it's gone). */
+  const getCookPlan = async (planId: CookPlanId): Promise<CookPlan | null> => (await readCookPlan(planId)).plan;
 
   /**
    * The active Cook Plans one of the user's Recipes is in, with the others in each, so deleting it
@@ -1869,6 +2019,63 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     };
   }
 
+  /**
+   * A Cook Plan's list as the server has it, with who has each line's Ingredient (the list engine
+   * annotates it); `gone` when the user isn't a member (they left, or it was deleted);
+   * `unreachable` with no signal; `serverFailed` on a server error. Every read is made as `me`.
+   */
+  async function fetchCookPlanList(
+    me: UserId,
+    planId: CookPlanId,
+  ): Promise<
+    | { status: 'reached'; list: CookPlanList }
+    | { status: 'gone' }
+    | { status: 'unreachable' }
+    | { status: 'serverFailed'; error: DataError }
+  > {
+    const read = await readAs(me, (token) =>
+      client
+        .from('cook_plans')
+        .select(COOK_PLAN_WITH_LINES)
+        .eq('id', planId)
+        .maybeSingle()
+        .retry(false)
+        .setHeader('Authorization', bearer(token)),
+    );
+    if (read.status !== 'reached') return read;
+    const row = read.data;
+    if (!row) return { status: 'gone' };
+    const [people, whoHas] = await Promise.all([
+      readAs(me, (token) =>
+        client
+          .from('cook_plan_people')
+          .select('user_id, username, joined_at')
+          .eq('plan_id', planId)
+          .order('joined_at')
+          .order('user_id')
+          .retry(false)
+          .setHeader('Authorization', bearer(token)),
+      ),
+      readAs(me, (token) =>
+        client.rpc('cook_plan_who_has', { plan_id: planId }).retry(false).setHeader('Authorization', bearer(token)),
+      ),
+    ]);
+    if (people.status !== 'reached') return people;
+    if (whoHas.status !== 'reached') return whoHas;
+    const members = (people.data ?? []).flatMap((p) => (p.user_id === null ? [] : [{ id: parseUserId(p.user_id), username: p.username }]));
+    // Left, or deleted, between the reads.
+    if (!members.some((m) => m.id === me)) return { status: 'gone' };
+    const had: WhoHas[] = (whoHas.data ?? []).map((h) => ({ ingredientId: parseIngredientId(h.ingredient_id), userId: parseUserId(h.user_id) }));
+    return {
+      status: 'reached',
+      list: toCookPlanList(
+        { planId: parseCookPlanId(row.id), status: row.status, members },
+        row.cook_plan_items.map(toCookPlanListItem),
+        had,
+      ),
+    };
+  }
+
   const needsConnection = (what: string) =>
     new DataError('offline', `You're offline. ${what} needs a connection.`);
 
@@ -1882,7 +2089,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
    * `discarded` (their session ended on this phone, and the change with it, even if they've signed
    * in again since), nothing is sent. The server takes it only for a list the user can use when it
    * arrives: a change to a Friend's list that isn't shared with them any more comes back gone, and
-   * is dropped. `isOwnList` says whether its list is the user's own.
+   * is dropped. `isOwnList` says whether its list is the user's own. A Cook Plan list's change goes
+   * the same way (`sendCookPlanChange`).
    */
   async function sendListChange(
     me: UserId,
@@ -1890,6 +2098,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     discarded: () => boolean,
     isOwnList: (id: ShoppingListId) => boolean,
   ): Promise<Delivery> {
+    if (isCookPlanChange(change)) return sendCookPlanChange(me, madeAt, change, discarded);
     if (change.kind === 'addManualItem') {
       const answer = await asSignedIn(
         me,
@@ -1948,6 +2157,44 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     return { status: 'dropped' };
   }
 
+  /** The function each change to a Cook Plan's list is sent to (decisions 15). */
+  const COOK_PLAN_RPCS = {
+    checkOff: 'cook_plan_check_off',
+    uncheck: 'cook_plan_uncheck',
+    claim: 'claim_cook_plan_item',
+    unclaim: 'unclaim_cook_plan_item',
+  } as const;
+
+  /**
+   * Sends one queued change to a Cook Plan's list, as `sendListChange` sends a Shopping List's: only
+   * as the user who made it, checked before every request, and only for that plan, which the server
+   * takes only while they're a member. `gone` (they left, the plan was deleted, the line went, or
+   * there's nothing of theirs to unclaim) drops it.
+   */
+  async function sendCookPlanChange(
+    me: UserId,
+    madeAt: string,
+    change: CookPlanListChange,
+    discarded: () => boolean,
+  ): Promise<Delivery> {
+    const args = { plan_id: change.list.id, item_id: change.itemId, changed_at: madeAt };
+    const answer = await asSignedIn(
+      me,
+      (token) => client.rpc(COOK_PLAN_RPCS[change.kind], args).setHeader('Authorization', bearer(token)),
+      discarded,
+    );
+    if (answer === 'unreachable') return { status: 'unreachable' };
+    if (answer === 'ended') return { status: 'refused', error: notSignedIn() };
+    const { data: result, error, status } = answer;
+    const failed = serverFailed(status);
+    if (failed) return failed;
+    if (notReached(status)) return { status: 'unreachable' };
+    if (error) return { status: 'refused', error: toDataError(error) };
+    if (result === 'applied') return { status: 'sent' };
+    if (result === 'superseded') return { status: 'superseded' };
+    return { status: 'dropped' };
+  }
+
   /**
    * One list on this phone, for one user: the last copy read from the server (kept in storage, so
    * it shows with no signal after a restart) and whether it's out of date.
@@ -1967,13 +2214,19 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     rereadTimer: ReturnType<typeof setTimeout> | undefined;
   };
 
+  /** What a list on this phone needs to listen for changes on its Realtime topic. */
+  type LiveList = Pick<ListCache, 'channel' | 'live' | 'rereadTimer'>;
+
+  /** A Cook Plan's list on this phone, kept as a Shopping List is (`ListCache`). */
+  type PlanCache = Omit<ListCache, 'which' | 'lastSeen'> & { planId: CookPlanId; lastSeen: CookPlanList | null };
+
   /**
    * One user's lists on this phone: the changes waiting to be sent, one queue across all their
-   * lists in the order made (decisions 13); their own Shopping List and each Friend's shared with
-   * them, each with its own copy; which Friends' lists are shared with them (for the switcher); and
-   * the screens watching each.
+   * lists in the order made (decisions 13, 15); their own Shopping List and each Friend's shared
+   * with them, and each Cook Plan's list they've opened, each with its own copy; which Friends' lists
+   * are shared with them (for the switcher); and the screens watching each.
    */
-  function openShoppingLists(me: UserId) {
+  function openLists(me: UserId) {
     // The user's own list is kept where it was before lists were shared; a Friend's beside it.
     const ownKey = `recipeapp.shoppingList.${me}`;
     const sharedKey = (id: ShoppingListId) => `recipeapp.shoppingList.${me}.${id}`;
@@ -2000,6 +2253,16 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     /** The user's own list's id, once the phone has seen it. */
     let ownListId: ShoppingListId | null = null;
 
+    // Cook Plan lists (decisions 15): a copy of each, listed in an index so every copy can be found
+    // again (after a restart, and to forget them all), beside the plans the user found they aren't
+    // in any more, until they've been told.
+    const planIndexKey = `recipeapp.cookPlanLists.${me}`;
+    const planKey = (id: CookPlanId) => `recipeapp.cookPlanList.${me}.${id}`;
+    const planWatchers = new Map<CookPlanId, Set<(view: CookPlanListView) => void>>();
+    const plans = new Map<CookPlanId, PlanCache>();
+    const savedPlans = new Set<CookPlanId>();
+    let lostPlans: LostCookPlan[] = [];
+
     const write = (op: () => Promise<void>) => {
       saving = saving.then(op).catch(() => {});
       return saving;
@@ -2009,6 +2272,76 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       const snapshot = JSON.stringify({ lists: sharedLists, lost });
       return write(() => storage.setItem(indexKey, snapshot));
     };
+    // The Cook Plans the user is in, as last read (review of ticket 15), so the plans and their
+    // lists can be reached with no signal after a restart.
+    const cookPlansKey = `recipeapp.cookPlans.${me}`;
+    let cookPlans: CookPlan[] | null = null;
+    const saveCookPlans = () => {
+      if (discarded || cookPlans === null) return saving;
+      const snapshot = JSON.stringify(cookPlans);
+      return write(() => storage.setItem(cookPlansKey, snapshot));
+    };
+    /** Every plan the user is in, as just read. */
+    /** The plans as just read: any other plan the phone kept (it, or its list) the user isn't in any more. */
+    async function keepCookPlans(read: CookPlan[]) {
+      if (discarded) return;
+      const known = new Set([...(cookPlans ?? []).map((p) => p.id), ...savedPlans]);
+      cookPlans = read;
+      void saveCookPlans();
+      for (const p of read) known.delete(p.id);
+      for (const id of known) await losePlan(id, false);
+    }
+    /** One plan, as just read, in its place among the others (or first, the newest). */
+    function keepCookPlan(plan: CookPlan) {
+      if (discarded) return;
+      const others = cookPlans ?? [];
+      cookPlans = others.some((p) => p.id === plan.id) ? others.map((p) => (p.id === plan.id ? plan : p)) : [plan, ...others];
+      void saveCookPlans();
+    }
+    function forgetCookPlan(id: CookPlanId) {
+      if (!cookPlans?.some((p) => p.id === id)) return;
+      cookPlans = cookPlans.filter((p) => p.id !== id);
+      void saveCookPlans();
+    }
+
+    const savePlanIndex = () => {
+      if (discarded) return saving;
+      const snapshot = JSON.stringify({ plans: [...savedPlans], lost: lostPlans });
+      return write(() => storage.setItem(planIndexKey, snapshot));
+    };
+
+    function planCache(id: CookPlanId): PlanCache {
+      let cache = plans.get(id);
+      if (!cache) {
+        cache = {
+          planId: id,
+          key: planKey(id),
+          lastSeen: null,
+          lastError: null,
+          superseded: false,
+          droppedSinceRead: 0,
+          channel: null,
+          live: false,
+          rereadTimer: undefined,
+        };
+        plans.set(id, cache);
+      }
+      return cache;
+    }
+
+    function keepPlan(cache: PlanCache, list: CookPlanList) {
+      // A read or change that finishes after its user signed out, or after the plan was lost.
+      if (discarded || plans.get(cache.planId) !== cache) return;
+      cache.lastSeen = list;
+      cache.lastError = null;
+      const snapshot = JSON.stringify(list);
+      void write(() => storage.setItem(cache.key, snapshot));
+      if (!savedPlans.has(cache.planId)) {
+        savedPlans.add(cache.planId);
+        void savePlanIndex();
+      }
+      goLivePlan(cache);
+    }
 
     function sharedCache(id: ShoppingListId): ListCache {
       let cache = shared.get(id);
@@ -2059,6 +2392,27 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
         }
       });
 
+    const savedPlanLists = storage
+      .getItem(planIndexKey)
+      .catch(() => null)
+      .then(parseSavedCookPlanIndex)
+      .then(async (index) => {
+        lostPlans = index.lost;
+        for (const id of index.plans) {
+          savedPlans.add(id);
+          const cache = planCache(id);
+          const saved = parseSavedCookPlanList(await storage.getItem(cache.key).catch(() => null), id);
+          cache.lastSeen ??= saved;
+        }
+      });
+
+    const savedCookPlans = storage
+      .getItem(cookPlansKey)
+      .catch(() => null)
+      .then((raw) => {
+        cookPlans ??= parseSavedCookPlans(raw);
+      });
+
     const queue = createChangeQueue<ListChange>({
       storage,
       key: `recipeapp.listChanges.${me}`,
@@ -2070,12 +2424,20 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       send: (change, discarded) => sendListChange(me, change, discarded, isOwnList),
       // Named as the list shows it now: once given up, the item may go before the user is told.
       nameOf({ change }) {
+        if (isCookPlanChange(change)) {
+          const cache = plans.get(change.list.id);
+          return (cache && shownPlan(cache))?.items.find((i) => i.id === change.itemId)?.ingredient.name ?? 'an item';
+        }
         if (change.kind === 'addManualItem') return change.text;
         const cache = cacheOfList(change.list.id);
         const item = (cache && shown(cache))?.items.find((i) => i.id === change.itemId);
         return item ? nameOf(item) : 'an item';
       },
       onDelivered({ madeAt, change }, delivery) {
+        if (isCookPlanChange(change)) {
+          deliveredToPlan(madeAt, change, delivery);
+          return;
+        }
         const cache = cacheOfList(change.list.id);
         if (delivery.status === 'dropped' && !isOwnList(change.list.id)) {
           const gone = lost.find((l) => l.id === change.list.id);
@@ -2099,7 +2461,10 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
           ...(watching('mine') || wasOffline || own.superseded ? [own] : []),
           ...[...shared.values()].filter((c) => watching(c.which) || c.superseded || c.droppedSinceRead > 0),
         ];
-        const reached = await Promise.all(due.map(refresh));
+        const duePlans = [...plans.values()].filter(
+          (c) => watchingPlan(c.planId) || c.superseded || c.droppedSinceRead > 0,
+        );
+        const reached = await Promise.all([...due.map(refresh), ...duePlans.map(refreshPlan)]);
         return reached.includes('unreachable') ? 'unreachable' : 'reached';
       },
       now,
@@ -2113,7 +2478,26 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
         own.lastSeen ??= list;
       }),
       savedShared,
+      savedPlanLists,
+      savedCookPlans,
     ]);
+
+    /** Keeps a Cook Plan list as its change was delivered, as `onDelivered` does for a Shopping List. */
+    function deliveredToPlan(madeAt: string, change: CookPlanListChange, delivery: Delivered) {
+      const id = change.list.id;
+      if (delivery.status === 'dropped') {
+        // Gone: maybe the user isn't in the plan any more. Its list is read again to find out.
+        const gone = lostPlans.find((l) => l.planId === id);
+        if (gone) {
+          gone.changesNotSaved += 1;
+          void savePlanIndex();
+        } else planCache(id).droppedSinceRead += 1;
+      }
+      const cache = plans.get(id);
+      if (!cache?.lastSeen) return;
+      if (delivery.status === 'sent') keepPlan(cache, withCookPlanChanges(cache.lastSeen, [{ madeAt, change }], me));
+      if (delivery.status === 'superseded') cache.superseded = true;
+    }
 
     function sync(): ListSync {
       const state = queue.state();
@@ -2136,8 +2520,9 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     function notSaved(which: WhichList): NotSavedListChange[] {
       return queue
         .state()
-        .gaveUp.filter(({ change }) => isFor(which, change.list.id))
-        .map(({ change, name }) => ({ kind: change.kind, itemName: name }));
+        .gaveUp.flatMap(({ change, name }) =>
+          isShoppingListChange(change) && isFor(which, change.list.id) ? [{ kind: change.kind, itemName: name }] : [],
+        );
     }
 
     function view(which: WhichList): ShoppingListView {
@@ -2171,21 +2556,26 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     function goLive(cache: ListCache) {
       const id = cache.lastSeen?.id;
       if (!live || discarded || cache.channel || !id || !watching(cache.which)) return;
-      const reread = () => {
-        clearTimeout(cache.rereadTimer);
-        cache.rereadTimer = setTimeout(() => void refresh(cache), REREAD_AFTER_CHANGE_MS);
+      listen(cache, `shopping_list:${id}`, () => refresh(cache), () => emit(cache.which));
+    }
+
+    /** Listens on a list's private Realtime topic, and reads the list again when it says it changed. */
+    function listen(target: LiveList, topic: string, reread: () => Promise<unknown>, emitIt: () => void) {
+      const later = () => {
+        clearTimeout(target.rereadTimer);
+        target.rereadTimer = setTimeout(() => void reread(), REREAD_AFTER_CHANGE_MS);
       };
-      const channel = client.channel(`shopping_list:${id}`, { config: { private: true } });
-      cache.channel = channel;
-      channel.on('broadcast', { event: 'changed' }, reread).subscribe((status) => {
-        if (cache.channel !== channel) return;
-        cache.live = status === 'SUBSCRIBED';
-        if (cache.live) reread();
-        emit(cache.which);
+      const channel = client.channel(topic, { config: { private: true } });
+      target.channel = channel;
+      channel.on('broadcast', { event: 'changed' }, later).subscribe((status) => {
+        if (target.channel !== channel) return;
+        target.live = status === 'SUBSCRIBED';
+        if (target.live) later();
+        emitIt();
       });
     }
 
-    function stopLive(cache: ListCache) {
+    function stopLive(cache: LiveList) {
       clearTimeout(cache.rereadTimer);
       const { channel } = cache;
       cache.channel = null;
@@ -2283,21 +2673,32 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       await ready;
       discarded = true;
       await queue.discard(notSignedIn());
-      const keys = [ownKey, indexKey, ...[...shared.values()].map((c) => c.key)];
-      for (const cache of [own, ...shared.values()]) {
+      const keys = [
+        ownKey,
+        indexKey,
+        ...[...shared.values()].map((c) => c.key),
+        planIndexKey,
+        ...[...new Set([...savedPlans, ...plans.keys()])].map(planKey),
+        cookPlansKey,
+      ];
+      for (const cache of [own, ...shared.values(), ...plans.values()]) {
         stopLive(cache);
         cache.lastSeen = null;
       }
       shared.clear();
       sharedLists = [];
       lost = [];
+      plans.clear();
+      savedPlans.clear();
+      lostPlans = [];
+      cookPlans = null;
       await write(async () => {
         for (const key of keys) await storage.removeItem(key);
       });
     }
 
     /** The list holding an item, among those the phone has seen. */
-    function listHolding(itemId: ShoppingListItemId): ListRef | null {
+    function listHolding(itemId: ShoppingListItemId): ShoppingListRef | null {
       for (const cache of [own, ...shared.values()]) {
         const list = shown(cache);
         if (list?.items.some((item) => item.id === itemId)) return { kind: 'shoppingList', id: list.id };
@@ -2319,7 +2720,131 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       if (watching('mine')) void refresh(own);
     }
 
-    queue.subscribe(() => emit());
+    // Cook Plan lists, as the Shopping Lists above ------------------------------------------------
+
+    /** A Cook Plan list as the phone shows it: the last copy seen, with the changes to it not yet sent. */
+    function shownPlan(cache: PlanCache): CookPlanList | null {
+      return cache.lastSeen && withCookPlanChanges(cache.lastSeen, queue.state().queue, me);
+    }
+
+    /** The changes to a plan's list given up, named as the list showed their lines when they were. */
+    function planNotSaved(id: CookPlanId): NotSavedListChange[] {
+      return queue
+        .state()
+        .gaveUp.flatMap(({ change, name }) =>
+          isCookPlanChange(change) && change.list.id === id ? [{ kind: change.kind, itemName: name }] : [],
+        );
+    }
+
+    function planView(id: CookPlanId): CookPlanListView {
+      const base = { sync: sync(), notSaved: planNotSaved(id) };
+      const gone = lostPlans.find((l) => l.planId === id);
+      if (gone) return { status: 'gone', changesNotSaved: gone.changesNotSaved, ...base };
+      const cache = planCache(id);
+      const list = shownPlan(cache);
+      if (list) return { status: 'loaded', list, live: cache.live, ...base };
+      if (cache.lastError) return { status: 'failed', error: cache.lastError, ...base };
+      return { status: 'loading', ...base };
+    }
+
+    const watchingPlan = (id: CookPlanId) => (planWatchers.get(id)?.size ?? 0) > 0;
+
+    function emitPlan(id?: CookPlanId) {
+      for (const [planId, set] of planWatchers) {
+        if (id !== undefined && planId !== id) continue;
+        const current = planView(planId);
+        for (const watcher of set) watcher(current);
+      }
+    }
+
+    /** While a screen watches a plan's list, its Realtime topic says when anyone changes it. */
+    function goLivePlan(cache: PlanCache) {
+      if (!live || discarded || cache.channel || !cache.lastSeen || !watchingPlan(cache.planId)) return;
+      listen(cache, `cook_plan:${cache.planId}`, () => refreshPlan(cache), () => emitPlan(cache.planId));
+    }
+
+    function watchPlan(id: CookPlanId, watcher: (view: CookPlanListView) => void) {
+      let set = planWatchers.get(id);
+      if (!set) {
+        set = new Set();
+        planWatchers.set(id, set);
+      }
+      set.add(watcher);
+      goLivePlan(planCache(id));
+    }
+
+    function unwatchPlan(id: CookPlanId, watcher: (view: CookPlanListView) => void) {
+      planWatchers.get(id)?.delete(watcher);
+      const cache = plans.get(id);
+      if (cache && !watchingPlan(id)) stopLive(cache);
+    }
+
+    /**
+     * A plan the user isn't in any more (they left, or it was deleted): its copy goes from the phone
+     * at once, with the changes to it still waiting, and its list says so until they've seen it,
+     * with how many of their changes never reached it (`told`: a read found it gone, so they should
+     * hear; otherwise only if changes were lost).
+     */
+    async function losePlan(id: CookPlanId, told: boolean) {
+      const cache = plans.get(id);
+      const waiting = queue.state().queue.filter(({ change }) => isCookPlanChange(change) && change.list.id === id).length;
+      const changesNotSaved = (cache?.droppedSinceRead ?? 0) + waiting;
+      if (cache) {
+        stopLive(cache);
+        cache.lastSeen = null;
+        plans.delete(id);
+      }
+      savedPlans.delete(id);
+      void write(() => storage.removeItem(planKey(id)));
+      forgetCookPlan(id);
+      if ((told || changesNotSaved > 0) && !lostPlans.some((l) => l.planId === id)) {
+        lostPlans = [...lostPlans, { planId: id, changesNotSaved }];
+      }
+      await savePlanIndex();
+      await queue.withdraw(({ change }) => isCookPlanChange(change) && change.list.id === id);
+      emitPlan(id);
+    }
+
+    async function refreshPlan(cache: PlanCache): Promise<'reached' | 'unreachable'> {
+      try {
+        const fetched = await fetchCookPlanList(me, cache.planId);
+        if (fetched.status === 'unreachable') {
+          cache.lastError ??= needsConnection('Loading this Cook Plan list the first time');
+          return 'unreachable';
+        }
+        if (fetched.status === 'serverFailed') cache.lastError ??= fetched.error;
+        else if (fetched.status === 'gone') {
+          if (plans.get(cache.planId) === cache) await losePlan(cache.planId, true);
+          return 'reached';
+        } else {
+          cache.superseded = false;
+          cache.droppedSinceRead = 0;
+          keepPlan(cache, fetched.list);
+        }
+      } catch (e) {
+        cache.lastError = e instanceof DataError ? e : new DataError('unknown', String(e), { cause: e });
+      }
+      emitPlan(cache.planId);
+      return 'reached';
+    }
+
+    /** The user has seen that they aren't in a plan any more. */
+    async function dismissLostPlan(id: CookPlanId) {
+      lostPlans = lostPlans.filter((l) => l.planId !== id);
+      await savePlanIndex();
+      emitPlan(id);
+    }
+
+    /** After a change to a plan made online, outside the queue: show its list as it is now. */
+    function refreshPlanIfWatched(id: CookPlanId) {
+      const cache = plans.get(id);
+      if (cache && watchingPlan(id)) void refreshPlan(cache);
+    }
+
+    queue.subscribe(() => {
+      emit();
+      emitPlan();
+    });
     return {
       queue,
       ready,
@@ -2342,15 +2867,29 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       forget,
       refreshWatched,
       discard,
+      planCache,
+      keepPlan,
+      shownPlan,
+      planView,
+      emitPlan,
+      watchPlan,
+      unwatchPlan,
+      losePlan,
+      dismissLostPlan,
+      refreshPlanIfWatched,
+      isLostPlan: (id: CookPlanId) => lostPlans.some((l) => l.planId === id),
+      keepCookPlans,
+      keepCookPlan,
+      savedCookPlans: () => cookPlans,
     };
   }
 
-  const shoppingLists = new Map<UserId, ReturnType<typeof openShoppingLists>>();
-  function shoppingListOf(me: UserId) {
-    let lists = shoppingLists.get(me);
+  const listsByUser = new Map<UserId, ReturnType<typeof openLists>>();
+  function listsOf(me: UserId) {
+    let lists = listsByUser.get(me);
     if (!lists) {
-      lists = openShoppingLists(me);
-      shoppingLists.set(me, lists);
+      lists = openLists(me);
+      listsByUser.set(me, lists);
     }
     return lists;
   }
@@ -2367,7 +2906,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   }
 
   async function loadShoppingList(me: UserId, which: WhichList): Promise<ShoppingList> {
-    const lists = shoppingListOf(me);
+    const lists = listsOf(me);
     await lists.ready;
     const gone = which === 'mine' ? null : lists.isLost(which);
     if (gone) throw notShared(gone.ownerUsername);
@@ -2402,12 +2941,12 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     options: { listId?: ShoppingListId } = {},
   ): () => void {
     const which: WhichList = options.listId ?? 'mine';
-    let lists: ReturnType<typeof openShoppingLists> | null = null;
+    let lists: ReturnType<typeof openLists> | null = null;
     let stopped = false;
     requireListOwner().then(
       async (me) => {
         if (stopped) return;
-        lists = shoppingListOf(me);
+        lists = listsOf(me);
         await lists.ready;
         if (stopped) return;
         lists.watch(which, watcher);
@@ -2428,7 +2967,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   /** Whether the signed-in user's list changes are waiting to sync. */
   async function getListSync(): Promise<ListSync> {
     const me = await requireListOwner();
-    const lists = shoppingListOf(me);
+    const lists = listsOf(me);
     await lists.ready;
     return lists.sync();
   }
@@ -2439,7 +2978,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
    */
   async function dismissNotSavedListChanges(): Promise<void> {
     const me = session.status === 'signedIn' ? session.userId : null;
-    if (me) await shoppingLists.get(me)?.queue.dismissGaveUp();
+    if (me) await listsByUser.get(me)?.queue.dismissGaveUp();
   }
 
   /**
@@ -2450,7 +2989,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   async function syncListChanges(): Promise<ListSync> {
     const me = await listOwner();
     if (!me) return { status: 'idle', waiting: 0 };
-    const lists = shoppingListOf(me);
+    const lists = listsOf(me);
     await lists.ready;
     const { status, queue } = lists.queue.state();
     if (status !== 'idle' || queue.length > 0) await lists.queue.sync();
@@ -2477,7 +3016,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     });
     if (error) fail(error);
     if (!data) throw new DataError('recipe_not_found', 'That Recipe no longer exists.');
-    shoppingListOf(recipe.ownerId).refreshWatched();
+    listsOf(recipe.ownerId).refreshWatched();
     // The server leaves off what the user has by the time it adds them, which may be more.
     const onList = new Set(data.map(parseIngredientId));
     return lines.filter((line) => onList.has(line.ingredient.id)).map((line) => line.ingredient);
@@ -2495,7 +3034,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
    * if the server says its item (or a Friend's list) is gone, or refuses it.
    */
   async function changeShoppingList(me: UserId, change: ListChange): Promise<void> {
-    const lists = shoppingListOf(me);
+    const lists = listsOf(me);
     const outcome = await lists.queue.enqueue(change);
     if (outcome.status === 'dropped') {
       throw change.kind === 'addManualItem' && !lists.isOwnList(change.list.id)
@@ -2506,9 +3045,9 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   }
 
   /** The list a change to an item is for: `listId`, or the list on the phone holding it, or the user's own. */
-  async function listOfItem(me: UserId, itemId: ShoppingListItemId, listId?: ShoppingListId): Promise<ListRef> {
+  async function listOfItem(me: UserId, itemId: ShoppingListItemId, listId?: ShoppingListId): Promise<ShoppingListRef> {
     if (listId) return { kind: 'shoppingList', id: listId };
-    const lists = shoppingListOf(me);
+    const lists = listsOf(me);
     await lists.ready;
     const holding = lists.listHolding(itemId);
     if (holding) return holding;
@@ -2532,7 +3071,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     if (!itemText) throw new DataError('item_text_required', 'Type what you need to buy.');
     const itemId = options.id ?? parseShoppingListItemId(newId());
     const me = await requireListOwner();
-    const lists = shoppingListOf(me);
+    const lists = listsOf(me);
     await lists.ready;
     const which: WhichList = options.listId ?? 'mine';
     // The list it's for: as the phone last saw it, or read the first time.
@@ -2572,7 +3111,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     options: { listId?: ShoppingListId } = {},
   ): Promise<void> {
     const me = await requireListOwner();
-    const lists = shoppingListOf(me);
+    const lists = listsOf(me);
     await lists.ready;
     const before = lists.queue.state();
     if (before.status === 'offline' || before.queue.length > 0) await lists.queue.sync();
@@ -2625,7 +3164,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   async function removeRecipeFromShoppingList(recipeId: RecipeId): Promise<void> {
     const { error } = await client.rpc('remove_recipe_from_shopping_list', { recipe_id: recipeId });
     if (error) fail(error);
-    shoppingListOf(await currentUserId()).refreshWatched();
+    listsOf(await currentUserId()).refreshWatched();
   }
 
   /**
@@ -2637,7 +3176,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     const { data, error } = await client.rpc('share_shopping_list', { friend_id: friendId });
     if (error) fail(error);
     const status = statusOf('share_shopping_list', data, ['shared', 'notFriends']);
-    shoppingListOf(await currentUserId()).refreshWatched();
+    listsOf(await currentUserId()).refreshWatched();
     return { status };
   }
 
@@ -2646,7 +3185,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     const { data, error } = await client.rpc('stop_sharing_shopping_list', { friend_id: friendId });
     if (error) fail(error);
     const status = statusOf('stop_sharing_shopping_list', data, ['stopped', 'notShared']);
-    shoppingListOf(await currentUserId()).refreshWatched();
+    listsOf(await currentUserId()).refreshWatched();
     return { status };
   }
 
@@ -2663,7 +3202,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
    */
   async function listSharedShoppingLists(): Promise<SharedShoppingList[]> {
     const me = await requireListOwner();
-    const lists = shoppingListOf(me);
+    const lists = listsOf(me);
     await lists.ready;
     const read = await readAs(me, (token) =>
       client.rpc('list_shared_shopping_lists').retry(false).setHeader('Authorization', bearer(token)),
@@ -2683,18 +3222,134 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     const { data, error } = await client.rpc('leave_shared_shopping_list', { list_id: listId });
     if (error) fail(error);
     const status = statusOf('leave_shared_shopping_list', data, ['left', 'notShared']);
-    const lists = shoppingListOf(await requireListOwner());
+    const lists = listsOf(await requireListOwner());
     await lists.ready;
     await lists.lose(listId, false);
     await lists.dismissLost(listId);
     return { status };
   }
 
+  /** After a change to a plan made online: a screen showing its list shows it as it is now. */
+  async function refreshPlanList(planId: CookPlanId): Promise<void> {
+    const me = await listOwner();
+    if (me) listsOf(me).refreshPlanIfWatched(planId);
+  }
+
+  const planGone = () => new DataError('cook_plan_not_found', "You're not in this Cook Plan any more.");
+
+  /**
+   * A Cook Plan's list (decisions 15): one line per Ingredient across its Recipes, each Recipe's
+   * amounts kept apart, who has each Ingredient (a member's Pantry or Staples), who Claimed it and
+   * who checked it off, with the changes made on this phone that haven't reached the server yet.
+   * With no signal, it's the last copy this phone saw, with those changes; never seen, it fails with
+   * code `offline`. A plan the user isn't in any more fails with `cook_plan_not_found`, and the
+   * phone forgets its list.
+   */
+  async function getCookPlanList(planId: CookPlanId): Promise<CookPlanList> {
+    const me = await requireListOwner();
+    const lists = listsOf(me);
+    await lists.ready;
+    if (lists.isLostPlan(planId)) throw planGone();
+    const cache = lists.planCache(planId);
+    const fetched = await fetchCookPlanList(me, planId);
+    if (fetched.status === 'reached') {
+      lists.keepPlan(cache, fetched.list);
+      if (lists.queue.state().status === 'offline') void lists.queue.sync();
+      lists.emitPlan(planId);
+    } else if (fetched.status === 'gone') {
+      await lists.losePlan(planId, true);
+      throw planGone();
+    } else if (fetched.status === 'unreachable') {
+      lists.queue.markUnreachable();
+    }
+    const shown = lists.shownPlan(cache);
+    if (!shown) {
+      throw fetched.status === 'serverFailed' ? fetched.error : needsConnection('Loading this Cook Plan list the first time');
+    }
+    return shown;
+  }
+
+  /**
+   * Shows a Cook Plan's list as it changes, as `watchShoppingList` does: at once from what the phone
+   * has, again when it's read, on every change made here, and, while watched, whenever anyone in
+   * the plan changes it (Realtime). Returns a function that stops watching.
+   */
+  function watchCookPlanList(planId: CookPlanId, watcher: (view: CookPlanListView) => void): () => void {
+    let lists: ReturnType<typeof openLists> | null = null;
+    let stopped = false;
+    requireListOwner().then(
+      async (me) => {
+        if (stopped) return;
+        lists = listsOf(me);
+        await lists.ready;
+        if (stopped) return;
+        lists.watchPlan(planId, watcher);
+        watcher(lists.planView(planId));
+        await lists.queue.sync();
+      },
+      (e: unknown) => {
+        const error = e instanceof DataError ? e : new DataError('unknown', String(e), { cause: e });
+        if (!stopped) watcher({ status: 'failed', error, sync: { status: 'idle', waiting: 0 }, notSaved: [] });
+      },
+    );
+    return () => {
+      stopped = true;
+      lists?.unwatchPlan(planId, watcher);
+    };
+  }
+
+  /**
+   * Queues a change to a Cook Plan's list and sends it, with every change queued before it, as
+   * `changeShoppingList` does. With no signal it waits on the phone, shown on the list. Fails if
+   * the server says it's gone (the line went, the user isn't in the plan any more, or, for a
+   * Claim, the plan is cooked), and the list is read again.
+   */
+  async function changeCookPlanList(change: CookPlanListChange): Promise<void> {
+    const lists = listsOf(await requireListOwner());
+    const outcome = await lists.queue.enqueue(change);
+    if (outcome.status === 'dropped') {
+      throw new DataError('cook_plan_item_gone', "That didn't go through: the Cook Plan list has changed.");
+    }
+    if (outcome.status === 'refused') throw outcome.error;
+  }
+
+  const cookPlanChange = (kind: CookPlanListChange['kind'], planId: CookPlanId, itemId: CookPlanItemId) =>
+    changeCookPlanList({ kind, list: { kind: 'cookPlan', id: planId }, itemId });
+
+  /**
+   * Claims a line of a Cook Plan's list for the signed-in user ("I'm buying it"), so every member
+   * sees who is. Takes over a Claim someone else holds. Works with no signal; if the line's Claim
+   * changed after this was made, the later change stands.
+   */
+  const claim = (planId: CookPlanId, itemId: CookPlanItemId) => cookPlanChange('claim', planId, itemId);
+
+  /** Clears the signed-in user's own Claim on a line. Anyone else's stays. Works with no signal. */
+  const unclaim = (planId: CookPlanId, itemId: CookPlanItemId) => cookPlanChange('unclaim', planId, itemId);
+
+  /**
+   * Checks a line of a Cook Plan's list off: the signed-in user bought it, so its Ingredient goes
+   * into their own Pantry (never the claimer's or the Recipe owner's). The Claim is left as it is.
+   * Works with no signal, also once the plan is cooked.
+   */
+  const checkOffCookPlanItem = (planId: CookPlanId, itemId: CookPlanItemId) => cookPlanChange('checkOff', planId, itemId);
+
+  /** Unchecks a line of a Cook Plan's list. The Pantry is left as it is. Works with no signal. */
+  const uncheckCookPlanItem = (planId: CookPlanId, itemId: CookPlanItemId) => cookPlanChange('uncheck', planId, itemId);
+
+  /** The user has seen that they aren't in a Cook Plan any more: the notice on its list goes. */
+  async function dismissCookPlanGone(planId: CookPlanId): Promise<void> {
+    const me = await listOwner();
+    if (!me) return;
+    const lists = listsOf(me);
+    await lists.ready;
+    await lists.dismissLostPlan(planId);
+  }
+
   /** The user has seen that a Friend's list isn't shared with them any more: the notice goes. */
   async function dismissNoLongerShared(listId: ShoppingListId): Promise<void> {
     const me = await listOwner();
     if (!me) return;
-    const lists = shoppingListOf(me);
+    const lists = listsOf(me);
     await lists.ready;
     await lists.dismissLost(listId);
   }
@@ -2737,7 +3392,16 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     removeRecipeFromCookPlan,
     listCookPlans,
     getCookPlan,
+    readCookPlans,
+    readCookPlan,
     recipeCookPlans,
+    getCookPlanList,
+    watchCookPlanList,
+    claim,
+    unclaim,
+    checkOffCookPlanItem,
+    uncheckCookPlanItem,
+    dismissCookPlanGone,
     refreshSourceVideo,
     listMyRecipes,
     listWantToCook,

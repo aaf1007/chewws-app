@@ -5,6 +5,7 @@ export type ShoppingListId = string & { readonly __brand: 'ShoppingListId' };
 export type ShoppingListItemId = string & { readonly __brand: 'ShoppingListItemId' };
 export type TagId = string & { readonly __brand: 'TagId' };
 export type CookPlanId = string & { readonly __brand: 'CookPlanId' };
+export type CookPlanItemId = string & { readonly __brand: 'CookPlanItemId' };
 
 /**
  * A user's Profile. `username` is null until they choose one. Your own Profile also says when you
@@ -305,7 +306,7 @@ export type ListSync =
  * A list change made on this phone that the server failed on too many times in a row, so it was
  * given up: the server doesn't have it. `itemName` is the item's name, as the list showed it.
  */
-export type NotSavedListChange = { kind: 'checkOff' | 'uncheck' | 'addManualItem'; itemName: string };
+export type NotSavedListChange = { kind: 'checkOff' | 'uncheck' | 'addManualItem' | 'claim' | 'unclaim'; itemName: string };
 
 /**
  * A Shopping List as a screen shows it while it changes. `notSaved`: changes given up, to tell the
@@ -365,6 +366,67 @@ export type CookPlan = {
   members: CookPlanMember[];
   recipes: CookPlanRecipe[];
 } & ({ status: 'active' } | { status: 'cooked'; cookedAt: string; cookedBy: UserId | null });
+
+/**
+ * The Cook Plans the user is in, as a screen shows them: read now, or with no signal (`offline`)
+ * the copy the phone saved the last time it read them (review of ticket 15).
+ */
+export type CookPlansRead = { plans: CookPlan[]; offline: boolean };
+
+/** One Cook Plan as a screen shows it (null: the user isn't in it), read now or `offline`, as above. */
+export type CookPlanRead = { plan: CookPlan | null; offline: boolean };
+
+/** Whether a Cook Plan line is Claimed (someone's buying it), and by whom (null once they've gone). */
+export type ClaimState = { status: 'unclaimed' } | { status: 'claimed'; claimedAt: string; claimedBy: UserId | null };
+
+/**
+ * One Recipe's amounts on a Cook Plan line. `inPlan`: the Recipe is in the plan. `removed`: it has
+ * left the plan (removed, or deleted by its owner) and the line stayed, as it was claimed or checked
+ * off: "{title} (removed)".
+ */
+export type CookPlanRecipeAmounts = {
+  recipe: { status: 'inPlan'; id: RecipeId; title: string } | { status: 'removed'; title: string };
+  amountTexts: string[];
+};
+
+/**
+ * One line of a Cook Plan list: an Ingredient its Recipes need, each Recipe's amounts kept apart,
+ * the members who already have it (Pantry or Staples), who Claimed it and who checked it off.
+ */
+export type CookPlanListItem = {
+  id: CookPlanItemId;
+  ingredient: Ingredient;
+  recipes: CookPlanRecipeAmounts[];
+  /** The members who have it, by username (null: none chosen yet), as the server saw it when read. */
+  whoHas: ListPerson[];
+  claim: ClaimState;
+  check: CheckState;
+};
+
+/**
+ * A Cook Plan's list (decisions 15): one line per Ingredient across its Recipes, sorted by name.
+ * `members`: who is in the plan now, to name claimers and buyers; anyone else is a former member.
+ */
+export type CookPlanList = {
+  planId: CookPlanId;
+  status: 'active' | 'cooked';
+  members: ListPerson[];
+  items: CookPlanListItem[];
+};
+
+/** A Cook Plan list as a screen shows it while it changes, as `ShoppingListView`. */
+export type CookPlanListView =
+  /** Nothing to show yet: never seen on this phone, and being read. */
+  | { status: 'loading'; sync: ListSync; notSaved: NotSavedListChange[] }
+  /** The list with the changes made on this phone, sent or not; `live` as for a Shopping List. */
+  | { status: 'loaded'; list: CookPlanList; live: boolean; sync: ListSync; notSaved: NotSavedListChange[] }
+  /**
+   * A plan the user isn't in any more (they left on another phone, or it was deleted): nothing of
+   * its list is kept on the phone. `changesNotSaved` of their changes to it never reached it.
+   */
+  | { status: 'gone'; changesNotSaved: number; sync: ListSync; notSaved: NotSavedListChange[] }
+  /** Couldn't be read, and this phone has never seen it (code `offline` with no signal). */
+  | { status: 'failed'; error: DataError; sync: ListSync; notSaved: NotSavedListChange[] };
 
 /** What inviting a Friend into a Cook Plan did. Only `invited` changed anything. */
 export type InviteToCookPlanResult = {
@@ -500,6 +562,14 @@ export function parseCookPlanId(raw: string): CookPlanId {
   }
   // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the one brand constructor
   return raw as CookPlanId;
+}
+
+export function parseCookPlanItemId(raw: string): CookPlanItemId {
+  if (!UUID.test(raw)) {
+    throw new DataError('invalid_cook_plan_item_id', `Not a Cook Plan list item id: ${raw}`);
+  }
+  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the one brand constructor
+  return raw as CookPlanItemId;
 }
 
 /**

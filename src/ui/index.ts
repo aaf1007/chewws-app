@@ -19,7 +19,7 @@ export { Screen } from './screen';
 export { ScreenshotField } from './screenshot-field';
 export { SearchField } from './search-field';
 export { SectionHeader } from './section-header';
-export { ShoppingListRow } from './shopping-list-row';
+export { ShoppingListRow, type ListLineNote } from './shopping-list-row';
 export { SourceVideoCard } from './source-video-card';
 export { StepEditor } from './step-editor';
 export { SyncNotice, type SyncNoticeStatus } from './sync-notice';

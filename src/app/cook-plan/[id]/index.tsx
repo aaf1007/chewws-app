@@ -1,20 +1,27 @@
-import { router, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { Alert, View } from 'react-native';
 
 import { hasCode, messageOf } from '@/auth/errors';
 import { cookPlanDetail, cookPlanTitle } from '@/components/cook-plan-copy';
 import { useWhileFocused } from '@/components/use-while-focused';
-import { parseCookPlanId, type CookPlan, type CookPlanMember, type CookPlanRecipe, type UserId } from '@/data';
+import {
+  parseCookPlanId,
+  type CookPlanListView,
+  type CookPlanRead,
+  type CookPlanMember,
+  type CookPlanRecipe,
+  type UserId,
+} from '@/data';
 import { data } from '@/data/app';
 import { useSession } from '@/session';
-import { Button, DayPicker, EmptyState, ListRow, PersonRow, Screen, SectionHeader, Text, spacing } from '@/ui';
+import { Button, DayPicker, EmptyState, ListRow, NavRow, PersonRow, Screen, SectionHeader, SyncNotice, Text, spacing } from '@/ui';
 
-async function loadPlan(rawId: string): Promise<CookPlan | null> {
+async function loadPlan(rawId: string): Promise<CookPlanRead> {
   try {
-    return await data.getCookPlan(parseCookPlanId(rawId));
+    return await data.readCookPlan(parseCookPlanId(rawId));
   } catch (e) {
-    if (hasCode(e, 'invalid_cook_plan_id')) return null;
+    if (hasCode(e, 'invalid_cook_plan_id')) return { plan: null, offline: false };
     throw e;
   }
 }
@@ -31,10 +38,22 @@ function memberDetail(member: CookPlanMember, members: CookPlanMember[], me: Use
 const recipeDetail = (recipe: CookPlanRecipe, me: UserId | null) =>
   recipe.owner.id === me ? 'Yours' : recipe.owner.username ? `@${recipe.owner.username}'s` : 'Someone else’s';
 
+/** "3 to buy · 1 claimed by you": what's left on the plan's list, once it has been read. */
+function listDetail(view: CookPlanListView | null, me: UserId | null): string {
+  if (view?.status !== 'loaded') return 'Who has what, and who is buying it';
+  const toBuy = view.list.items.filter((i) => i.check.status === 'unchecked');
+  if (view.list.items.length === 0) return 'Nothing to buy yet';
+  if (toBuy.length === 0) return 'Everything is checked off';
+  const mine = toBuy.filter((i) => i.claim.status === 'claimed' && i.claim.claimedBy === me).length;
+  return mine > 0 ? `${toBuy.length} to buy · ${mine} claimed by you` : `${toBuy.length} to buy`;
+}
+
 /**
  * One Cook Plan (decisions 14): its day, which any member sets or clears; its Recipes, each opened
- * by any member, added by their owners and removed by anyone; and who is in it, with "Invite"
- * for more of your Friends. Anyone can leave; the plan goes with its last member.
+ * by any member, added by their owners and removed by anyone; its list (decisions 15); and who is
+ * in it, with "Invite" for more of your Friends. Anyone can leave; the plan goes with its last
+ * member. While it's open, anyone's change to the plan shows at once. With no signal it's the
+ * copy the phone last read, said so: its list opens, and what needs a connection is turned off.
  */
 export default function CookPlanScreen() {
   const rawId = useLocalSearchParams<{ id: string }>().id;
@@ -42,8 +61,29 @@ export default function CookPlanScreen() {
   const me = session.status === 'signedIn' ? session.userId : null;
   const [state, reload] = useWhileFocused(() => loadPlan(rawId));
   const [error, setError] = useState<string | null>(null);
+  const [listView, setListView] = useState<CookPlanListView | null>(null);
+  const loadedId = state.status === 'loaded' ? state.value.plan?.id : undefined;
 
-  const plan = state.status === 'loaded' ? state.value : null;
+  // The plan's list, which the server says has changed whenever anyone changes the plan, its
+  // Recipes, its members or its lines (decisions 15): each new read of it reads the plan again too.
+  useFocusEffect(
+    useCallback(() => {
+      if (!loadedId) return undefined;
+      let seen: CookPlanListView | null = null;
+      return data.watchCookPlanList(loadedId, (view) => {
+        setListView(view);
+        const changed = view.status === 'loaded' && seen?.status === 'loaded' && view.list !== seen.list;
+        // With no signal the plan can't be read; its list still shows the changes made here.
+        if (changed && view.sync.status !== 'offline') reload();
+        seen = view;
+      });
+      // reload is a new function each render; it only bumps a counter.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [loadedId]),
+  );
+
+  const plan = state.status === 'loaded' ? state.value.plan : null;
+  const offline = state.status === 'loaded' && state.value.offline;
   if (!plan) {
     return (
       <Screen>
@@ -102,13 +142,17 @@ export default function CookPlanScreen() {
       },
     ]);
 
-  const active = plan.status === 'active';
+  // Changing the plan needs a connection; its list doesn't (its changes wait on the phone).
+  const active = plan.status === 'active' && !offline;
   const params = { id: plan.id };
   return (
     <Screen title="Cook Plan" scroll>
       <Text tone="textMuted" testID="cook-plan-detail">
         {cookPlanDetail(plan, me)}
       </Text>
+      {offline ? (
+        <SyncNotice status="offline" message="You're offline. This is your Cook Plan as it was last loaded." testID="cook-plan-offline" />
+      ) : null}
       {error ? <Text tone="danger">{error}</Text> : null}
 
       {active ? (
@@ -138,6 +182,14 @@ export default function CookPlanScreen() {
         )}
       </View>
 
+      <NavRow
+        icon="cart-outline"
+        label="Cook Plan list"
+        detail={listDetail(listView, me)}
+        onPress={() => router.push({ pathname: '/cook-plan/[id]/list', params })}
+        testID="cook-plan-list"
+      />
+
       <View>
         <SectionHeader
           title="Who’s cooking"
@@ -152,7 +204,7 @@ export default function CookPlanScreen() {
         ))}
       </View>
 
-      <Button label="Leave Cook Plan" variant="danger" icon="exit-outline" onPress={leave} />
+      <Button label="Leave Cook Plan" variant="danger" icon="exit-outline" onPress={leave} disabled={offline} />
     </Screen>
   );
 }
