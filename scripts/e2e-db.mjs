@@ -15,6 +15,20 @@
 //     simulator, as the notify function would send it through Expo, with no network.
 //   node scripts/e2e-db.mjs alex-accepts
 //     The seeded user alex_cooks accepts the dev user's request (respond_to_friend_request, as alex).
+//   node scripts/e2e-db.mjs befriend-alex
+//     alex_cooks and the dev user become Friends (alex asks, the dev user accepts, each as
+//     themselves), so the dev user has someone to share their list with (ticket 13).
+//   node scripts/e2e-db.mjs sam-shares-list
+//     sam and the dev user become Friends, sam puts Oat milk and Coffee beans on their Shopping List
+//     and shares it with the dev user (ticket 13), all as sam (and the dev user accepting).
+//   node scripts/e2e-db.mjs sam-adds-item
+//     sam adds Dish soap to their list, as the phone would (add_manual_item, as sam): the dev user,
+//     watching sam's list, sees it arrive live.
+//   node scripts/e2e-db.mjs check-sams-list
+//     Fails unless sam's list on the server is what the flow made it: Bananas and Bread added, Coffee
+//     beans and Oat milk checked off by the dev user, and Dish soap from sam.
+//   node scripts/e2e-db.mjs sam-stops-sharing
+//     sam stops sharing their list with the dev user (stop_sharing_shopping_list, as sam).
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -63,6 +77,21 @@ async function asUser(userId, sql, params) {
   }
 }
 
+/** `asker` asks `answerer` to be Friends and `answerer` accepts, each as themselves. */
+async function befriend(asker, answerer) {
+  const [{ asked }] = await asUser(asker, 'select public.send_friend_request($1) as asked', [answerer]);
+  if (asked.status !== 'requested') throw new Error(`the request: ${JSON.stringify(asked)}`);
+  const [{ answer }] = await asUser(answerer, 'select public.respond_to_friend_request($1, true) as answer', [asker]);
+  if (answer.status !== 'accepted') throw new Error(`the answer: ${JSON.stringify(answer)}`);
+}
+
+/** sam adds something by hand to their own list, as their phone would. */
+async function samAdds(text) {
+  const [list] = await query('select id from public.shopping_lists where owner_id = $1', [SAM]);
+  const [{ added }] = await asUser(SAM, 'select public.add_manual_item($1, $2, $3) as added', [list.id, text, text.toLowerCase()]);
+  if (added !== 'added') throw new Error(`sam's ${text}: ${added}`);
+}
+
 /** Delivers a notification to the app on the booted simulator, as the push service would. */
 function simulatorPush(asset, fill) {
   const payload = JSON.parse(readFileSync(fileURLToPath(new URL(`../.maestro/assets/${asset}`, import.meta.url)), 'utf8'));
@@ -108,6 +137,44 @@ const commands = {
       payload.body.fromUserId = SAM;
     });
     console.log('sam asked the dev user to be Friends');
+  },
+  async 'befriend-alex'() {
+    await befriend(ALEX, DEV_USER);
+    console.log('alex_cooks and the dev user are Friends');
+  },
+  async 'sam-shares-list'() {
+    await befriend(SAM, DEV_USER);
+    for (const text of ['Oat milk', 'Coffee beans']) await samAdds(text);
+    const [{ answer }] = await asUser(SAM, 'select public.share_shopping_list($1) as answer', [DEV_USER]);
+    if (answer.status !== 'shared') throw new Error(`sam's share: ${JSON.stringify(answer)}`);
+    console.log('sam shared their list with the dev user');
+  },
+  async 'sam-adds-item'() {
+    await samAdds('Dish soap');
+    console.log('sam added Dish soap');
+  },
+  async 'check-sams-list'() {
+    const rows = await query(
+      `select i.hand_added_text as item, i.checked_by = $2 as by_dev
+       from public.shopping_list_items i join public.shopping_lists l on l.id = i.list_id
+       where l.owner_id = $1 order by i.hand_added_text`,
+      [SAM, DEV_USER],
+    );
+    const found = JSON.stringify(rows.map((r) => [r.item, r.by_dev]));
+    const expected = JSON.stringify([
+      ['Bananas', null],
+      ['Bread', null],
+      ['Coffee beans', true],
+      ['Dish soap', null],
+      ['Oat milk', true],
+    ]);
+    if (found !== expected) throw new Error(`sam's list is ${found}, not ${expected}`);
+    console.log("sam's list has the dev user's changes");
+  },
+  async 'sam-stops-sharing'() {
+    const [{ answer }] = await asUser(SAM, 'select public.stop_sharing_shopping_list($1) as answer', [DEV_USER]);
+    if (answer.status !== 'stopped') throw new Error(`sam's stop: ${JSON.stringify(answer)}`);
+    console.log('sam stopped sharing their list with the dev user');
   },
   async 'alex-accepts'() {
     const [{ answer }] = await asUser(ALEX, 'select public.respond_to_friend_request($1, true) as answer', [DEV_USER]);

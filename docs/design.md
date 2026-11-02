@@ -50,6 +50,7 @@ Also: `spacing` (`xxs` 2 to `xxl` 32), `radii` (`sm`, `md` 10, `lg`, `sheet` 24,
 | `AddField`       | Gray rounded field with an Add button at its right, for adding one thing by name (Pantry, Staples) |
 | `IngredientRow`  | An Ingredient's name with an optional action at its right ("Used up", "Remove"), over a hairline   |
 | `ShoppingListRow` | A Shopping List line: optional check circle, name with muted detail lines (each Recipe's amounts), optional action; checked lines are muted and struck through |
+| `ListSwitcher`   | Which list a screen shows: a sideways-scrolling row of pills ("Your list", "Sam's list"), the selected one filled with the accent, the rest outlined |
 | `SyncNotice`     | Gray rounded notice that list changes are waiting to sync: a slashed cloud while offline, arrows while sending, a clock while waiting to retry after a server error |
 | `NavRow`         | A row that opens another screen: accent icon, bold label ("Drafts (2)"), muted detail, chevron |
 | `SourceVideoCard` | Bordered card for the video a Recipe came from: portrait thumbnail (or placeholder), platform overline, creator, accent "Watch on TikTok"; opens the video when pressed. `kind="page"` for a web page: square picture (globe placeholder), the site as overline, "Open the page". An Instagram Reel is the plain card (the word "Instagram", no logo) or the user's screenshot as its picture. `onThumbnailError` lets the screen re-fetch an expired thumbnail |

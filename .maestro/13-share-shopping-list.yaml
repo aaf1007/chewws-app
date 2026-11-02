@@ -1,0 +1,127 @@
+# Ticket 13: sharing a Shopping List. The dev user shares their own list with a Friend (alex_cooks)
+# and stops. sam shares sam's list with the dev user, who finds "Sam's list" in the switcher, adds
+# an item and checks one off, and sees sam's own change arrive live. With no signal (the local API
+# gateway paused, as in flow 10) the dev user's changes to sam's list wait and then sync. Last, a
+# change made offline after sam stops sharing comes back gone, and the list says so.
+# Run with `npm run e2e -- .maestro/13-share-shopping-list.yaml`. What sam and alex_cooks do on
+# their own phones, scripts/e2e-db.mjs does as them (through scripts/net-control.mjs), and their
+# changes reach the app over Realtime: one phone, no network.
+appId: com.ant1007.recipeapp
+---
+- runScript: scripts/befriend-alex.js
+- runFlow: subflows/sign-in-dev.yaml
+- tapOn:
+    id: "tab-shopping-list"
+- extendedWaitUntil:
+    visible: "Your Shopping List is empty"
+    timeout: 10000
+- assertVisible: "Share your list, Only you can see it"
+
+# The share sheet: each Friend, shared or not.
+- tapOn:
+    id: "share-shopping-list"
+- extendedWaitUntil:
+    visible: "Share: @alex_cooks"
+    timeout: 10000
+- tapOn: "Share: @alex_cooks"
+- extendedWaitUntil:
+    visible: "Stop sharing: @alex_cooks"
+    timeout: 10000
+- assertVisible: "Sees your list and can change it"
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "Share your list, Shared with @alex_cooks"
+    timeout: 10000
+# And stopping.
+- tapOn:
+    id: "share-shopping-list"
+- tapOn: "Stop sharing: @alex_cooks"
+- extendedWaitUntil:
+    visible: "Share: @alex_cooks"
+    timeout: 10000
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "Share your list, Only you can see it"
+    timeout: 10000
+
+# sam shares their list. Opening the tab again, the switcher shows it beside the dev user's own.
+- runScript: scripts/sam-shares-list.js
+- tapOn:
+    id: "tab-library"
+- tapOn:
+    id: "tab-shopping-list"
+- extendedWaitUntil:
+    visible: "Sam's list"
+    timeout: 10000
+- tapOn: "Sam's list"
+- extendedWaitUntil:
+    visible: "Check off: Oat milk"
+    timeout: 10000
+- assertVisible: "Check off: Coffee beans"
+- assertNotVisible:
+    id: "share-shopping-list"
+
+# The dev user adds to sam's list and checks something off.
+- tapOn:
+    id: "shopping-list-add"
+- inputText: "Bananas"
+- pressKey: Enter
+- extendedWaitUntil:
+    visible: "Check off: Bananas"
+    timeout: 10000
+- hideKeyboard
+- tapOn: "Check off: Coffee beans"
+- extendedWaitUntil:
+    visible: "Uncheck: Coffee beans"
+    timeout: 10000
+- assertVisible: "Checked off by you"
+
+# sam adds Dish soap on their phone: it arrives live, with nothing tapped.
+- runScript: scripts/sam-adds-item.js
+- extendedWaitUntil:
+    visible: "Check off: Dish soap"
+    timeout: 15000
+
+# No signal: the changes show at once and wait; back online, they sync.
+- runScript: scripts/go-offline.js
+- tapOn: "Check off: Oat milk"
+- extendedWaitUntil:
+    visible: "Uncheck: Oat milk"
+    timeout: 3000
+- tapOn:
+    id: "shopping-list-add"
+- inputText: "Bread"
+- pressKey: Enter
+- extendedWaitUntil:
+    visible: "Check off: Bread"
+    timeout: 3000
+- hideKeyboard
+- extendedWaitUntil:
+    visible: ".*offline. 2 changes will sync when you're back online."
+    timeout: 30000
+- runScript: scripts/go-online.js
+- extendedWaitUntil:
+    notVisible:
+      id: "shopping-list-sync"
+    timeout: 60000
+- assertVisible: "Uncheck: Oat milk"
+- assertVisible: "Check off: Bread"
+- runScript: scripts/check-sams-list.js
+
+# A change made offline while sam stops sharing comes back gone: the list says so and goes.
+- runScript: scripts/go-offline.js
+- tapOn: "Check off: Bananas"
+- extendedWaitUntil:
+    visible: ".*offline. 1 change will sync when you're back online."
+    timeout: 30000
+- runScript: scripts/sam-stops-sharing.js
+- runScript: scripts/go-online.js
+- extendedWaitUntil:
+    visible: "Sam's list isn't shared with you any more. 1 change wasn't saved."
+    timeout: 60000
+- assertNotVisible: "Check off: Dish soap"
+- tapOn: "OK"
+- extendedWaitUntil:
+    visible: "Share your list, Only you can see it"
+    timeout: 10000
+- assertNotVisible: "Sam's list"
