@@ -73,7 +73,7 @@ export default function Friends() {
   useFocusEffect(checkPermission);
   /** After a request sent or accepted: the reason, then the system's question, once. */
   const askForNotifications = () => {
-    void askAfterFriendRequest(explainNotifications).then(checkPermission);
+    void askAfterFriendRequest(explainNotifications, checkPermission);
   };
 
   // The users found for the query as typed; a search for an older query, answering late, is dropped.
@@ -183,7 +183,7 @@ export default function Friends() {
           icon="notifications-outline"
           label="Turn on notifications"
           detail="Hear when someone asks to be Friends"
-          onPress={() => void registerForDraftReady({ ask: true }).then(checkPermission)}
+          onPress={() => void registerForDraftReady({ ask: true, onDecided: checkPermission })}
           testID="turn-on-notifications"
         />
       ) : null}

@@ -158,11 +158,13 @@ appId: com.ant1007.recipeapp
     timeout: 60000
 - tapOn:
     id: "tab-cook-plans"
+# The plan's row reads its Recipes' titles as the plan was last read, before sam took his out (the
+# plan screen reads it again only when it comes into focus).
 - extendedWaitUntil:
-    visible: "Garlic bread, with @sam"
+    visible: "Sam's shakshuka, Garlic bread, with @sam"
     timeout: 60000
 - assertVisible: ".*offline. These are your Cook Plans as they were last loaded."
-- tapOn: "Garlic bread, with @sam"
+- tapOn: "Sam's shakshuka, Garlic bread, with @sam"
 - extendedWaitUntil:
     visible: ".*offline. This is your Cook Plan as it was last loaded."
     timeout: 60000

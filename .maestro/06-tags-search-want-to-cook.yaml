@@ -5,6 +5,9 @@
 # Run with `npm run e2e -- .maestro/06-tags-search-want-to-cook.yaml`. The functions run with
 # DRAFT_FIXTURES=1: canned captions and Claude answers (with their suggested Tags), no network.
 appId: com.ant1007.recipeapp
+env:
+  # It saves a link, so the app asks for notifications; the flow answers (subflows/deny-notifications.yaml).
+  NOTIFICATIONS: unset
 ---
 - runFlow: subflows/sign-in-dev.yaml
 
@@ -15,6 +18,7 @@ appId: com.ant1007.recipeapp
     timeout: 10000
 - tapOn:
     id: "save-link"
+- runFlow: subflows/deny-notifications.yaml
 - tapOn: "View Drafts"
 - extendedWaitUntil:
     visible: "Creamy garlic pasta, Ready to review, TikTok · Pasta Queen"

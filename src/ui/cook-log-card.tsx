@@ -9,7 +9,8 @@ import { colors, hairline, spacing } from './theme';
  * One time a Recipe was cooked, as a row in its list of Cook Logs: the day in bold ("Sat 2 Nov"),
  * who it was cooked with ("with @sam, @jo"), the notes and the photos. Pressing it opens the log.
  * In a list of someone's Cook Logs of many Recipes, `recipe` (its title) is the bold line, with the
- * day under it ("Sat 2 Nov · with @jo").
+ * day under it ("Sat 2 Nov · with @jo"). It's one element to VoiceOver (and Maestro), so its label
+ * carries the notes too.
  */
 export function CookLogCard({
   day,
@@ -33,10 +34,11 @@ export function CookLogCard({
 }) {
   const withWhom = companions.length > 0 ? `with ${companions.map((name) => `@${name}`).join(', ')}` : null;
   const under = recipe === undefined ? withWhom : [day, withWhom].filter(Boolean).join(' · ');
+  const heading = ['Cook Log', recipe, day, withWhom].filter(Boolean).join(', ');
   return (
     <Pressable
       accessibilityRole={onPress ? 'button' : undefined}
-      accessibilityLabel={['Cook Log', recipe, day, withWhom].filter(Boolean).join(', ')}
+      accessibilityLabel={notes ? `${heading}. ${notes}` : heading}
       disabled={!onPress}
       onPress={onPress}
       testID={testID}

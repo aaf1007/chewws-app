@@ -66,10 +66,10 @@ onFlowStart:
     direction: DOWN
 - tapOn:
     id: "save-cook-log"
+# The log's card: its day, who it was cooked with and its notes.
 - extendedWaitUntil:
-    visible: "Cook Log, .*, with @sam"
+    visible: "Cook Log, .*, with @sam. Less cumin next time"
     timeout: 15000
-- assertVisible: "Less cumin next time"
 - assertNotVisible: "Not cooked yet. Add a Cook Log each time you cook it."
 
 # It's Cooked now: not under Saved, but under Cooked.
@@ -105,7 +105,7 @@ onFlowStart:
     direction: DOWN
 - tapOn: "Save changes"
 - extendedWaitUntil:
-    visible: "Less cumin, more feta"
+    visible: "Cook Log, .*, with @sam. Less cumin, more feta"
     timeout: 15000
 
 # Delete it: it was the only one, so the Recipe goes back to Saved.
