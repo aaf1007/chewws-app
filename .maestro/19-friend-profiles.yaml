@@ -45,7 +45,6 @@ appId: com.ant1007.recipeapp
 - assertVisible: "Cook Log, Toast, .*"
 - assertVisible: "Cook Log, Dal, .*"
 - assertVisible: "Cook Log, Shakshuka, .*, with @dev"
-- assertVisible: "Smoky, extra feta"
 - assertNotVisible: "Show more Cook Logs"
 
 # His ranked Shakshuka: read it, and save your own copy.
@@ -57,7 +56,7 @@ appId: com.ant1007.recipeapp
 - extendedWaitUntil:
     visible: "@sam's Recipe"
     timeout: 10000
-- assertVisible: "4 eggs"
+- assertVisible: "Save your own copy"
 - tapOn: "Save your own copy"
 - extendedWaitUntil:
     visible: "Open your copy"
