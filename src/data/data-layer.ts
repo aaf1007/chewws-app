@@ -7,6 +7,7 @@ import {
 } from '@supabase/supabase-js';
 
 import { checkSharedLink } from '../../supabase/functions/_shared/detect-source';
+import type { NotifyRequest } from '../../supabase/functions/_shared/notifier';
 import {
   createChangeQueue,
   memoryStorage,
@@ -22,6 +23,7 @@ import { validateRecipeInput } from './recipe-input';
 import { searchWords } from './search-words';
 import { MAX_REVIEW_TAGS, checkTagName, normaliseTagName, tagKey, tidyTagNames } from './tag-name';
 import { sessionIdOf, type SessionStorage } from './session-storage';
+import { checkUsername, usernameSearchQuery } from './username';
 import {
   DailyLimitError,
   DataError,
@@ -35,11 +37,18 @@ import {
   type DraftBuild,
   type DraftBuildFailure,
   type DraftSummary,
+  type FoundUser,
+  type Friend,
+  type FriendRequest,
+  type FriendRequestAnswer,
+  type FriendRequestResult,
+  type FriendRequests,
   type IdTokenProvider,
   type Ingredient,
   type IngredientId,
   type ListSync,
   type NotSavedListChange,
+  type OtherProfile,
   type Pantry,
   type Profile,
   type Recipe,
@@ -48,7 +57,9 @@ import {
   type RecipeSummary,
   type SaveFromLinkResult,
   type CaptionInput,
+  type Relationship,
   type SessionState,
+  type SetUsernameResult,
   type ShoppingList,
   type ShoppingListId,
   type ShoppingListItem,
@@ -317,6 +328,30 @@ function toProfile(row: ProfileRow): Profile {
   return { id: parseUserId(row.id), username: row.username, createdAt: row.created_at };
 }
 
+/** A field of a JSON object the server answered, or undefined. */
+function fieldOf(answer: Json, key: string): Json | undefined {
+  return typeof answer === 'object' && answer !== null && !Array.isArray(answer) ? answer[key] : undefined;
+}
+
+/** The `status` an RPC answered, if it's one of `allowed`; anything else is a server out of step with the app. */
+function statusOf<S extends string>(fn: string, answer: Json, allowed: readonly S[]): S {
+  const status = fieldOf(answer, 'status');
+  const found = allowed.find((s) => s === status);
+  if (found === undefined) throw new DataError('unknown', `${fn} answered oddly.`);
+  return found;
+}
+
+const RELATIONSHIPS: readonly Relationship[] = ['none', 'requestSent', 'requestReceived', 'friends'];
+
+function toRelationship(raw: string): Relationship {
+  const found = RELATIONSHIPS.find((r) => r === raw);
+  if (found === undefined) throw new DataError('unknown', `search_users answered with relationship ${raw}.`);
+  return found;
+}
+
+/** Where the phone remembers that this user has chosen a username, so the app needn't ask again. */
+const usernameChosenKey = (userId: UserId) => `recipeapp.usernameChosen.${userId}`;
+
 /** The signed-in user id the data layer saved on the phone, or null if none (or unreadable). */
 function parseSavedUserId(raw: string | null): UserId | null {
   try {
@@ -439,6 +474,12 @@ export type DataLayerOptions = {
    * refresh in-process, with fake platforms.
    */
   refreshSourceVideo?: (recipeId: RecipeId) => Promise<void>;
+  /**
+   * Asks the server to send the push a user's action earns someone else ("Friend request"), and
+   * settles once it has asked. By default it calls the `notify` Edge Function (10 s at most), which
+   * decides whether the push is due. Tests send in-process, through the recording push sender.
+   */
+  sendNotification?: (request: NotifyRequest) => Promise<void>;
 };
 
 /**
@@ -461,6 +502,13 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     options.refreshSourceVideo ??
     (async (recipeId: RecipeId) => {
       const { error } = await client.functions.invoke('refresh-source-video', { body: { recipeId }, timeout: 10_000 });
+      if (error) throw error;
+    });
+
+  const sendNotification =
+    options.sendNotification ??
+    (async (request: NotifyRequest) => {
+      const { error } = await client.functions.invoke('notify', { body: request, timeout: 10_000 });
       if (error) throw error;
     });
 
@@ -790,17 +838,148 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     return () => sessionWatchers.delete(cb);
   }
 
-  async function getProfile(id: UserId): Promise<Profile | null> {
-    const { data, error } = await client.from('profiles').select('*').eq('id', id).maybeSingle();
+  /**
+   * A user's Profile, if you may see it: your own (in full), a Friend's, or either side of a
+   * request still open (decisions 11). Another user's is only their id and username. Null for
+   * anyone else, the same as for an id that doesn't exist.
+   */
+  async function getProfile(id: UserId): Promise<Profile | OtherProfile | null> {
+    if (id === (await currentUserId())) {
+      const { data, error } = await client.from('profiles').select('*').eq('id', id).maybeSingle();
+      if (error) fail(error);
+      return data ? toProfile(data) : null;
+    }
+    const { data, error } = await client.rpc('get_profile', { user_id: id });
     if (error) fail(error);
-    return data ? toProfile(data) : null;
+    const row = data[0];
+    return row ? { id: parseUserId(row.id), username: row.username } : null;
   }
 
   async function getMyProfile(): Promise<Profile> {
     const id = await currentUserId();
-    const profile = await getProfile(id);
-    if (!profile) throw new DataError('profile_missing', `No Profile for user ${id}.`);
-    return profile;
+    const { data, error } = await client.from('profiles').select('*').eq('id', id).maybeSingle();
+    if (error) fail(error);
+    if (!data) throw new DataError('profile_missing', `No Profile for user ${id}.`);
+    return toProfile(data);
+  }
+
+  /**
+   * Whether the signed-in user still has to choose a username before using the app (decisions
+   * 11). Once they have one, the phone remembers it and never asks the server again. Never throws:
+   * when it can't be told (no signal, a server error), it answers false, so the app opens with no
+   * signal; the next launch asks again.
+   */
+  async function needsUsername(): Promise<boolean> {
+    try {
+      const me = await currentUserId();
+      if ((await storage.getItem(usernameChosenKey(me))) !== null) return false;
+      const { username } = await getMyProfile();
+      if (username === null) return true;
+      await storage.setItem(usernameChosenKey(me), '1');
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Sets or changes the signed-in user's username, as typed: trimmed, one leading @ dropped,
+   * lowercased (`checkUsername`). A name that breaks the rule isn't sent. Taken and reserved names
+   * are answers, not errors. The old name is free for anyone at once.
+   */
+  async function setUsername(typed: string): Promise<SetUsernameResult> {
+    const check = checkUsername(typed);
+    if (check.status === 'invalid') return { status: 'invalid' };
+    const me = await currentUserId();
+    const { data, error } = await client.rpc('set_username', { name: check.username });
+    if (error) fail(error);
+    const status = statusOf('set_username', data, ['set', 'taken', 'reserved', 'invalid']);
+    if (status !== 'set') return { status };
+    const username = fieldOf(data, 'username');
+    if (typeof username !== 'string') throw new DataError('unknown', 'set_username answered oddly.');
+    await storage.setItem(usernameChosenKey(me), '1');
+    return { status, username };
+  }
+
+  /**
+   * Users whose username starts with what's typed (normalised like a username), exact match first,
+   * then alphabetical, at most 10, never you. Under 3 characters finds nobody, without asking.
+   */
+  async function searchUsers(typed: string): Promise<FoundUser[]> {
+    const query = usernameSearchQuery(typed);
+    if (query === null) return [];
+    const { data, error } = await client.rpc('search_users', { query });
+    if (error) fail(error);
+    return data.map((row) => ({ id: parseUserId(row.id), username: row.username, relationship: toRelationship(row.relationship) }));
+  }
+
+  /** Kicks the push for an action. A kick that fails changes nothing: the in-app lists are the truth. */
+  async function kickNotification(request: NotifyRequest): Promise<void> {
+    try {
+      await sendNotification(request);
+    } catch {
+      // No signal, or the function failed: no push, and nothing retries it.
+    }
+  }
+
+  /**
+   * Asks another user to be Friends. If they had already asked you, you're Friends at once. A new
+   * request sends them a "Friend request" push (at most one per pair in 7 days); a failed push
+   * never fails the request.
+   */
+  async function sendFriendRequest(userId: UserId): Promise<FriendRequestResult> {
+    const { data, error } = await client.rpc('send_friend_request', { user_id: userId });
+    if (error) fail(error);
+    const status = statusOf('send_friend_request', data, [
+      'requested',
+      'accepted',
+      'alreadyFriends',
+      'tooMany',
+      'notFound',
+      'noUsername',
+    ]);
+    if (status === 'requested') await kickNotification({ kind: 'friendRequest', toUserId: userId });
+    return { status };
+  }
+
+  /** Accepts or declines the request `requesterId` sent you. Accepting sends no push. */
+  async function respondToFriendRequest(requesterId: UserId, accept: boolean): Promise<FriendRequestAnswer> {
+    const { data, error } = await client.rpc('respond_to_friend_request', { requester_id: requesterId, accept });
+    if (error) fail(error);
+    return { status: statusOf('respond_to_friend_request', data, ['accepted', 'declined', 'notFound']) };
+  }
+
+  /** Withdraws your request to `userId`. None is fine. */
+  async function cancelFriendRequest(userId: UserId): Promise<void> {
+    const { error } = await client.rpc('cancel_friend_request', { user_id: userId });
+    if (error) fail(error);
+  }
+
+  /** Ends your Friendship with `userId`, for both of you. Not Friends is fine. */
+  async function unfriend(userId: UserId): Promise<void> {
+    const { error } = await client.rpc('unfriend', { user_id: userId });
+    if (error) fail(error);
+  }
+
+  /** Your Friends, by username. */
+  async function listFriends(): Promise<Friend[]> {
+    const { data, error } = await client.rpc('list_friends');
+    if (error) fail(error);
+    return data.map((row) => ({ id: parseUserId(row.id), username: row.username, friendsSince: row.since }));
+  }
+
+  /** Requests waiting for your answer, and yours not accepted yet, newest first. */
+  async function listFriendRequests(): Promise<FriendRequests> {
+    const { data, error } = await client.rpc('list_friend_requests');
+    if (error) fail(error);
+    const requests: FriendRequests = { incoming: [], outgoing: [] };
+    for (const row of data) {
+      const request: FriendRequest = { id: parseUserId(row.id), username: row.username, sentAt: row.sent_at };
+      if (row.direction === 'incoming') requests.incoming.push(request);
+      else if (row.direction === 'outgoing') requests.outgoing.push(request);
+      else throw new DataError('unknown', `list_friend_requests answered with direction ${row.direction}.`);
+    }
+    return requests;
   }
 
   async function createRecipe(input: RecipeInput): Promise<RecipeId> {
@@ -1822,6 +2001,15 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     onSessionChange,
     getMyProfile,
     getProfile,
+    needsUsername,
+    setUsername,
+    searchUsers,
+    sendFriendRequest,
+    respondToFriendRequest,
+    cancelFriendRequest,
+    unfriend,
+    listFriends,
+    listFriendRequests,
   };
 }
 

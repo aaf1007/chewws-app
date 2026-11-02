@@ -3,8 +3,8 @@ import * as SplashScreen from 'expo-splash-screen';
 import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
 import { useEffect } from 'react';
 
-import { useDraftReadyNotifications } from '@/notifications';
-import { SessionProvider, useSession } from '@/session';
+import { useNotifications } from '@/notifications';
+import { SessionProvider, useSession, useUsernameGate } from '@/session';
 import { colors } from '@/ui';
 
 SplashScreen.preventAutoHideAsync();
@@ -21,17 +21,22 @@ export default function RootLayout() {
 
 function RootNavigator() {
   const session = useSession();
-  useDraftReadyNotifications(session);
+  const { gate } = useUsernameGate();
+  const signedIn = session.status === 'signedIn';
+  // Signed in, the app opens once it knows whether a username must be chosen first (decisions 11).
+  const ready = session.status === 'signedOut' || (signedIn && gate !== 'checking');
+  const inApp = signedIn && gate === 'chosen';
+  useNotifications(session, { canOpen: inApp });
 
   useEffect(() => {
-    if (session.status !== 'loading') SplashScreen.hideAsync();
-  }, [session.status]);
+    if (ready) SplashScreen.hideAsync();
+  }, [ready]);
 
   // Something shared into the app from the share sheet (a link, with any text or image) opens the
   // save screen with it, once the user is signed in, the same screen `recipeapp://save?url=…` opens.
   const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntentContext();
   useEffect(() => {
-    if (session.status !== 'signedIn' || !hasShareIntent) return;
+    if (!inApp || !hasShareIntent) return;
     // An image shared with the link (an Instagram Reel's screenshot) comes as a file.
     const image = shareIntent.files?.find((file) => file.mimeType.startsWith('image/'));
     router.push({
@@ -39,9 +44,9 @@ function RootNavigator() {
       params: { url: shareIntent.webUrl ?? '', text: shareIntent.text ?? '', image: image?.path ?? '' },
     });
     resetShareIntent();
-  }, [session.status, hasShareIntent, shareIntent, resetShareIntent]);
+  }, [inApp, hasShareIntent, shareIntent, resetShareIntent]);
 
-  if (session.status === 'loading') return null;
+  if (!ready) return null;
 
   return (
     <Stack
@@ -53,7 +58,10 @@ function RootNavigator() {
         headerBackTitle: 'Back',
         headerTitleStyle: { color: colors.text },
       }}>
-      <Stack.Protected guard={session.status === 'signedIn'}>
+      <Stack.Protected guard={signedIn && gate === 'needed'}>
+        <Stack.Screen name="choose-username" options={{ headerShown: false }} />
+      </Stack.Protected>
+      <Stack.Protected guard={inApp}>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         {/* Each screen draws its own large title, so the header only carries the back button. */}
         <Stack.Screen name="recipe/new" options={{ title: '' }} />
@@ -62,11 +70,13 @@ function RootNavigator() {
         <Stack.Screen name="save" options={{ headerShown: false, presentation: 'modal' }} />
         <Stack.Screen name="drafts" options={{ title: '' }} />
         <Stack.Screen name="draft/[id]" options={{ title: '' }} />
+        <Stack.Screen name="friends" options={{ title: '' }} />
+        <Stack.Screen name="username" options={{ title: '' }} />
       </Stack.Protected>
       <Stack.Protected guard={session.status === 'signedOut'}>
         <Stack.Screen name="sign-in" options={{ headerShown: false }} />
       </Stack.Protected>
-      <Stack.Protected guard={__DEV__ && session.status === 'signedIn'}>
+      <Stack.Protected guard={__DEV__ && inApp}>
         <Stack.Screen name="dev/ui" options={{ title: 'UI gallery' }} />
         <Stack.Screen
           name="dev/scroll"

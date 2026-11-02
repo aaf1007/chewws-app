@@ -1,5 +1,7 @@
 # Opens the dev-only UI gallery from the Profile tab, checks a scrolling Screen with and without a
 # navigation header, and scrolls through every primitive.
+# Each swipe takes 3–4 s on the simulator, so Maestro's default 20 s for scrollUntilVisible is only
+# about five swipes; every scroll here sets its own timeout, sized for the distance it goes.
 appId: com.ant1007.recipeapp
 ---
 - runFlow: subflows/sign-in-dev.yaml
@@ -21,6 +23,7 @@ appId: com.ant1007.recipeapp
 - scrollUntilVisible:
     element: "Step 30.*"
     direction: DOWN
+    timeout: 60000
 - assertVisible:
     id: "screen-bar"
 - assertVisible:
@@ -38,6 +41,7 @@ appId: com.ant1007.recipeapp
 - scrollUntilVisible:
     element: "Step 30.*"
     direction: DOWN
+    timeout: 60000
 - assertVisible:
     id: "screen-compact-title"
     text: "Without a header"
@@ -56,18 +60,30 @@ appId: com.ant1007.recipeapp
 - scrollUntilVisible:
     element: "Want to Cook"
     direction: DOWN
+    timeout: 60000
 - assertVisible: "Saved"
 - scrollUntilVisible:
     element: "Score 7.8"
     direction: DOWN
+    timeout: 60000
 - assertVisible: "Friends’ Score 9.3"
 - scrollUntilVisible:
     element: "Crispy chilli tofu.*"
     direction: DOWN
+    timeout: 60000
 - scrollUntilVisible:
     element: "Green salad.*"
     direction: DOWN
+    timeout: 60000
 - scrollUntilVisible:
     element: "Nothing here yet"
     direction: DOWN
+    timeout: 60000
 - assertVisible: "Map"
+# The last primitives, at the end of the gallery.
+- scrollUntilVisible:
+    element: "@a_username_twenty_ch"
+    direction: DOWN
+    timeout: 120000
+- assertVisible: "Accept: @sam"
+- assertVisible: "Add: @alex_cooks"

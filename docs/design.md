@@ -56,5 +56,6 @@ Also: `spacing` (`xxs` 2 to `xxl` 32), `radii` (`sm`, `md` 10, `lg`, `sheet` 24,
 | `DraftBanner`    | Gray rounded banner on a Draft: building (hourglass), recipe not in caption (accent page), failed (red alert), couldn't read the source (accent slashed eye), with a bold title, muted message and small accent actions ("Try again") |
 | `ScreenshotField` | A screenshot the user adds to a link: label over an outlined "Add screenshot" button, or the picture in a bordered row with accent "Change" and red "Remove" |
 | `TagChips`, `TagChip`, `SuggestedTagChip` | A wrapping row of Tags as pills. `TagChip`: a Recipe's Tag in gray with a × ("Remove Italian"). `SuggestedTagChip`: a Draft's suggested Tag, accent-filled and ticked while kept, outlined with a + while left out; tapping switches |
+| `PersonRow`      | Another user: a round gray initial, bold "@username", a muted detail ("Wants to be Friends"), and up to two small actions at its right, accent ("Accept") or muted ("Decline"), each labelled with the username ("Accept: @sam") |
 | `EmptyState`     | Centred icon, title and message for a screen with nothing in it yet                                |
 | `tabScreenOptions`, `tabIcon` | The signed-in tab bar's style and icons                                               |
