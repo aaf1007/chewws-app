@@ -94,7 +94,7 @@ test('a known sequence of answers gives the expected position and Score', () => 
   }
   // Worse than R4, better than R6, better than R5: between R4 and R5.
   expect(asked).toEqual(['R4', 'R6', 'R5']);
-  expect(session).toEqual({ status: 'placed', recipeId: NEW, band: 'liked', position: 5, bandSizeSeen: 7, asked: 3 });
+  expect(session).toEqual({ status: 'placed', recipeId: NEW, band: 'liked', position: 5, bandSeen: others.map((o) => o.recipeId), asked: 3 });
   expect(scoreOf('liked', 5, 8)).toBe(8.2);
 });
 
@@ -104,7 +104,7 @@ test('an empty band places the Recipe at once, with no comparisons', () => {
     recipeId: NEW,
     band: 'fine',
     position: 1,
-    bandSizeSeen: 0,
+    bandSeen: [],
     asked: 0,
   });
 });
@@ -132,7 +132,8 @@ test('every band size from 0 to 100 needs at most ceil(log2(n + 1)) comparisons,
 test('skipping before any answer places the Recipe at gap floor(n / 2), the middle of its band', () => {
   for (let n = 0; n <= 100; n++) {
     const skipped = skipComparisons(startRankingSession(NEW, 'disliked', band(n)));
-    expect(skipped).toMatchObject({ status: 'placed', position: Math.floor(n / 2) + 1, bandSizeSeen: n });
+    expect(skipped).toMatchObject({ status: 'placed', position: Math.floor(n / 2) + 1 });
+    if (skipped.status === 'placed') expect(skipped.bandSeen).toHaveLength(n);
   }
   expect(skipComparisons(startRankingSession(NEW, 'liked', band(4)))).toMatchObject({ position: 3 });
   expect(skipComparisons(startRankingSession(NEW, 'liked', band(5)))).toMatchObject({ position: 3 });

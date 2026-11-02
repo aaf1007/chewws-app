@@ -82,7 +82,7 @@ test('a band, then answers to "better or worse than X?", place the Recipe by bin
     recipeId: shakshuka,
     band: 'liked',
     position: 1,
-    bandSizeSeen: 0,
+    bandSeen: [],
     asked: 0,
   });
   expect(await ranked(me, shakshuka, 'liked')).toEqual({ status: 'placed', band: 'liked', position: 1, score: 8.4 });
@@ -129,7 +129,7 @@ test('a band of 100 needs at most 7 comparisons, and the Recipe lands where the 
   const start = await me.data.startRanking(newcomer, 'liked');
   for (const gap of [0, 37, 50, 99, 100]) {
     const placed = answeredToward(me.data, start, titles, gap);
-    expect(placed).toMatchObject({ status: 'placed', position: gap + 1, bandSizeSeen: 100 });
+    expect(placed).toMatchObject({ status: 'placed', position: gap + 1, bandSeen: recipes });
     expect(placed.asked).toBeLessThanOrEqual(7);
   }
   const between = answeredToward(me.data, start, titles, 37);
@@ -245,7 +245,7 @@ test('two phones placing into one band: the second is told the band changed and 
   // Both phones read an empty Liked band.
   const onThisPhone = await me.data.startRanking(b, 'liked');
 
-  const otherPhone = await holdPlacement(me, a, 'liked', 1, 0);
+  const otherPhone = await holdPlacement(me, a, 'liked', 1, []);
   const placing = me.data.placeInRanking(onThisPhone);
   await otherPhone.waitForWaiting(1);
   await otherPhone.commit();
@@ -254,6 +254,24 @@ test('two phones placing into one band: the second is told the band changed and 
 
   // Compared again, against A this time.
   expect(await ranked(me, b, 'liked', ['better'])).toEqual({ status: 'placed', band: 'liked', position: 1, score: 8.9 });
+  expect(await shown(me.data)).toEqual({ liked: ['1. B 8.9', '2. A 7.8'], fine: [], disliked: [] });
+});
+
+test('two phones: a re-rank on the other reorders the band without changing its size, and this one is told the band changed', async () => {
+  const me = await signInTestUser('ranker');
+  const [a, b, c] = await Promise.all(['A', 'B', 'C'].map((t) => cooked(me, t)));
+  await ranked(me, a, 'liked');
+  await ranked(me, b, 'liked', ['worse']);
+  // This phone reads [A, B] and puts C below B: third.
+  const onThisPhone = me.data.answerComparison(await me.data.startRanking(c, 'liked'), 'worse');
+  expect(onThisPhone).toMatchObject({ status: 'placed', position: 3 });
+
+  // Meanwhile the other phone moves B above A: still two in Liked, now [B, A].
+  const otherPhone = await holdPlacement(me, b, 'liked', 1, [a]);
+  const placing = me.data.placeInRanking(onThisPhone);
+  await otherPhone.waitForWaiting(1);
+  await otherPhone.commit();
+  expect(await placing).toEqual({ status: 'bandChanged' });
   expect(await shown(me.data)).toEqual({ liked: ['1. B 8.9', '2. A 7.8'], fine: [], disliked: [] });
 });
 
@@ -281,7 +299,7 @@ test('a Recipe deleted while another phone re-ranks it: the re-rank goes first, 
   await ranked(me, c, 'liked', ['worse']);
 
   // The other phone moves B to Fine; this one deletes B meanwhile.
-  const otherPhone = await holdPlacement(me, b, 'fine', 1, 0);
+  const otherPhone = await holdPlacement(me, b, 'fine', 1, []);
   const deleting = me.data.deleteRecipe(b);
   await otherPhone.waitForWaiting(1);
   await otherPhone.commit();
@@ -295,7 +313,7 @@ test('deleting the last Cook Log while another phone places the Recipe: the plac
   await ranked(me, a, 'liked');
   const [log] = await me.data.listCookLogs(b);
 
-  const otherPhone = await holdPlacement(me, b, 'liked', 1, 1);
+  const otherPhone = await holdPlacement(me, b, 'liked', 1, [a]);
   const deleting = me.data.deleteCookLog(log.id);
   await otherPhone.waitForWaiting(1);
   await otherPhone.commit();

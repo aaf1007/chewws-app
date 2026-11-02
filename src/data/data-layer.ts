@@ -1965,7 +1965,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   /**
    * Puts the Recipe where a finished session placed it, moving it if it was ranked already (out of
    * its old band, whose Scores close up). `bandChanged` when the band isn't as the session read it
-   * any more (another phone ranked meanwhile): start again with `startRanking`.
+   * any more, in its Recipes or their order (another phone ranked or re-ranked meanwhile): start
+   * again with `startRanking`.
    */
   async function placeInRanking(session: RankingSession): Promise<PlaceInRankingResult> {
     if (session.status !== 'placed') {
@@ -1975,13 +1976,13 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       recipe_id: session.recipeId,
       band: session.band,
       position: session.position,
-      band_size_seen: session.bandSizeSeen,
+      band_seen: [...session.bandSeen],
     });
     if (error) fail(error);
     const status = statusOf('place_in_ranking', data, ['placed', 'bandChanged', 'notCooked', 'noSuchRecipe']);
     if (status !== 'placed') return { status };
     const { band, position } = session;
-    return { status, band, position, score: scoreOf(band, position, session.bandSizeSeen + 1) };
+    return { status, band, position, score: scoreOf(band, position, session.bandSeen.length + 1) };
   }
 
   /**

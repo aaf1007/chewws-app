@@ -340,11 +340,11 @@ const commands = {
       if (logged.status !== 'added') throw new Error(`the dev user's ${title}: ${JSON.stringify(logged)}`);
       ids[title] = id;
     }
-    for (const [title, position, seen] of [['Shakshuka', 1, 0], ['Dal', 2, 1]]) {
+    for (const [title, position, seen] of [['Shakshuka', 1, []], ['Dal', 2, ['Shakshuka']]]) {
       const [{ placed }] = await asUser(
         DEV_USER,
-        "select public.place_in_ranking($1, 'liked', $2, $3) as placed",
-        [ids[title], position, seen],
+        "select public.place_in_ranking($1, 'liked', $2, $3::uuid[]) as placed",
+        [ids[title], position, seen.map((t) => ids[t])],
       );
       if (placed.status !== 'placed') throw new Error(`ranking ${title}: ${JSON.stringify(placed)}`);
     }

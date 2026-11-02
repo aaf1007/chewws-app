@@ -1212,7 +1212,7 @@ export type Database = {
       place_in_ranking: {
         Args: {
           band: Database["public"]["Enums"]["ranking_band"]
-          band_size_seen: number
+          band_seen: string[]
           position: number
           recipe_id: string
         }

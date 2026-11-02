@@ -121,12 +121,13 @@ create trigger ranking_entries_close_gaps
 -- Writes -----------------------------------------------------------------------------------------
 
 -- Places one of the caller's Cooked Recipes in `band` at `position` (1 = best), the spot the
--- phone's comparisons found among the `band_size_seen` Recipes it read in that band (without this
--- one). Ranked already, it moves: out of its old band and into this one, in one transaction.
--- Answers {status: 'placed' | 'bandChanged' | 'notCooked' | 'noSuchRecipe'}. `bandChanged`: the
--- band no longer has `band_size_seen` Recipes (another phone ranked meanwhile), so nothing changed
--- and the phone compares again. Only `placed` changed anything.
-create function public.place_in_ranking(recipe_id uuid, band public.ranking_band, "position" int, band_size_seen int)
+-- phone's comparisons found among `band_seen`, the band's Recipes best first as the phone read them
+-- (without this one). Ranked already, it moves: out of its old band and into this one, in one
+-- transaction. Answers {status: 'placed' | 'bandChanged' | 'notCooked' | 'noSuchRecipe'}.
+-- `bandChanged`: the band isn't `band_seen` any more, in its Recipes or their order (another phone
+-- ranked or re-ranked meanwhile, even keeping its size), so nothing changed and the phone compares
+-- again. Only `placed` changed anything.
+create function public.place_in_ranking(recipe_id uuid, band public.ranking_band, "position" int, band_seen uuid[])
 returns jsonb
 language plpgsql
 security definer
@@ -134,13 +135,14 @@ set search_path = ''
 as $$
 declare
   me uuid := auth.uid();
+  band_now uuid[];
   band_size int;
 begin
   if me is null then
     raise exception 'not signed in' using errcode = '42501';
   end if;
-  if place_in_ranking.band is null or place_in_ranking.position is null or place_in_ranking.band_size_seen is null then
-    raise exception 'a band, a position and the band size seen are needed' using errcode = '22023';
+  if place_in_ranking.band is null or place_in_ranking.position is null or place_in_ranking.band_seen is null then
+    raise exception 'a band, a position and the band as seen are needed' using errcode = '22023';
   end if;
 
   -- The Recipe is the caller's, held until this commits: deleting it, or its last Cook Log, waits.
@@ -155,11 +157,12 @@ begin
   end if;
 
   perform private.lock_ranking(me);
-  select count(*)::int into band_size from public.ranking_entries e
+  select coalesce(array_agg(e.recipe_id order by e.position), '{}') into band_now from public.ranking_entries e
   where e.user_id = me and e.band = place_in_ranking.band and e.recipe_id <> place_in_ranking.recipe_id;
-  if band_size <> place_in_ranking.band_size_seen then
+  if band_now is distinct from place_in_ranking.band_seen then
     return jsonb_build_object('status', 'bandChanged');
   end if;
+  band_size := cardinality(band_now);
   if place_in_ranking.position < 1 or place_in_ranking.position > band_size + 1 then
     raise exception 'a band of % has no position %', band_size, place_in_ranking.position using errcode = '22023';
   end if;
@@ -177,8 +180,8 @@ begin
 end;
 $$;
 
-revoke execute on function public.place_in_ranking(uuid, public.ranking_band, int, int) from public, anon;
-grant execute on function public.place_in_ranking(uuid, public.ranking_band, int, int) to authenticated;
+revoke execute on function public.place_in_ranking(uuid, public.ranking_band, int, uuid[]) from public, anon;
+grant execute on function public.place_in_ranking(uuid, public.ranking_band, int, uuid[]) to authenticated;
 
 -- Ticket 16's delete_cook_log, now also taking a Recipe left with no Cook Log (Saved again) out of
 -- the Ranking, under the same Recipe lock, after the phone's warning (user decisions 11–19, 7).

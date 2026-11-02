@@ -51,11 +51,11 @@ async function ranked() {
   const [shakshuka, dal, toast] = await Promise.all(['Shakshuka', 'Dal', 'Toast'].map((t) => cooked(kim, t)));
   const saved = await kim.data.createRecipe({ title: 'Saved', lines: [], steps: [] });
   for (const [recipe, band, position, seen] of [
-    [shakshuka, 'liked', 1, 0],
-    [dal, 'liked', 2, 1],
-    [toast, 'disliked', 1, 0],
+    [shakshuka, 'liked', 1, []],
+    [dal, 'liked', 2, [shakshuka]],
+    [toast, 'disliked', 1, []],
   ] as const) {
-    const placed = await kim.client.rpc('place_in_ranking', { recipe_id: recipe, band, position, band_size_seen: seen });
+    const placed = await kim.client.rpc('place_in_ranking', { recipe_id: recipe, band, position, band_seen: [...seen] });
     expect(placed.data).toEqual({ status: 'placed' });
   }
   await kim.data.unfriend(ex.userId);
@@ -126,7 +126,7 @@ test('nobody ranks a Recipe that isn’t their own: not a stranger, not a Friend
 
   for (const user of [sam, stranger]) {
     for (const recipe of [shakshuka, saved]) {
-      const placed = await user.client.rpc('place_in_ranking', { recipe_id: recipe, band: 'fine', position: 1, band_size_seen: 0 });
+      const placed = await user.client.rpc('place_in_ranking', { recipe_id: recipe, band: 'fine', position: 1, band_seen: [] });
       expect(placed.data).toEqual({ status: 'noSuchRecipe' });
     }
     expect(await rowsOf(user, user)).toEqual([]);
@@ -137,27 +137,27 @@ test('nobody ranks a Recipe that isn’t their own: not a stranger, not a Friend
 
 test('a Recipe that isn’t Cooked can’t be ranked, by its owner either', async () => {
   const { kim, saved, expectUnchanged } = await ranked();
-  const placed = await kim.client.rpc('place_in_ranking', { recipe_id: saved, band: 'fine', position: 1, band_size_seen: 0 });
+  const placed = await kim.client.rpc('place_in_ranking', { recipe_id: saved, band: 'fine', position: 1, band_seen: [] });
   expect(placed.data).toEqual({ status: 'notCooked' });
   await expectUnchanged();
 });
 
-test('place_in_ranking can’t leave a gap or a clash: positions outside 1…n+1 are refused, and a stale band size changes nothing', async () => {
-  const { kim, toast, expectUnchanged } = await ranked();
+test('place_in_ranking can’t leave a gap or a clash: positions outside 1…n+1 are refused, and a band read stale changes nothing', async () => {
+  const { kim, shakshuka, dal, toast, saved, expectUnchanged } = await ranked();
   const extra = await cooked(kim, 'Extra');
 
   for (const position of [0, -1, 4, 100]) {
-    const placed = await kim.client.rpc('place_in_ranking', { recipe_id: extra, band: 'liked', position, band_size_seen: 2 });
+    const placed = await kim.client.rpc('place_in_ranking', { recipe_id: extra, band: 'liked', position, band_seen: [shakshuka, dal] });
     expect(placed.error, `position ${position}`).toMatchObject({ code: '22023' });
   }
   // Moving toast within its own band of 1: only position 1 is there.
-  expect((await kim.client.rpc('place_in_ranking', { recipe_id: toast, band: 'disliked', position: 2, band_size_seen: 0 })).error).toMatchObject({
+  expect((await kim.client.rpc('place_in_ranking', { recipe_id: toast, band: 'disliked', position: 2, band_seen: [] })).error).toMatchObject({
     code: '22023',
   });
-  // A band size other than the band's, too small or too big, is a band that changed.
-  for (const seen of [0, 1, 3]) {
-    const placed = await kim.client.rpc('place_in_ranking', { recipe_id: extra, band: 'liked', position: 1, band_size_seen: seen });
-    expect(placed.data, `seen ${seen}`).toEqual({ status: 'bandChanged' });
+  // A band read other than the band, in its Recipes or their order, is a band that changed.
+  for (const seen of [[], [shakshuka], [dal, shakshuka], [shakshuka, saved], [shakshuka, dal, toast], [shakshuka, dal, dal]]) {
+    const placed = await kim.client.rpc('place_in_ranking', { recipe_id: extra, band: 'liked', position: 1, band_seen: seen });
+    expect(placed.data, `seen ${seen.join(', ')}`).toEqual({ status: 'bandChanged' });
   }
   await expectUnchanged();
 });

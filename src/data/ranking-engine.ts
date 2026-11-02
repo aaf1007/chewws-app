@@ -39,7 +39,8 @@ export function scoreOf(band: RankingBand, position: number, bandSize: number): 
 /**
  * Placing one Recipe in a band, on the phone. `others` is the band as read, best first, without
  * this Recipe. While `comparing`, the gaps `lo`…`hi` are still open and the user is asked about
- * `against`; once `placed`, `position` is where it goes among `bandSizeSeen` others. `asked`
+ * `against`; once `placed`, `position` is where it goes in `bandSeen`, the band as read (its
+ * Recipes best first), which the server checks is still the band before placing it. `asked`
  * counts the comparisons answered. A session left half-way ranks nothing.
  */
 export type RankingSession =
@@ -58,7 +59,7 @@ export type RankingSession =
       recipeId: RecipeId;
       band: RankingBand;
       position: number;
-      bandSizeSeen: number;
+      bandSeen: readonly RecipeId[];
       asked: number;
     };
 
@@ -67,7 +68,7 @@ type SessionBase = { recipeId: RecipeId; band: RankingBand; others: readonly Ran
 /** The session with gaps `lo`…`hi` open: placed once one gap is left, else the next comparison. */
 function narrowed(base: SessionBase, lo: number, hi: number, asked: number): RankingSession {
   const { recipeId, band, others } = base;
-  if (lo >= hi) return { status: 'placed', recipeId, band, position: lo + 1, bandSizeSeen: others.length, asked };
+  if (lo >= hi) return { status: 'placed', recipeId, band, position: lo + 1, bandSeen: others.map((o) => o.recipeId), asked };
   return { status: 'comparing', recipeId, band, others, lo, hi, against: others[Math.floor((lo + hi) / 2)], asked };
 }
 

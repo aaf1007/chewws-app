@@ -1060,14 +1060,15 @@ export async function cookLogPolicies(): Promise<string[]> {
 
 /**
  * For race tests only: `user` placing their Recipe in their Ranking on another phone
- * (place_in_ranking, at `position` among the `bandSizeSeen` others the phone read), not committed yet.
+ * (place_in_ranking, at `position` in `bandSeen`, the band's Recipe ids best first as the phone read
+ * them), not committed yet.
  */
-export const holdPlacement = (user: Someone, recipeId: string, band: string, position: number, bandSizeSeen: number) =>
-  holdCallAs(user, 'select public.place_in_ranking($1, $2::public.ranking_band, $3, $4)', [
+export const holdPlacement = (user: Someone, recipeId: string, band: string, position: number, bandSeen: string[]) =>
+  holdCallAs(user, 'select public.place_in_ranking($1, $2::public.ranking_band, $3, $4::uuid[])', [
     recipeId,
     band,
     position,
-    bandSizeSeen,
+    bandSeen,
   ]);
 
 /** For race tests only: `user` deleting their Recipe on another phone, as `deleteRecipe` does, not committed yet. */
