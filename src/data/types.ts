@@ -487,8 +487,14 @@ export type CookLog = {
   updatedAt: string;
 };
 
-/** A photo in the Cook Log form: one already on the log, or one just picked (JPEG bytes, scaled down). */
-export type CookLogPhotoInput = { kind: 'saved'; id: CookLogPhotoId } | { kind: 'new'; jpeg: ArrayBuffer };
+/**
+ * A photo in the Cook Log form: one already on the log, or one just picked (JPEG bytes, scaled
+ * down). A picked photo's `id` (from `newCookLogPhotoId`) names its file: send the same one on
+ * every try of one save, so a try after a lost answer finds the file already there.
+ */
+export type CookLogPhotoInput =
+  | { kind: 'saved'; id: CookLogPhotoId }
+  | { kind: 'new'; id?: CookLogPhotoId; jpeg: ArrayBuffer };
 
 /**
  * What the user filled in for a Cook Log. `cookedOn`: a day no later than tomorrow on this phone.

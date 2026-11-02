@@ -13,16 +13,17 @@ const MAX_PHOTOS = 4;
 /** How far back the day pills go. */
 const DAYS_BACK = 60;
 
-/** A photo in the form: one already on the log, or one just picked and scaled down. */
-type FormPhoto = { key: string; uri: string | null } & (
-  | { kind: 'saved'; id: CookLogPhotoId }
+/**
+ * A photo in the form: one already on the log, or one just picked and scaled down. A picked photo
+ * gets its id once, so every try of one save sends the same file name (decisions 16).
+ */
+type FormPhoto = { key: string; uri: string | null; id: CookLogPhotoId } & (
+  | { kind: 'saved' }
   | { kind: 'new'; jpeg: ArrayBuffer }
 );
 
 /** Someone the user can pick as cooked with. */
 export type Companion = { id: UserId; username: string | null };
-
-let lastKey = 0;
 
 /**
  * The Cook Log form shared by "Add Cook Log" and "Edit Cook Log": the day, notes, photos and the
@@ -78,7 +79,9 @@ export function CookLogForm({
     setAdding(true);
     pickImage()
       .then((picked) => {
-        if (picked) setPhotos((all) => [...all, { key: `new-${++lastKey}`, uri: picked.uri, kind: 'new', jpeg: picked.jpeg }]);
+        if (!picked) return;
+        const id = data.newCookLogPhotoId();
+        setPhotos((all) => [...all, { key: id, uri: picked.uri, id, kind: 'new', jpeg: picked.jpeg }]);
       })
       .catch((e: unknown) => setError(messageOf(e)))
       .finally(() => setAdding(false));
@@ -92,7 +95,7 @@ export function CookLogForm({
         cookedOn,
         notes,
         companions,
-        photos: photos.map((p) => (p.kind === 'saved' ? { kind: 'saved', id: p.id } : { kind: 'new', jpeg: p.jpeg })),
+        photos: photos.map((p) => (p.kind === 'saved' ? { kind: 'saved', id: p.id } : { kind: 'new', id: p.id, jpeg: p.jpeg })),
       },
       people,
     ).catch((e: unknown) => {

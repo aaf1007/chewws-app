@@ -1675,32 +1675,45 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     return parseCookLogId(newId());
   }
 
-  /**
-   * Uploads a Cook Log's new photos into the user's own folder, before the log is saved
-   * (decisions 16), and answers their new ids in order. If any fails, the ones that went up are
-   * removed again and nothing is saved.
-   */
-  async function uploadCookLogPhotos(me: UserId, logId: CookLogId, jpegs: ArrayBuffer[]): Promise<CookLogPhotoId[]> {
-    const ids = jpegs.map(() => parseCookLogPhotoId(newId()));
-    const uploads = await Promise.allSettled(
-      jpegs.map((jpeg, i) =>
-        uploadImage(COOK_LOG_PHOTOS, cookLogPhotoPath(me, logId, ids[i]), jpeg, { replace: false, what: 'photo' }),
-      ),
-    );
-    const failed = uploads.find((upload) => upload.status === 'rejected');
-    if (failed) {
-      await removeImages(
-        COOK_LOG_PHOTOS,
-        ids.filter((_, i) => uploads[i].status === 'fulfilled').map((id) => cookLogPhotoPath(me, logId, id)),
-      );
-      throw failed.reason;
-    }
-    return ids;
+  /** A new id for a photo just picked for a Cook Log; the screen keeps it for every try of one save. */
+  function newCookLogPhotoId(): CookLogPhotoId {
+    return parseCookLogPhotoId(newId());
   }
 
   /**
-   * After photos were uploaded for a write the server then refused: removes them. A write that got
-   * no answer may have gone through, so its uploads stay; deleting the log removes them.
+   * Uploads a Cook Log's new photos into the user's own folder, before the log is saved
+   * (decisions 16), each under its own id (a new one if the form sent none). A file already there
+   * went up on an earlier try of this save, and is used as it is. Answers the ids in order and
+   * which of them this try uploaded. If any upload fails, those this try uploaded are removed
+   * again and nothing is saved.
+   */
+  async function uploadCookLogPhotos(
+    me: UserId,
+    logId: CookLogId,
+    photos: { id?: CookLogPhotoId; jpeg: ArrayBuffer }[],
+  ): Promise<{ ids: CookLogPhotoId[]; uploaded: CookLogPhotoId[] }> {
+    const ids = photos.map((photo) => photo.id ?? newCookLogPhotoId());
+    const uploads = await Promise.allSettled(
+      photos.map((photo, i) =>
+        uploadImage(COOK_LOG_PHOTOS, cookLogPhotoPath(me, logId, ids[i]), photo.jpeg, { replace: false, what: 'photo' }),
+      ),
+    );
+    const uploaded = ids.filter((_, i) => {
+      const upload = uploads[i];
+      return upload.status === 'fulfilled' && upload.value === 'uploaded';
+    });
+    const failed = uploads.find((upload) => upload.status === 'rejected');
+    if (failed) {
+      await removeImages(COOK_LOG_PHOTOS, uploaded.map((id) => cookLogPhotoPath(me, logId, id)));
+      throw failed.reason;
+    }
+    return { ids, uploaded };
+  }
+
+  /**
+   * After photos were uploaded for a write the server then refused: removes those this try
+   * uploaded. A write that got no answer may have gone through, so its uploads stay for the next
+   * try (or deleting the log) to use.
    */
   async function cleanUpRefusedPhotos(me: UserId, logId: CookLogId, ids: CookLogPhotoId[], error?: DataError) {
     if (error?.code === 'offline') return;
@@ -1730,13 +1743,13 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   ): Promise<AddCookLogResult> {
     const cookedOn = toCookedOn(input.cookedOn, now());
     const notes = toCookLogNotes(input.notes);
-    const jpegs = toCookLogPhotos(input.photos).map((photo) => {
+    const picked = toCookLogPhotos(input.photos).map((photo) => {
       if (photo.kind !== 'new') throw new DataError('photo_not_found', 'That photo isn’t on this Cook Log.');
-      return photo.jpeg;
+      return photo;
     });
     const id = options.cookLogId ?? newCookLogId();
     const me = await currentUserId();
-    const photoIds = await uploadCookLogPhotos(me, id, jpegs);
+    const { ids: photoIds, uploaded } = await uploadCookLogPhotos(me, id, picked);
     const { data, error } = await client.rpc('add_cook_log', {
       id,
       recipe_id: recipeId,
@@ -1748,7 +1761,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     });
     if (error) {
       const refused = toDataError(error);
-      await cleanUpRefusedPhotos(me, id, photoIds, refused);
+      await cleanUpRefusedPhotos(me, id, uploaded, refused);
       throw refused;
     }
     const status = statusOf('add_cook_log', data, [
@@ -1760,7 +1773,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       'photoNotUploaded',
     ]);
     if (status === 'added') return { status, cookLogId: id };
-    await cleanUpRefusedPhotos(me, id, photoIds);
+    await cleanUpRefusedPhotos(me, id, uploaded);
     if (status === 'photoNotUploaded') throw new DataError('photo_not_saved', 'A photo couldn’t be saved. Try again.');
     if (status === 'notCompanion') return { status, userId: companionOf('add_cook_log', data) };
     return { status };
@@ -1787,9 +1800,9 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     const had = new Set(log.companions.map((c) => c.id));
     const kept = new Set(photos.flatMap((photo) => (photo.kind === 'saved' ? [photo.id] : [])));
     const removedPhotos = log.photos.filter((photo) => !kept.has(photo.id)).map((photo) => photo.id);
-    const jpegs = photos.flatMap((photo) => (photo.kind === 'new' ? [photo.jpeg] : []));
+    const picked = photos.flatMap((photo) => (photo.kind === 'new' ? [photo] : []));
     const me = await currentUserId();
-    const added = await uploadCookLogPhotos(me, log.id, jpegs);
+    const { ids: added, uploaded } = await uploadCookLogPhotos(me, log.id, picked);
     const { data, error } = await client.rpc('edit_cook_log', {
       id: log.id,
       cooked_on: cookedOn ?? undefined,
@@ -1802,7 +1815,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     });
     if (error) {
       const refused = toDataError(error);
-      await cleanUpRefusedPhotos(me, log.id, added, refused);
+      await cleanUpRefusedPhotos(me, log.id, uploaded, refused);
       throw refused;
     }
     const status = statusOf('edit_cook_log', data, ['edited', 'notFound', 'tooManyPhotos', 'notCompanion', 'photoNotUploaded']);
@@ -1810,7 +1823,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       await removeImages(COOK_LOG_PHOTOS, removedPhotos.map((id) => cookLogPhotoPath(me, log.id, id)));
       return { status };
     }
-    await cleanUpRefusedPhotos(me, log.id, added);
+    await cleanUpRefusedPhotos(me, log.id, uploaded);
     if (status === 'photoNotUploaded') throw new DataError('photo_not_saved', 'A photo couldn’t be saved. Try again.');
     if (status === 'notCompanion') return { status, userId: companionOf('edit_cook_log', data) };
     return { status };
@@ -3708,6 +3721,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     getRecipe,
     copyRecipe,
     newCookLogId,
+    newCookLogPhotoId,
     addCookLog,
     editCookLog,
     deleteCookLog,

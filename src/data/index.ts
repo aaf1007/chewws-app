@@ -18,6 +18,7 @@ export {
   DataError,
   couldNotReadSource,
   parseCookLogId,
+  parseCookLogPhotoId,
   parseCookPlanId,
   parseCookPlanInvitePush,
   parseCookPlanItemId,

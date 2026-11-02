@@ -266,7 +266,8 @@ Defaults chosen where the tickets leave things open. Override any by editing thi
   - `delete_cook_log` takes the Recipe `for update` (an add holds it `for share`) and answers `{ status: 'deleted', recipe: 'cooked' | 'saved' }` or `notFound`. So a delete of the last log racing an add never answers `saved` for a Recipe that ends Cooked; ticket 17 removes the Ranking entry there, under the same lock, when it answers `saved`.
   - The server refuses a day more than two days after today in UTC (the latest any phone's "tomorrow" can be); the phone refuses anything after its own tomorrow. The form's day pills go back 60 days.
   - Deleting a log removes everything in its Storage folder, and deleting a Recipe removes its logs' folders, both best effort.
-  - **Before going public:** a user can upload any number of photos into their own folder that no log ends up using (a save refused by the server cleans up after itself; one that never reaches the server doesn't), and Friends can read them. The same holds for `recipe-images`. A per-user storage cap is a before-going-public item.
+  - Each picked photo gets its id once (`newCookLogPhotoId`), and the form sends the same ids on every try of one save, as it does the log's id. So a save sent again after a lost answer finds its photos already uploaded and uploads no second set. A save the server refuses removes the photos that try uploaded; a failed upload removes the others that went up and saves nothing.
+  - **Before going public:** photos of a save the user gives up on (it never reached the server, and they left the screen) stay in their folder, used by no log and readable by Friends. A scheduled sweep that removes files no log names, after a day or so, is needed, and so is a per-user storage cap. The same holds for `recipe-images`.
 
 ## 17 Ranking
 

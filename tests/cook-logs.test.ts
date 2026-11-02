@@ -391,6 +391,46 @@ test('a delete sent again after its answer was lost still removes the photos', a
   expect(await storedCookLogPhotos(phone)).toEqual([]);
 });
 
+test('a save sent again after its answer was lost uploads no second set of photos', async () => {
+  const [phone] = await signInOnPhones('cook', 1);
+  const recipe = await phone.data.createRecipe(shakshuka);
+  // The screen names the log and each picked photo once, and sends the same names on every try.
+  const cookLogId = phone.data.newCookLogId();
+  const input: CookLogInput = {
+    cookedOn: '2026-10-30',
+    photos: [
+      { kind: 'new', id: phone.data.newCookLogPhotoId(), jpeg: screenshotBytes() },
+      { kind: 'new', id: phone.data.newCookLogPhotoId(), jpeg: otherPhoto() },
+    ],
+  };
+  // The user's Storage folder holds exactly the log's photos.
+  const stored = async (log: CookLog) =>
+    expect(await storedCookLogPhotos(phone)).toEqual(log.photos.map((p) => `${log.id}/${p.id}.jpg`).sort());
+
+  // The add reaches the server, but the signal drops before its answer comes back.
+  phone.loseNextAnswer('add_cook_log');
+  await expect(phone.data.addCookLog(recipe, input, { cookLogId })).rejects.toMatchObject({ code: 'offline' });
+  expect(await phone.data.addCookLog(recipe, input, { cookLogId })).toEqual({ status: 'added', cookLogId });
+  const log = await onlyLog(phone, recipe);
+  expect(log.photos.map((p) => p.id)).toEqual(input.photos?.map((p) => p.id));
+  await stored(log);
+
+  // The same for an edit adding a photo.
+  const edited: CookLogInput = {
+    cookedOn: log.cookedOn,
+    photos: [
+      ...log.photos.map((p) => ({ kind: 'saved' as const, id: p.id })),
+      { kind: 'new', id: phone.data.newCookLogPhotoId(), jpeg: screenshotBytes() },
+    ],
+  };
+  phone.loseNextAnswer('edit_cook_log');
+  await expect(phone.data.editCookLog(log, edited)).rejects.toMatchObject({ code: 'offline' });
+  expect(await phone.data.editCookLog(log, edited)).toEqual({ status: 'edited' });
+  const now = await onlyLog(phone, recipe);
+  expect(now.photos.map((p) => p.id)).toEqual(edited.photos?.map((p) => p.id));
+  await stored(now);
+});
+
 test('a Cook Log can have at most 4 photos, however they are added', async () => {
   const me = await signInWithUsername('cook');
   const recipe = await me.data.createRecipe(shakshuka);
