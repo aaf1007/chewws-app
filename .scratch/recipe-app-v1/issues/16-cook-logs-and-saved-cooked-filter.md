@@ -6,9 +6,9 @@
 
 **Status:** ready-for-agent
 
-- [ ] The user can add a Cook Log with date, notes, photos and cooked-with Friends
-- [ ] Several Cook Logs per Recipe are allowed; each can be edited or deleted
-- [ ] A Recipe with a Cook Log shows as Cooked; deleting its last Cook Log makes it Saved again
-- [ ] The library filters by Saved vs Cooked
-- [ ] Photos are stored as the user's own images
-- [ ] Data-layer tests: a Friend can read the user's Cook Logs, a stranger can't, and an unfriended user no longer can
+- [x] The user can add a Cook Log with date, notes, photos and cooked-with Friends
+- [x] Several Cook Logs per Recipe are allowed; each can be edited or deleted
+- [x] A Recipe with a Cook Log shows as Cooked; deleting its last Cook Log makes it Saved again
+- [x] The library filters by Saved vs Cooked
+- [x] Photos are stored as the user's own images
+- [x] Data-layer tests: a Friend can read the user's Cook Logs, a stranger can't, and an unfriended user no longer can
