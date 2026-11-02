@@ -30,14 +30,21 @@ function easProjectId(): string | undefined {
  * Registers this phone for "Draft ready" (decisions 07), once notifications are allowed. With
  * `ask`, it asks for permission first if it hasn't been asked (after the first link saved, never at
  * launch). Denied, or no token to be had (the simulator, no signal), nothing is stored and saving
- * works as before. Never throws.
+ * works as before. `onDecided` runs as soon as the permission is known (asked and answered, or
+ * already decided), before the token: the system can take long to give one, or never answer (the
+ * simulator), and a screen showing the permission mustn't wait for it. Never throws.
  */
-export async function registerForDraftReady({ ask }: { ask: boolean }): Promise<void> {
+export async function registerForDraftReady({ ask, onDecided }: { ask: boolean; onDecided?: () => void }): Promise<void> {
+  let allowed = false;
   try {
     const current = await Notifications.getPermissionsAsync();
-    const allowed =
-      current.granted || (ask && current.canAskAgain && (await Notifications.requestPermissionsAsync()).granted);
-    if (!allowed) return;
+    allowed = current.granted || (ask && current.canAskAgain && (await Notifications.requestPermissionsAsync()).granted);
+  } catch {
+    // Can't be told: as if denied.
+  }
+  onDecided?.();
+  if (!allowed) return;
+  try {
     const { data: token } = await Notifications.getExpoPushTokenAsync({ projectId: easProjectId() });
     await data.registerPushToken(token);
   } catch {
@@ -65,12 +72,13 @@ export async function notificationPermission(): Promise<NotificationPermission> 
  * After the user sends or accepts a friend request (decisions 11): while notifications are
  * undecided, `explain` gives the one-line reason (how they'll hear about friend requests) and
  * answers whether the user goes on; then the system asks, and an allowed phone is registered as
- * for "Draft ready". Once decided, it does nothing, so it asks only after the first. Never throws.
+ * for "Draft ready". Once decided, it does nothing, so it asks only after the first. `onDecided`
+ * runs once the system's question is answered, as for `registerForDraftReady`. Never throws.
  */
-export async function askAfterFriendRequest(explain: () => Promise<boolean>): Promise<void> {
+export async function askAfterFriendRequest(explain: () => Promise<boolean>, onDecided?: () => void): Promise<void> {
   if ((await notificationPermission()) !== 'undecided') return;
   if (!(await explain().catch(() => false))) return;
-  await registerForDraftReady({ ask: true });
+  await registerForDraftReady({ ask: true, onDecided });
 }
 
 /**
