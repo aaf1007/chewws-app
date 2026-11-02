@@ -5,7 +5,7 @@
 // request" push the next request sends. vi.mock calls are hoisted above the imports.
 import { beforeEach, expect, test, vi } from 'vitest';
 
-import { askAfterFriendRequest, notificationPermission } from '@/notifications';
+import { askAfterFriendRequest, notificationPermission, type NotificationPermission } from '@/notifications';
 
 import type { DataLayer } from '../src/data';
 import { signInWithUsername } from './harness';
@@ -73,6 +73,23 @@ test('undecided: says why, then the system asks; allowed, the next request to th
       data: { kind: 'friendRequest', fromUserId: carol.userId },
     },
   ]);
+});
+
+test('allowed while the system never gives a token (the simulator): the screen hears the answer at once', async () => {
+  await aliceAskedBob();
+  mocks.getPermissionsAsync.mockResolvedValueOnce(undecided).mockResolvedValueOnce(undecided).mockResolvedValue(granted);
+  mocks.requestPermissionsAsync.mockResolvedValue(granted);
+  mocks.getExpoPushTokenAsync.mockReturnValue(new Promise(() => {}));
+
+  const shown = await new Promise<NotificationPermission>((resolve) => {
+    void askAfterFriendRequest(
+      () => Promise.resolve(true),
+      () => void notificationPermission().then(resolve),
+    );
+  });
+
+  expect(shown).toBe('allowed');
+  expect(mocks.getExpoPushTokenAsync).toHaveBeenCalledTimes(1);
 });
 
 test('undecided, and the user says "Not now" to the reason: the system never asks, and no token is stored', async () => {
