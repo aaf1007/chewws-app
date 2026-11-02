@@ -46,8 +46,8 @@ appId: com.ant1007.recipeapp
     direction: DOWN
     timeout: 30000
 - assertVisible: "Cook Log, Toast, .*"
-- assertVisible: "Cook Log, Dal, .*"
-- assertVisible: "Cook Log, Shakshuka, .*, with @dev"
+- assertVisible: "Cook Log, Dal, .*\\. Too salty"
+- assertVisible: "Cook Log, Shakshuka, .*, with @dev\\. Smoky, extra feta"
 - assertNotVisible: "Show more Cook Logs"
 
 # His ranked Shakshuka: read it, and save your own copy.
