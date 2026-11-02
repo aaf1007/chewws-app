@@ -53,6 +53,7 @@ import {
   type RankingSession,
 } from './ranking-engine';
 import { validateRecipeInput } from './recipe-input';
+import { localDay } from './local-day';
 import { searchWords } from './search-words';
 import { MAX_REVIEW_TAGS, checkTagName, normaliseTagName, tagKey, tidyTagNames } from './tag-name';
 import { sessionIdOf, type SessionStorage } from './session-storage';
@@ -274,14 +275,6 @@ type CookPlanRow = Pick<
 const COOK_PLAN_COLUMNS = 'id, creator_id, cook_on, status, cooked_at, cooked_by, created_at';
 type CookPlanPersonRow = Database['public']['Views']['cook_plan_people']['Row'];
 type CookPlanRecipeListRow = Database['public']['Views']['cook_plan_recipe_list']['Row'];
-
-/** The calendar day `days` after `now`'s on this phone, as `YYYY-MM-DD`. */
-function localDay(now: number, days = 0): string {
-  const date = new Date(now);
-  date.setDate(date.getDate() + days);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
 
 /**
  * The day a Cook Log says the Recipe was cooked: a calendar date `YYYY-MM-DD` that exists, no

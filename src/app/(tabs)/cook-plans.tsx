@@ -12,6 +12,7 @@ import {
   promptTitle,
   recipeOwnerText,
 } from '@/components/cook-plan-copy';
+import { cookPlanPromptsFor } from '@/components/cook-plan-prompts';
 import { useWhileFocused } from '@/components/use-while-focused';
 import type { CookPlan, CookPlanId, CookPlanPrompt, CookPlansRead } from '@/data';
 import { data } from '@/data/app';
@@ -24,8 +25,7 @@ const openPlan = (id: CookPlanId) => router.push({ pathname: '/cook-plan/[id]', 
 /** The plans, and the user's prompts for the cooked ones (decisions 18), which need a connection. */
 async function load(): Promise<CookPlansRead & { prompts: CookPlanPrompt[] }> {
   const read = await data.readCookPlans();
-  const prompts = read.offline ? [] : await data.cookPlanPrompts(read.plans).catch(() => []);
-  return { ...read, prompts };
+  return { ...read, prompts: await cookPlanPromptsFor(read.plans, read.offline) };
 }
 
 /**

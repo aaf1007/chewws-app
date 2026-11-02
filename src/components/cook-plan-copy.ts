@@ -1,4 +1,5 @@
 import type { CookPlan, CookPlanList, CookPlanListItem, CookPlanPrompt, CookPlanPromptStep, CookPlanRecipe, RecipeCookPlan, UserId } from '@/data';
+import { localDay } from '@/data';
 import { formatDay } from '@/ui';
 
 const handles = (usernames: readonly (string | null)[]) =>
@@ -16,18 +17,11 @@ export function cookPlanDetail(plan: CookPlan, me: UserId | null): string {
   return plan.cookOn ? `${who} · ${formatDay(plan.cookOn)}` : who;
 }
 
-/** The day a time was, on this phone, as `YYYY-MM-DD`. */
-function dayOf(at: string): string {
-  const date = new Date(at);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
 /** When a cooked plan was cooked, and by whom: "Cooked Sat 2 Nov by @sam", "Cooked Sat 2 Nov by you". */
 export function cookedDetail(plan: CookPlan, me: UserId | null): string | null {
   if (plan.status !== 'cooked') return null;
   const by = plan.cookedBy === null ? null : plan.cookedBy === me ? 'you' : plan.members.find((m) => m.id === plan.cookedBy)?.username;
-  const day = `Cooked ${formatDay(dayOf(plan.cookedAt))}`;
+  const day = `Cooked ${formatDay(localDay(Date.parse(plan.cookedAt)))}`;
   return by ? `${day} by ${by === 'you' ? by : `@${by}`}` : day;
 }
 

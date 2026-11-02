@@ -11,6 +11,7 @@ import {
   promptStepLabel,
   recipeOwnerText,
 } from '@/components/cook-plan-copy';
+import { cookPlanPromptsFor } from '@/components/cook-plan-prompts';
 import { useWhileFocused } from '@/components/use-while-focused';
 import {
   parseCookPlanId,
@@ -48,10 +49,7 @@ async function loadPlan(rawId: string): Promise<CookPlanRead & { prompt: CookPla
     if (hasCode(e, 'invalid_cook_plan_id')) return { plan: null, offline: false, prompt: null };
     throw e;
   }
-  const prompt =
-    read.plan?.status === 'cooked' && !read.offline
-      ? ((await data.cookPlanPrompts([read.plan]).catch(() => []))[0] ?? null)
-      : null;
+  const prompt = read.plan?.status === 'cooked' ? ((await cookPlanPromptsFor([read.plan], read.offline))[0] ?? null) : null;
   return { ...read, prompt };
 }
 
