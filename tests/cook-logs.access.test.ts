@@ -14,6 +14,7 @@ import {
   functionsRestatingTheCookLogReadRule,
   functionsRestatingTheFriendRule,
   functionsRestatingTheMembershipRule,
+  holdCookLogAdd,
   storedCookLogPhotos,
   uniqueUsername,
 } from './harness';
@@ -157,6 +158,23 @@ test('the photos bucket is private: no public link and nothing signed out', asyn
     await anon.rpc('cook_log_companion_list', { cook_log_ids: [logId] }),
   ];
   for (const { error } of signedOut) expect(error).toMatchObject(permissionDenied);
+});
+
+test("a save racing someone else's with the same Cook Log id is refused, not answered as added", async () => {
+  const { kim, stranger, recipe } = await logged();
+  const id = crypto.randomUUID();
+  const theirs = await stranger.data.createRecipe({ title: 'Toast', lines: [], steps: [] });
+
+  // Kim's add with that id is under way (not committed) when the stranger sends one with it.
+  const kims = await holdCookLogAdd(kim, id, recipe, '2026-10-30');
+  // (A PostgREST call goes out only once awaited; `then` sends it now.)
+  const racing = stranger.client.rpc('add_cook_log', { id, recipe_id: theirs, cooked_on: '2026-10-31' }).then((r) => r);
+  await kims.waitForWaiting(1);
+  await kims.commit();
+
+  const { data, error } = await racing;
+  expect({ data, code: error?.code }).toEqual({ data: null, code: '23505' });
+  expect((await stranger.client.from('cook_logs').select('id')).data).toEqual([]);
 });
 
 test("nobody else adds, edits or deletes a Cook Log on someone's Recipe, a Friend included", async () => {

@@ -286,7 +286,12 @@ begin
   values (add_cook_log.id, me, add_cook_log.recipe_id, day, new_notes, add_cook_log.cook_plan_id)
   on conflict on constraint cook_logs_pkey do nothing;
   if not found then
-    -- The same save sent twice at once: the other try made it.
+    -- Another save with this id committed first. It's this save sent twice at once only when that
+    -- log is the caller's, of this Recipe; otherwise the id is someone else's.
+    select * into existing from public.cook_logs l where l.id = add_cook_log.id;
+    if existing.user_id is distinct from me or existing.recipe_id is distinct from add_cook_log.recipe_id then
+      raise exception 'that Cook Log id is taken' using errcode = '23505';
+    end if;
     return jsonb_build_object('status', 'added');
   end if;
   insert into public.cook_log_companions (cook_log_id, user_id)

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 
-import { messageOf } from '@/auth/errors';
+import { hasCode, messageOf } from '@/auth/errors';
 import type { CookLog, CookLogInput, CookLogPhotoId, UserId } from '@/data';
 import { data } from '@/data/app';
 import { Button, CompanionPicker, DayPicker, PhotoStrip, SectionHeader, Text, TextField, localToday, spacing } from '@/ui';
@@ -46,6 +46,7 @@ export function CookLogForm({
     () => initial?.photos.map((p) => ({ key: p.id, uri: p.url, kind: 'saved', id: p.id })) ?? [],
   );
   const [friends, setFriends] = useState<Companion[] | null>(null);
+  const [friendsError, setFriendsError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,7 +56,13 @@ export function CookLogForm({
     data
       .listFriends()
       .then((found) => live && setFriends(found.map((f) => ({ id: f.id, username: f.username }))))
-      .catch(() => live && setFriends([]));
+      .catch((e: unknown) => {
+        if (!live) return;
+        setFriends([]);
+        setFriendsError(
+          hasCode(e, 'offline') ? 'You’re offline, so your Friends can’t be listed. Try again when you’re back online.' : messageOf(e),
+        );
+      });
     return () => {
       live = false;
     };
@@ -113,15 +120,16 @@ export function CookLogForm({
 
       <View style={{ gap: spacing.sm }}>
         <SectionHeader title="Cooked with" />
-        {friends === null ? null : people.length === 0 ? (
-          <Text tone="textMuted">Add Friends to log who you cooked with.</Text>
-        ) : (
+        {friends === null ? null : people.length > 0 ? (
           <CompanionPicker
             people={people.map((p) => ({ id: p.id, username: p.username ?? 'someone' }))}
             chosen={companions}
             onToggle={toggle}
           />
+        ) : friendsError ? null : (
+          <Text tone="textMuted">Add Friends to log who you cooked with.</Text>
         )}
+        {friendsError ? <Text tone="textMuted">{friendsError}</Text> : null}
       </View>
 
       <TextField

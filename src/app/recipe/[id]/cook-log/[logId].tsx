@@ -2,7 +2,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Alert } from 'react-native';
 
-import { messageOf } from '@/auth/errors';
+import { hasCode, messageOf } from '@/auth/errors';
 import { editCookLogProblem } from '@/components/cook-log-copy';
 import { CookLogForm } from '@/components/cook-log-form';
 import { parseRecipeId, type CookLog } from '@/data';
@@ -12,7 +12,7 @@ import { Button, EmptyState, Screen, Text } from '@/ui';
 type LogState =
   | { status: 'loading' }
   | { status: 'loaded'; log: CookLog; onlyLog: boolean }
-  | { status: 'missing'; message: string };
+  | { status: 'missing'; message: string; offline?: boolean };
 
 export default function EditCookLog() {
   const { id, logId } = useLocalSearchParams<{ id: string; logId: string }>();
@@ -28,7 +28,7 @@ export default function EditCookLog() {
         const log = logs.find((l) => l.id === logId);
         setState(log ? { status: 'loaded', log, onlyLog: logs.length === 1 } : { status: 'missing', message: 'It may have been deleted.' });
       })
-      .catch((e: unknown) => live && setState({ status: 'missing', message: messageOf(e) }));
+      .catch((e: unknown) => live && setState({ status: 'missing', message: messageOf(e), offline: hasCode(e, 'offline') }));
     return () => {
       live = false;
     };
@@ -38,7 +38,11 @@ export default function EditCookLog() {
     return (
       <Screen>
         {state.status === 'loading' ? null : (
-          <EmptyState icon="alert-circle-outline" title="Cook Log not found" message={state.message} />
+          <EmptyState
+            icon={state.offline ? 'cloud-offline-outline' : 'alert-circle-outline'}
+            title={state.offline ? 'You’re offline' : 'Cook Log not found'}
+            message={state.message}
+          />
         )}
       </Screen>
     );
