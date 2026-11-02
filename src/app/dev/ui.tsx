@@ -422,6 +422,7 @@ export default function UiGallery() {
           onPress={noop}
         />
         <CookLogCard day="Tue 15 Oct" companions={[]} notes={null} photos={[]} onPress={noop} />
+        <CookLogCard recipe="Sam's shakshuka" day="Sun 27 Oct" companions={['jo']} notes="Doubled the feta." photos={[]} onPress={noop} />
       </View>
 
       <SectionHeader title="Person rows" />
@@ -437,6 +438,12 @@ export default function UiGallery() {
         <PersonRow username="alex_cooks" actions={[{ label: 'Add', onPress: noop }]} />
         <PersonRow username="rosa_2024" detail="Requested" actions={[{ label: 'Cancel', onPress: noop, tone: 'muted' }]} />
         <PersonRow username="a_username_twenty_ch" detail="Friends since 28 Oct 2026" />
+        <PersonRow
+          username="sam"
+          detail="Friends since 2 Nov 2026"
+          onPress={noop}
+          actions={[{ label: 'Unfriend', onPress: noop, tone: 'muted' }]}
+        />
       </View>
 
       <SectionHeader title="Band picker" />

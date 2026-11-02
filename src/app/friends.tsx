@@ -1,8 +1,9 @@
-import { useFocusEffect } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, View } from 'react-native';
 
 import { messageOf } from '@/auth/errors';
+import { friendsSince } from '@/components/friend-copy';
 import { useWhileFocused } from '@/components/use-while-focused';
 import { usernameSearchQuery, type FoundUser, type FriendRequestResult } from '@/data';
 import { data } from '@/data/app';
@@ -26,9 +27,6 @@ async function loadFriends() {
   const [friends, requests] = await Promise.all([data.listFriends(), data.listFriendRequests()]);
   return { friends, requests };
 }
-
-const since = (iso: string) =>
-  new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 
 /** Why the app asks for notifications, in one line, before the system does (decisions 11). */
 const NOTIFICATIONS_REASON = 'Notifications are how you hear when someone asks to be Friends.';
@@ -59,6 +57,7 @@ function sendMessage({ status }: FriendRequestResult, username: string): string 
 /**
  * Friends, from Profile or a tapped "Friend request": find people by username and ask them,
  * answer requests (listed first), see and unfriend Friends, and cancel requests not answered yet.
+ * A Friend's row opens their profile.
  */
 export default function Friends() {
   const [state, reload] = useWhileFocused(loadFriends);
@@ -229,8 +228,10 @@ export default function Friends() {
                 <PersonRow
                   key={f.id}
                   username={f.username}
-                  detail={`Friends since ${since(f.friendsSince)}`}
+                  detail={friendsSince(f.friendsSince)}
+                  onPress={() => router.push({ pathname: '/friend/[id]', params: { id: f.id } })}
                   actions={[unfriend(f.id, f.username)]}
+                  testID={`friend-${f.username}`}
                 />
               ))}
             </View>
