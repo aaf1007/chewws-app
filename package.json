@@ -57,7 +57,7 @@
     "db:start": "scripts/supabase.sh start",
     "db:stop": "scripts/supabase.sh stop",
     "db:reset": "scripts/supabase.sh db reset",
-    "db:types": "scripts/supabase.sh gen types typescript --local > src/data/database.types.ts",
+    "db:types": "scripts/supabase.sh gen types typescript --local > src/data/database.types.ts.tmp && mv src/data/database.types.ts.tmp src/data/database.types.ts || { rm -f src/data/database.types.ts.tmp; exit 1; }",
     "db:types:check": "scripts/check-db-types.sh"
   },
   "private": true
