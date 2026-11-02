@@ -7,7 +7,7 @@
 # flow needs no Expo push token (the simulator usually can't get one) and no network.
 appId: com.ant1007.recipeapp
 env:
-  # This flow wants the system prompt; every other flow has notifications allowed up front.
+  # This flow wants the system prompt and allows it; the others deny it (subflows/launch-fresh.yaml).
   NOTIFICATIONS: unset
 ---
 - runFlow: subflows/sign-in-dev.yaml

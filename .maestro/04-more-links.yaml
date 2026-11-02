@@ -4,6 +4,9 @@
 # (scripts/functions.sh e2e): canned videos, pages and Claude answers, no network. The expired
 # thumbnail points at a `.invalid` host, which never resolves; refreshing it gives a canned one.
 appId: com.ant1007.recipeapp
+env:
+  # It saves a link, so the app asks for notifications; the flow answers (subflows/deny-notifications.yaml).
+  NOTIFICATIONS: unset
 ---
 - runFlow: subflows/sign-in-dev.yaml
 
@@ -22,6 +25,7 @@ appId: com.ant1007.recipeapp
     timeout: 10000
 - tapOn:
     id: "save-link"
+- runFlow: subflows/deny-notifications.yaml
 - assertVisible: "Saved as a Draft"
 - assertVisible: "It’s being filled in from the description. Review it in Drafts when it’s ready."
 - tapOn: "View Drafts"
