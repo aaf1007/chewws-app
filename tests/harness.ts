@@ -1057,3 +1057,86 @@ export async function cookLogPolicies(): Promise<string[]> {
   );
   return rows.map((r) => r.name);
 }
+
+/**
+ * For race tests only: `user` placing their Recipe in their Ranking on another phone
+ * (place_in_ranking, at `position` among the `bandSizeSeen` others the phone read), not committed yet.
+ */
+export const holdPlacement = (user: Someone, recipeId: string, band: string, position: number, bandSizeSeen: number) =>
+  holdCallAs(user, 'select public.place_in_ranking($1, $2::public.ranking_band, $3, $4)', [
+    recipeId,
+    band,
+    position,
+    bandSizeSeen,
+  ]);
+
+/** For race tests only: `user` deleting their Recipe on another phone, as `deleteRecipe` does, not committed yet. */
+export const holdRecipeDelete = (user: Someone, recipeId: string) =>
+  holdCallAs(user, 'delete from public.recipes where id = $1', [recipeId]);
+
+/** The functions allowed to decide who sees a user's activity (Cook Logs, Ranking): the rule itself. */
+const ACTIVITY_RULE = ['private.can_see_activity_of'];
+
+/**
+ * The database functions (public and private), other than the activity rule, that read a Ranking
+ * or Cook Logs (their companions, photos or the photos' bucket) and call private.are_friends
+ * themselves, instead of asking private.can_see_activity_of (decisions 16, 17).
+ */
+export async function functionsRestatingTheActivityRule(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private')
+       and not (n.nspname || '.' || p.proname = any ($1))
+       and p.prosrc ~* '(ranking_entries|cook_logs|cook_log_companions|cook_log_photos|cook-log-photos)'
+       and p.prosrc ~* 'are_friends'
+     order by 1`,
+    [ACTIVITY_RULE],
+  );
+  return rows.map((r) => r.name);
+}
+
+/** The functions that ask the activity rule (private.can_see_activity_of), by name. */
+export async function functionsAskingTheActivityRule(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private')
+       and not (n.nspname || '.' || p.proname = any ($1))
+       and p.prosrc ~* 'can_see_activity_of'
+     order by 1`,
+    [ACTIVITY_RULE],
+  );
+  return rows.map((r) => r.name);
+}
+
+/** Every row-level policy on ranking_entries, as `table cmd: using | check` on one line. */
+export async function rankingPolicies(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select tablename || ' ' || cmd || ': '
+       || regexp_replace(coalesce(qual, with_check), '\\s+', ' ', 'g') as name
+     from pg_policies
+     where schemaname = 'public' and tablename = 'ranking_entries'
+     order by 1`,
+    [],
+  );
+  return rows.map((r) => r.name);
+}
+
+/**
+ * The database functions that write a Ranking (`insert into`, `update`, `delete from`
+ * ranking_entries), and whether each takes the user's Ranking lock itself (private.lock_ranking),
+ * as `name: locks | doesn't lock`.
+ */
+export async function rankingWriters(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname || ': '
+       || case when p.prosrc ~* 'lock_ranking' then 'locks' else 'doesn''t lock' end as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private')
+       and p.prosrc ~* '(insert\\s+into|update|delete\\s+from)\\s+(public\\.)?ranking_entries'
+     order by 1`,
+    [],
+  );
+  return rows.map((r) => r.name);
+}
