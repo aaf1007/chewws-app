@@ -7,21 +7,21 @@ import { cookPlanDetail, cookPlanTitle } from '@/components/cook-plan-copy';
 import { useWhileFocused } from '@/components/use-while-focused';
 import {
   parseCookPlanId,
-  type CookPlan,
   type CookPlanListView,
+  type CookPlanRead,
   type CookPlanMember,
   type CookPlanRecipe,
   type UserId,
 } from '@/data';
 import { data } from '@/data/app';
 import { useSession } from '@/session';
-import { Button, DayPicker, EmptyState, ListRow, NavRow, PersonRow, Screen, SectionHeader, Text, spacing } from '@/ui';
+import { Button, DayPicker, EmptyState, ListRow, NavRow, PersonRow, Screen, SectionHeader, SyncNotice, Text, spacing } from '@/ui';
 
-async function loadPlan(rawId: string): Promise<CookPlan | null> {
+async function loadPlan(rawId: string): Promise<CookPlanRead> {
   try {
-    return await data.getCookPlan(parseCookPlanId(rawId));
+    return await data.readCookPlan(parseCookPlanId(rawId));
   } catch (e) {
-    if (hasCode(e, 'invalid_cook_plan_id')) return null;
+    if (hasCode(e, 'invalid_cook_plan_id')) return { plan: null, offline: false };
     throw e;
   }
 }
@@ -52,7 +52,8 @@ function listDetail(view: CookPlanListView | null, me: UserId | null): string {
  * One Cook Plan (decisions 14): its day, which any member sets or clears; its Recipes, each opened
  * by any member, added by their owners and removed by anyone; its list (decisions 15); and who is
  * in it, with "Invite" for more of your Friends. Anyone can leave; the plan goes with its last
- * member. While it's open, anyone's change to the plan shows at once.
+ * member. While it's open, anyone's change to the plan shows at once. With no signal it's the
+ * copy the phone last read, said so: its list opens, and what needs a connection is turned off.
  */
 export default function CookPlanScreen() {
   const rawId = useLocalSearchParams<{ id: string }>().id;
@@ -61,7 +62,7 @@ export default function CookPlanScreen() {
   const [state, reload] = useWhileFocused(() => loadPlan(rawId));
   const [error, setError] = useState<string | null>(null);
   const [listView, setListView] = useState<CookPlanListView | null>(null);
-  const loadedId = state.status === 'loaded' ? state.value?.id : undefined;
+  const loadedId = state.status === 'loaded' ? state.value.plan?.id : undefined;
 
   // The plan's list, which the server says has changed whenever anyone changes the plan, its
   // Recipes, its members or its lines (decisions 15): each new read of it reads the plan again too.
@@ -81,7 +82,8 @@ export default function CookPlanScreen() {
     }, [loadedId]),
   );
 
-  const plan = state.status === 'loaded' ? state.value : null;
+  const plan = state.status === 'loaded' ? state.value.plan : null;
+  const offline = state.status === 'loaded' && state.value.offline;
   if (!plan) {
     return (
       <Screen>
@@ -140,13 +142,17 @@ export default function CookPlanScreen() {
       },
     ]);
 
-  const active = plan.status === 'active';
+  // Changing the plan needs a connection; its list doesn't (its changes wait on the phone).
+  const active = plan.status === 'active' && !offline;
   const params = { id: plan.id };
   return (
     <Screen title="Cook Plan" scroll>
       <Text tone="textMuted" testID="cook-plan-detail">
         {cookPlanDetail(plan, me)}
       </Text>
+      {offline ? (
+        <SyncNotice status="offline" message="You're offline. This is your Cook Plan as it was last loaded." testID="cook-plan-offline" />
+      ) : null}
       {error ? <Text tone="danger">{error}</Text> : null}
 
       {active ? (
@@ -198,7 +204,7 @@ export default function CookPlanScreen() {
         ))}
       </View>
 
-      <Button label="Leave Cook Plan" variant="danger" icon="exit-outline" onPress={leave} />
+      <Button label="Leave Cook Plan" variant="danger" icon="exit-outline" onPress={leave} disabled={offline} />
     </Screen>
   );
 }

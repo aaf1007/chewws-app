@@ -36,6 +36,8 @@ export {
   type CookPlanList,
   type CookPlanListItem,
   type CookPlanListView,
+  type CookPlanRead,
+  type CookPlansRead,
   type CookPlanRecipeAmounts,
   type CookPlanMember,
   type CookPlanRecipe,

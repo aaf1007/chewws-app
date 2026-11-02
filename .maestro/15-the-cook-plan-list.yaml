@@ -2,7 +2,8 @@
 # Recipe: the list has one line per Ingredient with each Recipe's amounts, and shows that sam has
 # the butter. The dev user claims the garlic, sam's Claim on the egg arrives live, and a line the dev
 # user checks off goes in their Pantry. Two changes made with no signal sync once it's back. Last,
-# sam takes his Recipe out: the dev user's claimed and checked lines stay, "(removed)".
+# sam takes his Recipe out: the dev user's claimed and checked lines stay, "(removed)". Last, the
+# app is opened again with no signal: the plan's list is there, and a line checked off syncs later.
 # Run with `npm run e2e -- .maestro/15-the-cook-plan-list.yaml`. What sam does on his own phone,
 # scripts/e2e-db.mjs does as him (through scripts/net-control.mjs); his changes reach the app on the
 # plan's private Realtime topic. One phone, no network.
@@ -144,6 +145,49 @@ appId: com.ant1007.recipeapp
 - assertVisible: 'Sam''s shakshuka \(removed\) · 1 clove'
 - assertVisible: "Unclaim: egg"
 
+# Closed and opened again with no signal: the plans, the plan and its list are as last loaded, and
+# a line checked off there waits, then syncs once the signal is back.
+- runScript: scripts/go-offline.js
+- launchApp:
+    stopApp: true
+    clearState: false
+- openLink: "recipeapp://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8081&__expo_disable_onboarding=1&__expo_disable_auto_launch=1&__expo_disable_fab=1"
+- extendedWaitUntil:
+    visible:
+      id: "tab-cook-plans"
+    timeout: 60000
+- tapOn:
+    id: "tab-cook-plans"
+- extendedWaitUntil:
+    visible: "Garlic bread, with @sam"
+    timeout: 60000
+- assertVisible: ".*offline. These are your Cook Plans as they were last loaded."
+- tapOn: "Garlic bread, with @sam"
+- extendedWaitUntil:
+    visible: ".*offline. This is your Cook Plan as it was last loaded."
+    timeout: 60000
+- assertNotVisible: "Invite Friends"
+- assertNotVisible: "Add a Recipe"
+- tapOn:
+    id: "cook-plan-list"
+- extendedWaitUntil:
+    visible: "Check off: butter"
+    timeout: 10000
+- assertVisible: "Unclaim: egg"
+- tapOn: "Check off: butter"
+- extendedWaitUntil:
+    visible: "Uncheck: butter"
+    timeout: 3000
+- extendedWaitUntil:
+    visible: ".*offline. 1 change will sync when you're back online."
+    timeout: 60000
+- runScript: scripts/go-online.js
+- extendedWaitUntil:
+    notVisible:
+      id: "cook-plan-list-sync"
+    timeout: 150000
+- assertVisible: "Uncheck: butter"
+
 # What the dev user checked off is in their Pantry.
 - tapOn: "Back"
 - extendedWaitUntil:
@@ -157,3 +201,4 @@ appId: com.ant1007.recipeapp
     visible: "Used up: garlic"
     timeout: 10000
 - assertVisible: "Used up: tomato"
+- assertVisible: "Used up: butter"

@@ -321,3 +321,90 @@ test('a Claim made earlier never beats someone’s later check-off, nor a check-
   expect(await pantryNames(jo)).toEqual(['garlic']);
   expect(await pantryNames(sam)).toEqual(['butter']);
 });
+
+// Opened with no signal (review of ticket 15): the plans, a plan and its list are the copies the
+// phone saved when it last read them, as the Shopping List is (decisions 10).
+
+test('opened with no signal, the phone shows the plans and the plan as last read, and reaches its list to check a line off, which syncs later', async () => {
+  const [jo] = await phonesWithUsername('jo');
+  const { sam, planId, line } = await planWith(jo);
+  const plans = await jo.data.listCookPlans();
+  const plan = await jo.data.getCookPlan(planId);
+  await jo.data.getCookPlanList(planId);
+  // Kept as soon as they're read.
+  await vi.waitFor(() => expect([...jo.saved().keys()]).toContain(`recipeapp.cookPlanLists.${jo.userId}`));
+
+  jo.goOffline();
+  const reopened = jo.relaunch();
+  expect(await reopened.data.readCookPlans()).toEqual({ plans, offline: true });
+  expect(await reopened.data.readCookPlan(planId)).toEqual({ plan, offline: true });
+  expect(view(await reopened.data.getCookPlanList(planId))).toEqual(untouched);
+  await reopened.data.checkOffCookPlanItem(planId, line('garlic'));
+  expect(await reopened.data.syncListChanges()).toEqual({ status: 'offline', waiting: 1 });
+  expect(view(await reopened.data.getCookPlanList(planId))).toEqual([
+    { line: 'butter', claimedBy: null, checkedBy: null },
+    { line: 'garlic', claimedBy: null, checkedBy: jo.userId },
+    { line: 'parsley', claimedBy: null, checkedBy: null },
+  ]);
+
+  reopened.goOnline();
+  expect(await reopened.data.syncListChanges()).toEqual({ status: 'idle', waiting: 0 });
+  expect(view(await sam.data.getCookPlanList(planId))).toEqual([
+    { line: 'butter', claimedBy: null, checkedBy: null },
+    { line: 'garlic', claimedBy: null, checkedBy: jo.userId },
+    { line: 'parsley', claimedBy: null, checkedBy: null },
+  ]);
+  expect(await pantryNames(jo)).toEqual(['garlic']);
+  expect(await reopened.data.readCookPlans()).toMatchObject({ offline: false });
+});
+
+test('one user’s copy of their Cook Plans is never shown to the next one signed in on the phone', async () => {
+  const [a] = await phonesWithUsername('a');
+  const [b] = await phonesWithUsername('b');
+  const { planId } = await planWith(a);
+  expect((await a.data.listCookPlans()).map((p) => p.id)).toEqual([planId]);
+  await a.data.getCookPlan(planId);
+  expect([...a.saved().keys()]).toContain(`recipeapp.cookPlans.${a.userId}`);
+  await a.data.signOut();
+  expect([...a.saved().entries()].filter(([key, value]) => key.includes('cookPlan') || value.includes(planId))).toEqual([]);
+
+  expect(await a.data.signInWithPassword(b.account)).toEqual(b.userId);
+  a.goOffline();
+  const reopened = a.relaunch();
+  await expect(reopened.data.readCookPlans()).rejects.toMatchObject({ code: 'offline' });
+  await expect(reopened.data.readCookPlan(planId)).rejects.toMatchObject({ code: 'offline' });
+  reopened.goOnline();
+  expect(await reopened.data.readCookPlans()).toEqual({ plans: [], offline: false });
+});
+
+test.each(['opening the plan', 'listing the plans'] as const)(
+  'a plan the user lost, found by %s, is never shown again: not from the copy, not after a restart with no signal',
+  async (how) => {
+    const [jo, josOther] = await phonesWithUsername('jo', 2);
+    const { planId } = await planWith(jo);
+    await jo.data.listCookPlans();
+    await jo.data.getCookPlan(planId);
+    await jo.data.getCookPlanList(planId);
+    await vi.waitFor(() => expect([...jo.saved().keys()]).toContain(`recipeapp.cookPlanLists.${jo.userId}`));
+    // A phone that hasn't heard yet: what it saved before jo left.
+    const unaware = jo.saved();
+
+    await josOther.data.leaveCookPlan(planId);
+    if (how === 'opening the plan') expect(await jo.data.readCookPlan(planId)).toEqual({ plan: null, offline: false });
+    else expect(await jo.data.readCookPlans()).toEqual({ plans: [], offline: false });
+    expect([...jo.saved().entries()].filter(([, value]) => value.includes(planId))).toEqual([]);
+
+    jo.goOffline();
+    const reopened = jo.relaunch();
+    expect(await reopened.data.readCookPlans()).toEqual({ plans: [], offline: true });
+    expect(await reopened.data.getCookPlan(planId).catch((e: unknown) => e)).not.toMatchObject({ id: planId });
+
+    // The phone that hadn't heard shows its copy only until its first read, which forgets it.
+    const late = jo.relaunch(unaware);
+    late.goOnline();
+    expect(await late.data.readCookPlans()).toEqual({ plans: [], offline: false });
+    late.goOffline();
+    const lateAgain = late.relaunch();
+    expect(await lateAgain.data.readCookPlans()).toEqual({ plans: [], offline: true });
+  },
+);

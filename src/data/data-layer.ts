@@ -38,6 +38,7 @@ import {
   parseListChange,
   parseSavedCookPlanIndex,
   parseSavedCookPlanList,
+  parseSavedCookPlans,
   parseSavedSharedLists,
   parseSavedShoppingList,
   type LostCookPlan,
@@ -70,7 +71,9 @@ import {
   type CookPlanListView,
   type CookPlanRecipeAmounts,
   type CookPlanMember,
+  type CookPlanRead,
   type CookPlanRecipe,
+  type CookPlansRead,
   type CopyRecipeResult,
   type CreateCookPlanResult,
   type DraftBuild,
@@ -236,6 +239,9 @@ type CookPlanRow = Pick<
   Database['public']['Tables']['cook_plans']['Row'],
   'id' | 'creator_id' | 'cook_on' | 'status' | 'cooked_at' | 'cooked_by' | 'created_at'
 >;
+const COOK_PLAN_COLUMNS = 'id, creator_id, cook_on, status, cooked_at, cooked_by, created_at';
+type CookPlanPersonRow = Database['public']['Views']['cook_plan_people']['Row'];
+type CookPlanRecipeListRow = Database['public']['Views']['cook_plan_recipe_list']['Row'];
 
 /** A caption as pasted: trimmed, null when blank. Too long a caption is refused. */
 function toPastedCaption(caption: string | null | undefined): string | null {
@@ -1199,13 +1205,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   }
 
   /** Everyone in these Cook Plans, and their Recipes, by plan. */
-  async function cookPlanContents(planIds: CookPlanId[]) {
-    const [people, recipes] = await Promise.all([
-      client.from('cook_plan_people').select('*').in('plan_id', planIds),
-      client.from('cook_plan_recipe_list').select('*').in('plan_id', planIds),
-    ]);
-    if (people.error) fail(people.error);
-    if (recipes.error) fail(recipes.error);
+  /** Each plan's members and Recipes, from the rows of `cook_plan_people` and `cook_plan_recipe_list`. */
+  function cookPlanContentsOf(people: { data: CookPlanPersonRow[] }, recipes: { data: CookPlanRecipeListRow[] }) {
     const members = new Map<string, CookPlanMember[]>();
     for (const row of people.data) {
       if (row.plan_id === null || row.user_id === null || row.joined_at === null) continue;
@@ -1253,24 +1254,90 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   }
 
   /** The Cook Plans the signed-in user is in, newest first, with everyone in them and their Recipes. */
-  async function listCookPlans(): Promise<CookPlan[]> {
-    const { data, error } = await client.rpc('list_cook_plans');
-    if (error) fail(error);
-    const ids = data.map((row) => parseCookPlanId(row.id));
-    if (ids.length === 0) return [];
-    const contentsOf = await cookPlanContents(ids);
-    return data.map((row) => toCookPlan(row, contentsOf(parseCookPlanId(row.id))));
+  /**
+   * The Cook Plans `me` is in (`only`: just that one, if they're in it), as the server has them,
+   * read as `me`; `unreachable` with no signal; `serverFailed` on a server error.
+   */
+  async function fetchCookPlans(
+    me: UserId,
+    only: CookPlanId | null,
+  ): Promise<{ status: 'reached'; plans: CookPlan[] } | { status: 'unreachable' } | { status: 'serverFailed'; error: DataError }> {
+    const read =
+      only === null
+        ? await readAs(me, (token) => client.rpc('list_cook_plans').retry(false).setHeader('Authorization', bearer(token)))
+        : await readAs(me, (token) =>
+            client.from('cook_plans').select(COOK_PLAN_COLUMNS).eq('id', only).retry(false).setHeader('Authorization', bearer(token)),
+          );
+    if (read.status !== 'reached') return read;
+    const rows = read.data ?? [];
+    const ids = rows.map((row) => parseCookPlanId(row.id));
+    if (ids.length === 0) return { status: 'reached', plans: [] };
+    const [people, recipes] = await Promise.all([
+      readAs(me, (token) =>
+        client.from('cook_plan_people').select('*').in('plan_id', ids).retry(false).setHeader('Authorization', bearer(token)),
+      ),
+      readAs(me, (token) =>
+        client.from('cook_plan_recipe_list').select('*').in('plan_id', ids).retry(false).setHeader('Authorization', bearer(token)),
+      ),
+    ]);
+    if (people.status !== 'reached') return people;
+    if (recipes.status !== 'reached') return recipes;
+    const contentsOf = cookPlanContentsOf({ data: people.data ?? [] }, { data: recipes.data ?? [] });
+    return { status: 'reached', plans: rows.map((row) => toCookPlan(row, contentsOf(parseCookPlanId(row.id)))) };
   }
 
-  /** One Cook Plan the signed-in user is in, or null (not in it, or it's gone). */
-  async function getCookPlan(planId: CookPlanId): Promise<CookPlan | null> {
-    const [plan, contentsOf] = await Promise.all([
-      client.from('cook_plans').select('id, creator_id, cook_on, status, cooked_at, cooked_by, created_at').eq('id', planId).maybeSingle(),
-      cookPlanContents([planId]),
-    ]);
-    if (plan.error) fail(plan.error);
-    return plan.data ? toCookPlan(plan.data, contentsOf(planId)) : null;
+  /**
+   * The Cook Plans the signed-in user is in, newest first. Each read is kept on the phone (review of
+   * ticket 15), so with no signal they're the ones it last read, `offline`; never read on this
+   * phone, it fails with code `offline`.
+   */
+  async function readCookPlans(): Promise<CookPlansRead> {
+    const me = await requireListOwner();
+    const lists = listsOf(me);
+    await lists.ready;
+    const fetched = await fetchCookPlans(me, null);
+    if (fetched.status === 'reached') {
+      await lists.keepCookPlans(fetched.plans);
+      if (lists.queue.state().status === 'offline') void lists.queue.sync();
+      return { plans: fetched.plans, offline: false };
+    }
+    if (fetched.status === 'serverFailed') throw fetched.error;
+    lists.queue.markUnreachable();
+    const saved = lists.savedCookPlans();
+    if (!saved) throw needsConnection('Loading your Cook Plans the first time');
+    return { plans: saved, offline: true };
   }
+
+  /**
+   * One Cook Plan the signed-in user is in, or null (not in it, or it's gone: the phone forgets it
+   * and its list). With no signal it's the copy the phone last read, `offline`; one this phone has
+   * never read fails with code `offline`.
+   */
+  async function readCookPlan(planId: CookPlanId): Promise<CookPlanRead> {
+    const me = await requireListOwner();
+    const lists = listsOf(me);
+    await lists.ready;
+    const fetched = await fetchCookPlans(me, planId);
+    if (fetched.status === 'reached') {
+      const plan = fetched.plans[0] ?? null;
+      if (plan) lists.keepCookPlan(plan);
+      else await lists.losePlan(planId, false);
+      if (lists.queue.state().status === 'offline') void lists.queue.sync();
+      return { plan, offline: false };
+    }
+    if (fetched.status === 'serverFailed') throw fetched.error;
+    lists.queue.markUnreachable();
+    if (lists.isLostPlan(planId)) return { plan: null, offline: true };
+    const saved = lists.savedCookPlans()?.find((p) => p.id === planId);
+    if (!saved) throw needsConnection('Opening this Cook Plan the first time');
+    return { plan: saved, offline: true };
+  }
+
+  /** The Cook Plans the signed-in user is in, newest first (with no signal, as last read). */
+  const listCookPlans = async (): Promise<CookPlan[]> => (await readCookPlans()).plans;
+
+  /** One Cook Plan the signed-in user is in, or null (not in it, or it's gone). */
+  const getCookPlan = async (planId: CookPlanId): Promise<CookPlan | null> => (await readCookPlan(planId)).plan;
 
   /**
    * The active Cook Plans one of the user's Recipes is in, with the others in each, so deleting it
@@ -2205,6 +2272,38 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       const snapshot = JSON.stringify({ lists: sharedLists, lost });
       return write(() => storage.setItem(indexKey, snapshot));
     };
+    // The Cook Plans the user is in, as last read (review of ticket 15), so the plans and their
+    // lists can be reached with no signal after a restart.
+    const cookPlansKey = `recipeapp.cookPlans.${me}`;
+    let cookPlans: CookPlan[] | null = null;
+    const saveCookPlans = () => {
+      if (discarded || cookPlans === null) return saving;
+      const snapshot = JSON.stringify(cookPlans);
+      return write(() => storage.setItem(cookPlansKey, snapshot));
+    };
+    /** Every plan the user is in, as just read. */
+    /** The plans as just read: any other plan the phone kept (it, or its list) the user isn't in any more. */
+    async function keepCookPlans(read: CookPlan[]) {
+      if (discarded) return;
+      const known = new Set([...(cookPlans ?? []).map((p) => p.id), ...savedPlans]);
+      cookPlans = read;
+      void saveCookPlans();
+      for (const p of read) known.delete(p.id);
+      for (const id of known) await losePlan(id, false);
+    }
+    /** One plan, as just read, in its place among the others (or first, the newest). */
+    function keepCookPlan(plan: CookPlan) {
+      if (discarded) return;
+      const others = cookPlans ?? [];
+      cookPlans = others.some((p) => p.id === plan.id) ? others.map((p) => (p.id === plan.id ? plan : p)) : [plan, ...others];
+      void saveCookPlans();
+    }
+    function forgetCookPlan(id: CookPlanId) {
+      if (!cookPlans?.some((p) => p.id === id)) return;
+      cookPlans = cookPlans.filter((p) => p.id !== id);
+      void saveCookPlans();
+    }
+
     const savePlanIndex = () => {
       if (discarded) return saving;
       const snapshot = JSON.stringify({ plans: [...savedPlans], lost: lostPlans });
@@ -2307,6 +2406,13 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
         }
       });
 
+    const savedCookPlans = storage
+      .getItem(cookPlansKey)
+      .catch(() => null)
+      .then((raw) => {
+        cookPlans ??= parseSavedCookPlans(raw);
+      });
+
     const queue = createChangeQueue<ListChange>({
       storage,
       key: `recipeapp.listChanges.${me}`,
@@ -2373,6 +2479,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       }),
       savedShared,
       savedPlanLists,
+      savedCookPlans,
     ]);
 
     /** Keeps a Cook Plan list as its change was delivered, as `onDelivered` does for a Shopping List. */
@@ -2572,6 +2679,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
         ...[...shared.values()].map((c) => c.key),
         planIndexKey,
         ...[...new Set([...savedPlans, ...plans.keys()])].map(planKey),
+        cookPlansKey,
       ];
       for (const cache of [own, ...shared.values(), ...plans.values()]) {
         stopLive(cache);
@@ -2583,6 +2691,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       plans.clear();
       savedPlans.clear();
       lostPlans = [];
+      cookPlans = null;
       await write(async () => {
         for (const key of keys) await storage.removeItem(key);
       });
@@ -2687,6 +2796,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       }
       savedPlans.delete(id);
       void write(() => storage.removeItem(planKey(id)));
+      forgetCookPlan(id);
       if ((told || changesNotSaved > 0) && !lostPlans.some((l) => l.planId === id)) {
         lostPlans = [...lostPlans, { planId: id, changesNotSaved }];
       }
@@ -2768,6 +2878,9 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       dismissLostPlan,
       refreshPlanIfWatched,
       isLostPlan: (id: CookPlanId) => lostPlans.some((l) => l.planId === id),
+      keepCookPlans,
+      keepCookPlan,
+      savedCookPlans: () => cookPlans,
     };
   }
 
@@ -3279,6 +3392,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     removeRecipeFromCookPlan,
     listCookPlans,
     getCookPlan,
+    readCookPlans,
+    readCookPlan,
     recipeCookPlans,
     getCookPlanList,
     watchCookPlanList,

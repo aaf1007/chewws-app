@@ -14,9 +14,12 @@ import {
   parseUserId,
   type CheckState,
   type ClaimState,
+  type CookPlan,
   type CookPlanId,
   type CookPlanList,
   type CookPlanListItem,
+  type CookPlanMember,
+  type CookPlanRecipe,
   type CookPlanRecipeAmounts,
   type ListPerson,
   type SharedShoppingList,
@@ -25,6 +28,7 @@ import {
   type ShoppingList,
   type ShoppingListItem,
   type ShoppingListRecipeAmounts,
+  type UserId,
 } from './types';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -287,5 +291,57 @@ export function parseSavedSharedLists(raw: string | null): { lists: SharedShoppi
     return { lists: list(row.lists).map(sharedList), lost: list(row.lost).map(lostList) };
   } catch {
     return { lists: [], lost: [] };
+  }
+}
+
+const optionalUserId = (value: unknown): UserId | null => (value === null ? null : parseUserId(text(value)));
+
+function cookPlanMember(value: unknown): CookPlanMember {
+  const row = record(value);
+  return {
+    id: parseUserId(text(row.id)),
+    username: optionalText(row.username),
+    invitedBy: optionalUserId(row.invitedBy),
+    joinedAt: text(row.joinedAt),
+  };
+}
+
+function cookPlanRecipe(value: unknown): CookPlanRecipe {
+  const row = record(value);
+  const owner = record(row.owner);
+  return {
+    id: parseRecipeId(text(row.id)),
+    title: text(row.title),
+    owner: { id: parseUserId(text(owner.id)), username: optionalText(owner.username) },
+    addedBy: optionalUserId(row.addedBy),
+    addedAt: text(row.addedAt),
+  };
+}
+
+function cookPlan(value: unknown): CookPlan {
+  const row = record(value);
+  const fields = {
+    id: parseCookPlanId(text(row.id)),
+    creatorId: optionalUserId(row.creatorId),
+    cookOn: row.cookOn === null ? null : text(row.cookOn),
+    createdAt: text(row.createdAt),
+    members: list(row.members).map(cookPlanMember),
+    recipes: list(row.recipes).map(cookPlanRecipe),
+  };
+  if (row.status === 'active') return { ...fields, status: 'active' };
+  if (row.status !== 'cooked') throw new Unreadable();
+  return { ...fields, status: 'cooked', cookedAt: text(row.cookedAt), cookedBy: optionalUserId(row.cookedBy) };
+}
+
+/**
+ * The Cook Plans the phone saved for the user the last time it read them (review of ticket 15), to
+ * show with no signal; null if there are none it can read.
+ */
+export function parseSavedCookPlans(raw: string | null): CookPlan[] | null {
+  if (raw === null) return null;
+  try {
+    return list(JSON.parse(raw)).map(cookPlan);
+  } catch {
+    return null;
   }
 }

@@ -367,6 +367,15 @@ export type CookPlan = {
   recipes: CookPlanRecipe[];
 } & ({ status: 'active' } | { status: 'cooked'; cookedAt: string; cookedBy: UserId | null });
 
+/**
+ * The Cook Plans the user is in, as a screen shows them: read now, or with no signal (`offline`)
+ * the copy the phone saved the last time it read them (review of ticket 15).
+ */
+export type CookPlansRead = { plans: CookPlan[]; offline: boolean };
+
+/** One Cook Plan as a screen shows it (null: the user isn't in it), read now or `offline`, as above. */
+export type CookPlanRead = { plan: CookPlan | null; offline: boolean };
+
 /** Whether a Cook Plan line is Claimed (someone's buying it), and by whom (null once they've gone). */
 export type ClaimState = { status: 'unclaimed' } | { status: 'claimed'; claimedAt: string; claimedBy: UserId | null };
 
