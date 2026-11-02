@@ -39,6 +39,17 @@
 //     sam starts a Cook Plan with his "Sam's flatbread" in it and invites the dev user (as sam), and
 //     .maestro/assets/cook-plan-invite.apns, "@sam invited you to cook: Sam's flatbread", goes to the
 //     app on the booted simulator, as the notify function would send it through Expo.
+//   node scripts/e2e-db.mjs sam-plans-shakshuka
+//     sam puts butter in his Pantry, writes "Sam's shakshuka" (4 eggs, 1 tin tomatoes, 1 clove garlic,
+//     1 tsp paprika) and adds it to the newest Cook Plan the dev user started that sam is in, with its
+//     lines for the plan's list (ticket 15), all as sam.
+//   node scripts/e2e-db.mjs sam-claims-egg
+//     sam Claims the egg line on that plan's list (claim_cook_plan_item, as sam).
+//   node scripts/e2e-db.mjs check-plan-list
+//     Fails unless that plan's list on the server has the dev user's changes: garlic and tomato
+//     checked off by the dev user, garlic and egg claimed by them, and both in the dev user's Pantry.
+//   node scripts/e2e-db.mjs sam-removes-shakshuka
+//     sam takes his shakshuka out of that plan (remove_recipe_from_cook_plan, as sam).
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -108,10 +119,37 @@ async function samWrites(title, lines) {
   return id;
 }
 
-/** sam adds his Recipe to a Cook Plan, as his phone would. */
+/**
+ * sam adds his Recipe to a Cook Plan, as his phone would: with its lines for the plan's list, one
+ * per Ingredient with that Ingredient's amounts in line order, as the list engine's toListLines
+ * makes them (decisions 15).
+ */
 async function samAddsToPlan(planId, recipeId) {
-  const [{ answer }] = await asUser(SAM, 'select public.add_recipe_to_cook_plan($1, $2) as answer', [planId, recipeId]);
+  const lines = await query(
+    `select l.ingredient_id,
+       coalesce(array_agg(btrim(l.amount_text) order by l.position) filter (where btrim(l.amount_text) <> ''), '{}') as amount_texts
+     from public.recipe_lines l where l.recipe_id = $1
+     group by l.ingredient_id order by min(l.position)`,
+    [recipeId],
+  );
+  const [{ answer }] = await asUser(SAM, 'select public.add_recipe_to_cook_plan($1, $2, $3::jsonb) as answer', [
+    planId,
+    recipeId,
+    JSON.stringify(lines),
+  ]);
   if (answer.status !== 'added') throw new Error(`sam's add: ${JSON.stringify(answer)}`);
+}
+
+/** The newest active Cook Plan the dev user started that sam is in. */
+async function devsPlanWithSam() {
+  const [plan] = await query(
+    `select p.id from public.cook_plans p
+     join public.cook_plan_members m on m.plan_id = p.id and m.user_id = $2
+     where p.creator_id = $1 and p.status = 'active' order by p.created_at desc limit 1`,
+    [DEV_USER, SAM],
+  );
+  if (!plan) throw new Error('sam is in no Cook Plan of the dev user.');
+  return plan.id;
 }
 
 /** Delivers a notification to the app on the booted simulator, as the push service would. */
@@ -228,6 +266,63 @@ const commands = {
       payload.body.cookPlanId = planId;
     });
     console.log(`sam invited the dev user to ${planId}`);
+  },
+  async 'sam-plans-shakshuka'() {
+    const planId = await devsPlanWithSam();
+    await asUser(SAM, "select public.add_to_pantry('butter')", []);
+    const recipeId = await samWrites("Sam's shakshuka", [
+      { original_text: '4 eggs', amount_text: '4', ingredient_name: 'egg' },
+      { original_text: '1 tin tomatoes', amount_text: '1 tin', ingredient_name: 'tomato' },
+      { original_text: '1 clove garlic', amount_text: '1 clove', ingredient_name: 'garlic' },
+      { original_text: '1 tsp paprika', amount_text: '1 tsp', ingredient_name: 'paprika' },
+    ]);
+    await samAddsToPlan(planId, recipeId);
+    console.log(`sam has butter and added his shakshuka to ${planId}`);
+  },
+  async 'sam-claims-egg'() {
+    const planId = await devsPlanWithSam();
+    const [item] = await query(
+      `select i.id from public.cook_plan_items i join public.ingredients g on g.id = i.ingredient_id
+       where i.plan_id = $1 and g.name = 'egg'`,
+      [planId],
+    );
+    if (!item) throw new Error('There is no egg line on the plan.');
+    const [{ answer }] = await asUser(SAM, 'select public.claim_cook_plan_item($1, $2) as answer', [planId, item.id]);
+    if (answer !== 'applied') throw new Error(`sam's Claim: ${answer}`);
+    console.log('sam claimed the egg');
+  },
+  async 'check-plan-list'() {
+    const planId = await devsPlanWithSam();
+    const rows = await query(
+      `select g.name, i.claimed_by = $2 as claimed_by_dev, i.checked_by = $2 as checked_by_dev
+       from public.cook_plan_items i join public.ingredients g on g.id = i.ingredient_id
+       where i.plan_id = $1 order by g.name`,
+      [planId, DEV_USER],
+    );
+    const found = JSON.stringify(rows.map((r) => [r.name, r.claimed_by_dev, r.checked_by_dev]));
+    const expected = JSON.stringify([
+      ['butter', null, null],
+      ['egg', true, null],
+      ['garlic', true, true],
+      ['paprika', null, null],
+      ['tomato', null, true],
+    ]);
+    if (found !== expected) throw new Error(`the plan's list is ${found}, not ${expected}`);
+    const pantry = await query(
+      `select g.name from public.pantry_entries p join public.ingredients g on g.id = p.ingredient_id
+       where p.user_id = $1 order by g.name`,
+      [DEV_USER],
+    );
+    const names = JSON.stringify(pantry.map((r) => r.name));
+    if (names !== JSON.stringify(['garlic', 'tomato'])) throw new Error(`the dev user's Pantry is ${names}`);
+    console.log("the plan's list has the dev user's changes");
+  },
+  async 'sam-removes-shakshuka'() {
+    const planId = await devsPlanWithSam();
+    const [recipe] = await query(`select id from public.recipes where owner_id = $1 and title = $2`, [SAM, "Sam's shakshuka"]);
+    const [{ answer }] = await asUser(SAM, 'select public.remove_recipe_from_cook_plan($1, $2) as answer', [planId, recipe.id]);
+    if (answer.status !== 'removed') throw new Error(`sam's removal: ${JSON.stringify(answer)}`);
+    console.log('sam took his shakshuka out of the plan');
   },
   async 'alex-accepts'() {
     const [{ answer }] = await asUser(ALEX, 'select public.respond_to_friend_request($1, true) as answer', [DEV_USER]);

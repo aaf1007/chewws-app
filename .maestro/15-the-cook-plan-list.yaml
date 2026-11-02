@@ -1,0 +1,159 @@
+# Ticket 15: the Cook Plan list. The dev user starts a plan with sam, a Friend, and both add a
+# Recipe: the list has one line per Ingredient with each Recipe's amounts, and shows that sam has
+# the butter. The dev user claims the garlic, sam's Claim on the egg arrives live, and a line the dev
+# user checks off goes in their Pantry. Two changes made with no signal sync once it's back. Last,
+# sam takes his Recipe out: the dev user's claimed and checked lines stay, "(removed)".
+# Run with `npm run e2e -- .maestro/15-the-cook-plan-list.yaml`. What sam does on his own phone,
+# scripts/e2e-db.mjs does as him (through scripts/net-control.mjs); his changes reach the app on the
+# plan's private Realtime topic. One phone, no network.
+appId: com.ant1007.recipeapp
+---
+- runScript: scripts/befriend-sam.js
+- runFlow: subflows/sign-in-dev.yaml
+
+# Garlic bread: 2 cloves garlic, 4 tbsp butter.
+- tapOn: "Write a Recipe"
+- extendedWaitUntil:
+    visible:
+      id: "recipe-title"
+    timeout: 10000
+- tapOn:
+    id: "recipe-title"
+- inputText: "Garlic bread"
+- tapOn:
+    id: "line-1-text"
+- inputText: "2 cloves garlic"
+- tapOn:
+    id: "line-1-amount"
+- inputText: "2 cloves"
+- tapOn:
+    id: "line-1-ingredient"
+- inputText: "garlic"
+- hideKeyboard
+- tapOn: "Add line"
+- scrollUntilVisible:
+    element:
+      id: "line-2-ingredient"
+    direction: DOWN
+- tapOn:
+    id: "line-2-text"
+- inputText: "4 tbsp butter"
+- tapOn:
+    id: "line-2-amount"
+- inputText: "4 tbsp"
+- tapOn:
+    id: "line-2-ingredient"
+- inputText: "butter"
+- hideKeyboard
+- scrollUntilVisible:
+    element: "Save Recipe"
+    direction: DOWN
+- tapOn: "Save Recipe"
+- extendedWaitUntil:
+    visible: "Edit Recipe"
+    timeout: 10000
+- tapOn: "Back"
+
+# A plan with sam, who puts his shakshuka in it (and has butter in his Pantry); the dev user adds
+# their garlic bread.
+- tapOn:
+    id: "tab-cook-plans"
+- tapOn:
+    id: "start-cook-plan"
+- extendedWaitUntil:
+    visible: "Invite: @sam"
+    timeout: 10000
+- tapOn: "Invite: @sam"
+- tapOn:
+    id: "create-cook-plan"
+- extendedWaitUntil:
+    visible: "with @sam"
+    timeout: 10000
+- runScript: scripts/sam-plans-shakshuka.js
+- extendedWaitUntil:
+    visible: "Sam's shakshuka, @sam's"
+    timeout: 15000
+- tapOn: "Add a Recipe"
+- extendedWaitUntil:
+    visible: "Garlic bread, 2 ingredients"
+    timeout: 10000
+- tapOn: "Garlic bread, 2 ingredients"
+- extendedWaitUntil:
+    visible: "Garlic bread, Yours"
+    timeout: 10000
+
+# The list: one line per Ingredient, each Recipe's amounts apart, and who already has it.
+- tapOn:
+    id: "cook-plan-list"
+- extendedWaitUntil:
+    visible: "Check off: garlic"
+    timeout: 10000
+- assertVisible: "Garlic bread · 2 cloves"
+- assertVisible: "Sam's shakshuka · 1 clove"
+- assertVisible: "Garlic bread · 4 tbsp"
+- assertVisible: "@sam has it"
+- assertVisible: "Sam's shakshuka · 1 tsp"
+
+# The dev user claims the garlic; sam's Claim on the egg arrives on its own.
+- tapOn: "Claim: garlic"
+- extendedWaitUntil:
+    visible: "You're buying it"
+    timeout: 10000
+- assertVisible: "Unclaim: garlic"
+- runScript: scripts/sam-claims-egg.js
+- extendedWaitUntil:
+    visible: "@sam is buying it"
+    timeout: 15000
+
+# A line the dev user checks off is theirs to keep: it goes in their Pantry (checked below).
+- tapOn: "Check off: tomato"
+- extendedWaitUntil:
+    visible: "Checked off by you"
+    timeout: 10000
+
+# No signal: two changes show at once and wait; back online, they sync.
+- runScript: scripts/go-offline.js
+- tapOn: "Check off: garlic"
+- extendedWaitUntil:
+    visible: "Uncheck: garlic"
+    timeout: 3000
+- tapOn: "Claim: egg"
+- extendedWaitUntil:
+    visible: "Unclaim: egg"
+    timeout: 3000
+- extendedWaitUntil:
+    visible: ".*offline. 2 changes will sync when you're back online."
+    timeout: 30000
+- runScript: scripts/go-online.js
+- extendedWaitUntil:
+    notVisible:
+      id: "cook-plan-list-sync"
+    timeout: 60000
+- assertVisible: "Uncheck: garlic"
+- assertVisible: "Unclaim: egg"
+- runScript: scripts/check-plan-list.js
+
+# sam takes his shakshuka out: the paprika nobody claimed or bought goes; the egg the dev user
+# claimed, and the tomato and garlic they bought, stay with its amounts, "(removed)".
+- runScript: scripts/sam-removes-shakshuka.js
+- extendedWaitUntil:
+    notVisible: "Check off: paprika"
+    timeout: 15000
+- assertVisible: 'Sam''s shakshuka \(removed\) · 4'
+- assertVisible: 'Sam''s shakshuka \(removed\) · 1 tin'
+- assertVisible: 'Sam''s shakshuka \(removed\) · 1 clove'
+- assertVisible: "Unclaim: egg"
+
+# What the dev user checked off is in their Pantry.
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "Garlic bread, Yours"
+    timeout: 10000
+- assertNotVisible: "Sam's shakshuka, @sam's"
+- tapOn: "Back"
+- tapOn:
+    id: "tab-pantry"
+- extendedWaitUntil:
+    visible: "Used up: garlic"
+    timeout: 10000
+- assertVisible: "Used up: tomato"
