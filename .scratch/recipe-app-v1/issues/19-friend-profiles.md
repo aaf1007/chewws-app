@@ -6,6 +6,6 @@
 
 **Status:** ready-for-agent
 
-- [ ] A Friend's profile shows their username, Ranking with Scores, and Cook Logs
-- [ ] The user can save their own copy of a Recipe from a Friend's profile
-- [ ] Data-layer tests: a Friend can load the profile; a stranger and an unfriended user can't
+- [ ] A Friend's profile shows their username, Ranking with Scores, and Cook Logs (e2e owed: data layer and tests pass; the screens wait on `.maestro/19-friend-profiles.yaml` passing on the simulator)
+- [ ] The user can save their own copy of a Recipe from a Friend's profile (e2e owed: data layer and tests pass; the screens wait on `.maestro/19-friend-profiles.yaml` passing on the simulator)
+- [x] Data-layer tests: a Friend can load the profile; a stranger and an unfriended user can't
