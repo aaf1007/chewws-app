@@ -277,6 +277,17 @@ test('who reads a Friend’s activity, and the Recipes in it, is decided once ea
   expect(await functionsRestatingTheFriendRule()).toEqual([]);
 });
 
+test('recipe_titles answers for at most 200 Recipes a call, and refuses more', async () => {
+  const { kim, reel } = await samsActivity();
+  const others = (n: number) => Array.from({ length: n }, () => crypto.randomUUID());
+
+  const at200 = await kim.client.rpc('recipe_titles', { recipe_ids: [reel, ...others(199)] });
+  expect(at200.error).toBeNull();
+  expect((at200.data ?? []).map((t) => t.id)).toEqual([reel]);
+  const at201 = await kim.client.rpc('recipe_titles', { recipe_ids: [reel, ...others(200)] });
+  expect(at201).toMatchObject({ data: null, error: { code: '22023' } });
+});
+
 test('the rules are not exposed through the Data API, and signed out nothing answers', async () => {
   const { sam, kim, reel } = await samsActivity();
   const { url, anonKey } = inject('supabase');

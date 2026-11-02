@@ -204,6 +204,8 @@ type CookLogRow = Pick<
   Database['public']['Tables']['cook_logs']['Row'],
   'id' | 'user_id' | 'recipe_id' | 'cooked_on' | 'notes' | 'cook_plan_id' | 'created_at' | 'updated_at'
 > & { cook_log_photos: { id: string; position: number }[] };
+/** recipe_titles answers for at most this many Recipes a call (the ticket 19 migration). */
+const RECIPE_TITLES_PER_CALL = 200;
 /** A Friend's Cook Logs come 20 at a time (decisions 19). */
 const FRIEND_COOK_LOGS_PAGE = 20;
 
@@ -2013,10 +2015,17 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
    * ranked or logged: decisions 19), by id. The others are left out.
    */
   async function recipeTitlesOf(ids: readonly RecipeId[]): Promise<ReadonlyMap<RecipeId, string>> {
-    if (ids.length === 0) return new Map();
-    const { data, error } = await client.rpc('recipe_titles', { recipe_ids: [...new Set(ids)] });
-    if (error) fail(error);
-    return new Map(data.map((row) => [parseRecipeId(row.id), row.title]));
+    const unique = [...new Set(ids)];
+    const batches = Array.from({ length: Math.ceil(unique.length / RECIPE_TITLES_PER_CALL) }, (_, i) =>
+      unique.slice(i * RECIPE_TITLES_PER_CALL, (i + 1) * RECIPE_TITLES_PER_CALL),
+    );
+    const answers = await Promise.all(batches.map((batch) => client.rpc('recipe_titles', { recipe_ids: batch })));
+    const titles = new Map<RecipeId, string>();
+    for (const { data, error } of answers) {
+      if (error) fail(error);
+      for (const row of data) titles.set(parseRecipeId(row.id), row.title);
+    }
+    return titles;
   }
 
   /** The Friend with this id, or null for anyone else (a stranger, someone unfriended, yourself, nobody). */

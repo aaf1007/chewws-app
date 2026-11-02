@@ -80,16 +80,23 @@ $$;
 -- Titles of Recipes the caller may read ----------------------------------------------------------
 
 -- The titles of those of these reviewed Recipes the caller may read, for a Friend's Ranking and Cook
--- Logs, whose Recipes the recipes table's owner-only policy hides. Nothing for the others.
+-- Logs, whose Recipes the recipes table's owner-only policy hides. Nothing for the others. At most
+-- 200 ids a call (22023 above that), so one call can't ask the rule about any number of Recipes.
 create function public.recipe_titles(recipe_ids uuid[])
 returns table (id uuid, title text)
-language sql
+language plpgsql
 stable
 security definer
 set search_path = ''
 as $$
-  select r.id, r.title from public.recipes r
-  where r.id = any (recipe_titles.recipe_ids) and r.status = 'reviewed' and private.can_read_recipe(r.id);
+begin
+  if cardinality(recipe_titles.recipe_ids) > 200 then
+    raise exception 'at most 200 Recipes a call' using errcode = '22023';
+  end if;
+  return query
+    select r.id, r.title from public.recipes r
+    where r.id = any (recipe_titles.recipe_ids) and r.status = 'reviewed' and private.can_read_recipe(r.id);
+end;
 $$;
 
 revoke execute on function public.recipe_titles(uuid[]) from public, anon;
