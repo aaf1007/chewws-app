@@ -129,15 +129,40 @@ test('every band size from 0 to 100 needs at most ceil(log2(n + 1)) comparisons,
   expect(mostFor100).toBe(7);
 });
 
-test('skipping places the Recipe at gap floor(n / 2), the middle of its band, even part-way through', () => {
+test('skipping before any answer places the Recipe at gap floor(n / 2), the middle of its band', () => {
   for (let n = 0; n <= 100; n++) {
     const skipped = skipComparisons(startRankingSession(NEW, 'disliked', band(n)));
     expect(skipped).toMatchObject({ status: 'placed', position: Math.floor(n / 2) + 1, bandSizeSeen: n });
   }
   expect(skipComparisons(startRankingSession(NEW, 'liked', band(4)))).toMatchObject({ position: 3 });
   expect(skipComparisons(startRankingSession(NEW, 'liked', band(5)))).toMatchObject({ position: 3 });
-  const partWay = answerComparison(startRankingSession(NEW, 'liked', band(10)), 'better');
-  expect(skipComparisons(partWay)).toMatchObject({ status: 'placed', position: 6, asked: 1 });
+});
+
+test('skipping after some answers places the Recipe in the middle of the gaps the answers left, never against them', () => {
+  // n = 10: the first comparison is with R6 (gap 5). Worse than R6 leaves gaps 6…10, so the middle
+  // is gap 8 (position 9, below R6); better leaves gaps 0…5, so gap 2 (position 3, above R6).
+  const even = startRankingSession(NEW, 'liked', band(10));
+  expect(even).toMatchObject({ against: { title: 'R6' } });
+  expect(skipComparisons(answerComparison(even, 'worse'))).toMatchObject({ status: 'placed', position: 9, asked: 1 });
+  expect(skipComparisons(answerComparison(even, 'better'))).toMatchObject({ status: 'placed', position: 3, asked: 1 });
+  // n = 11: the first comparison is with R6 again. Worse leaves gaps 6…11 (middle 8); better, 0…5 (middle 2).
+  const odd = startRankingSession(NEW, 'liked', band(11));
+  expect(odd).toMatchObject({ against: { title: 'R6' } });
+  expect(skipComparisons(answerComparison(odd, 'worse'))).toMatchObject({ status: 'placed', position: 9, asked: 1 });
+  expect(skipComparisons(answerComparison(odd, 'better'))).toMatchObject({ status: 'placed', position: 3, asked: 1 });
+  // Whatever was answered, the place Skip gives agrees with every answer.
+  const others = band(20);
+  for (let gap = 0; gap <= 20; gap++) {
+    let session = startRankingSession(NEW, 'liked', others);
+    while (session.status === 'comparing') {
+      const skipped = skipComparisons(session);
+      if (skipped.status !== 'placed' || session.status !== 'comparing') throw new Error('not placed');
+      expect(skipped.position - 1).toBeGreaterThanOrEqual(session.lo);
+      expect(skipped.position - 1).toBeLessThanOrEqual(session.hi);
+      const index = others.findIndex((o) => session.status === 'comparing' && o.recipeId === session.against.recipeId);
+      session = answerComparison(session, gap <= index ? 'better' : 'worse');
+    }
+  }
 });
 
 test('a placed Recipe takes no more answers', () => {

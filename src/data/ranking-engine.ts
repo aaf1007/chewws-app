@@ -8,7 +8,8 @@
  * - Placing is a binary search over the n + 1 gaps of the band (gap g is position g + 1): compare
  *   with the Recipe at the middle of the gaps still open; "better" keeps the gaps above it,
  *   "worse" the ones below. There is no "same". At most ceil(log2(n + 1)) comparisons.
- * - Skipping places it in the middle gap, floor(n / 2).
+ * - Skipping places it in the middle of the gaps still open, floor((lo + hi) / 2): floor(n / 2)
+ *   before any answer, and never against an answer already given.
  */
 import { DataError, type RankingBand, type RankingCandidate, type RecipeId } from './types';
 
@@ -90,9 +91,13 @@ export function answerComparison(session: RankingSession, answer: 'better' | 'wo
     : narrowed(session, middle + 1, session.hi, session.asked + 1);
 }
 
-/** Skips the comparisons: the Recipe goes in the middle of its band, gap floor(n / 2). */
+/**
+ * Skips the comparisons left: the Recipe goes in the middle of the gaps still open, gap
+ * floor((lo + hi) / 2), so it agrees with every answer already given. Before any answer that is
+ * floor(n / 2), the middle of its band.
+ */
 export function skipComparisons(session: RankingSession): RankingSession {
   if (session.status !== 'comparing') return session;
-  const middle = Math.floor(session.others.length / 2);
+  const middle = Math.floor((session.lo + session.hi) / 2);
   return narrowed(session, middle, middle, session.asked);
 }
