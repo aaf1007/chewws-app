@@ -1493,7 +1493,6 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     ]);
     if (mine.error) fail(mine.error);
     if (logs.error) fail(logs.error);
-    const today = localDay(now());
 
     return cooked.flatMap((plan): CookPlanPrompt[] => {
       const membership = mine.data.find((row) => row.plan_id === plan.id);
@@ -1507,11 +1506,12 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       };
       const recipes = plan.recipes.map((recipe) => ({ recipe, step: stepOf(recipe) }));
       if (recipes.every(({ step }) => step.kind === 'logged')) return [];
+      const cookedDay = localDay(Date.parse(plan.cookedAt));
       return [
         {
           planId: plan.id,
-          // The plan's day, unless it had none or it's still to come: then the day it was cooked.
-          cookedOn: plan.cookOn !== null && plan.cookOn <= today ? plan.cookOn : localDay(Date.parse(plan.cookedAt)),
+          // The plan's day, unless it had none or came after the cook: then the day it was cooked.
+          cookedOn: plan.cookOn !== null && plan.cookOn <= cookedDay ? plan.cookOn : cookedDay,
           companions: plan.members.filter((m) => m.id !== me).map((m) => ({ id: m.id, username: m.username })),
           recipes,
         },

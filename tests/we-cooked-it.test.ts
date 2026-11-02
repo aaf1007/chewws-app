@@ -12,7 +12,9 @@ import {
   holdCookPlanMarkCooked,
   holdCookPlanRecipeAddWithLines,
   holdRecipeDelete,
+  signInOnPhones,
   signInWithUsername,
+  uniqueUsername,
   type TestUser,
 } from './harness';
 
@@ -244,6 +246,26 @@ test.each([
   const { sam, planId } = await plan(planDay === null ? null : today(planDay));
   await sam.data.markCookPlanCooked(planId);
   expect((await promptOf(sam, planId))?.cookedOn).toBe(today(logDay));
+});
+
+test('a prompt opened days later starts on the day it was cooked when the plan’s day came after the cook, though that day has passed by now', async () => {
+  const [jo] = await signInOnPhones('jo', 1);
+  const chosen = await jo.data.setUsername(uniqueUsername('jo'));
+  if (chosen.status !== 'set') throw new Error(`Couldn't choose a username: ${chosen.status}`);
+  const sam = await signInWithUsername('sam');
+  expect(await sam.data.sendFriendRequest(jo.userId)).toEqual({ status: 'requested' });
+  expect(await jo.data.respondToFriendRequest(sam.userId, true)).toEqual({ status: 'accepted' });
+  // Planned for the day after tomorrow, cooked today, and the prompt opened five days from now.
+  const { planId } = await sam.data.createCookPlan({ cookOn: today(2), friends: [jo.userId] });
+  await sam.data.addRecipeToCookPlan(planId, await sam.data.createRecipe({ title: 'Soup', lines: [], steps: [] }));
+  expect(await sam.data.markCookPlanCooked(planId)).toEqual({ status: 'cooked' });
+  const later = new Date();
+  later.setDate(later.getDate() + 5);
+  jo.setClock(later);
+
+  const plan = await jo.data.getCookPlan(planId);
+  if (!plan) throw new Error('No plan.');
+  expect((await jo.data.cookPlanPrompts([plan]))[0]?.cookedOn).toBe(today(0));
 });
 
 test('"Not now" takes the prompt away for the member who tapped it only; there is none to dismiss before the plan is cooked', async () => {
