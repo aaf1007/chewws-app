@@ -10,7 +10,7 @@ export { normaliseIngredientName } from './ingredient-matcher';
 export { friendsListName } from './list-names';
 export { searchWords, type SearchWord } from './search-words';
 export { checkTagName, normaliseTagName, tagKey, tidyTagNames, type TagNameCheck } from './tag-name';
-export { RANKING_BANDS, bandRange, type RankingSession } from './ranking-engine';
+export type { RankingSession } from './ranking-engine';
 export { validateRecipeInput, type RecipeInputError } from './recipe-input';
 export { USERNAME_RULE, checkUsername, normaliseUsername, usernameSearchQuery, type UsernameCheck } from './username';
 export { createSessionStorage, type AuthStorage, type SessionStorage } from './session-storage';

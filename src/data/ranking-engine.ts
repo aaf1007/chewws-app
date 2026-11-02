@@ -22,12 +22,6 @@ const BAND_TENTHS: Record<RankingBand, { hi: number; lo: number }> = {
   disliked: { hi: 33, lo: 0 },
 };
 
-/** A band's Score range, as the band picker shows it: `{ hi: 10, lo: 6.7 }`. */
-export function bandRange(band: RankingBand): { hi: number; lo: number } {
-  const { hi, lo } = BAND_TENTHS[band];
-  return { hi: hi / 10, lo: lo / 10 };
-}
-
 /** The Score (0–10, one decimal) of the Recipe at `position` (1 = best) in a band of `bandSize`. */
 export function scoreOf(band: RankingBand, position: number, bandSize: number): number {
   if (!Number.isInteger(position) || !Number.isInteger(bandSize) || position < 1 || position > bandSize) {

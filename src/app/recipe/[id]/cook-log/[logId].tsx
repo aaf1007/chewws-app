@@ -11,7 +11,7 @@ import { Button, EmptyState, Screen, Text } from '@/ui';
 
 type LogState =
   | { status: 'loading' }
-  | { status: 'loaded'; log: CookLog; onlyLog: boolean }
+  | { status: 'loaded'; log: CookLog; onlyLog: boolean; ranked: boolean }
   | { status: 'missing'; message: string; offline?: boolean };
 
 export default function EditCookLog() {
@@ -22,11 +22,22 @@ export default function EditCookLog() {
   useEffect(() => {
     let live = true;
     Promise.resolve()
-      .then(() => data.listCookLogs(parseRecipeId(id)))
-      .then((logs) => {
+      .then(() => {
+        const recipeId = parseRecipeId(id);
+        // Whether it's ranked only changes the warning; a Ranking that can't be read leaves it out.
+        return Promise.all([data.listCookLogs(recipeId), data.getRanking().catch(() => null), recipeId] as const);
+      })
+      .then(([logs, ranking, recipeId]) => {
         if (!live) return;
         const log = logs.find((l) => l.id === logId);
-        setState(log ? { status: 'loaded', log, onlyLog: logs.length === 1 } : { status: 'missing', message: 'It may have been deleted.' });
+        const ranked = ranking
+          ? [...ranking.liked, ...ranking.fine, ...ranking.disliked].some((r) => r.recipeId === recipeId)
+          : false;
+        setState(
+          log
+            ? { status: 'loaded', log, onlyLog: logs.length === 1, ranked }
+            : { status: 'missing', message: 'It may have been deleted.' },
+        );
       })
       .catch((e: unknown) => live && setState({ status: 'missing', message: messageOf(e), offline: hasCode(e, 'offline') }));
     return () => {
@@ -47,14 +58,19 @@ export default function EditCookLog() {
       </Screen>
     );
   }
-  const { log, onlyLog } = state;
+  const { log, onlyLog, ranked } = state;
 
-  // Deleting the last log makes the Recipe Saved again (decisions 16), so the warning says so.
+  // Deleting the last log makes the Recipe Saved again (decisions 16), and takes it out of the
+  // Ranking (decisions 17), so the warning says so.
   const confirmDelete = () => {
     setError(null);
     Alert.alert(
       'Delete this Cook Log?',
-      onlyLog ? 'It’s this Recipe’s only one, so the Recipe goes back to Saved.' : 'Its notes and photos go with it.',
+      onlyLog
+        ? ranked
+          ? 'It’s this Recipe’s only one, so the Recipe goes back to Saved and leaves your Ranking.'
+          : 'It’s this Recipe’s only one, so the Recipe goes back to Saved.'
+        : 'Its notes and photos go with it.',
       [
         { text: 'Cancel', style: 'cancel' },
         {

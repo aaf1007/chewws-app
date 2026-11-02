@@ -5,10 +5,11 @@ import { Alert, View } from 'react-native';
 import { messageOf } from '@/auth/errors';
 import { leavesCookPlansWarning } from '@/components/cook-plan-copy';
 import { RecipeCookLogs } from '@/components/recipe-cook-logs';
+import { RecipeRanking } from '@/components/recipe-ranking';
 import { RecipeTags } from '@/components/recipe-tags';
 import { SourceVideoLink } from '@/components/source-video';
 import { useRecipe } from '@/components/use-recipe';
-import type { Recipe, RecipeId } from '@/data';
+import type { CookLog, Recipe, RecipeId } from '@/data';
 import { data } from '@/data/app';
 import {
   Button,
@@ -26,6 +27,7 @@ export default function RecipeDetail() {
   const [error, setError] = useState<string | null>(null);
   const [listMessage, setListMessage] = useState<string | null>(null);
   const [markingWantToCook, setMarkingWantToCook] = useState(false);
+  const [logs, setLogs] = useState<CookLog[] | null>(null);
 
   if (state.status !== 'loaded') {
     return (
@@ -106,7 +108,12 @@ export default function RecipeDetail() {
         </>
       ) : null}
       <RecipeBody recipe={recipe} />
-      {recipe.status === 'reviewed' ? <RecipeCookLogs recipeId={id} /> : null}
+      {recipe.status === 'reviewed' ? (
+        <>
+          <RecipeCookLogs recipeId={id} onLoaded={setLogs} />
+          <RecipeRanking recipeId={id} logs={logs} />
+        </>
+      ) : null}
 
       {error ? <Text tone="danger">{error}</Text> : null}
       <View style={{ gap: spacing.sm }}>
