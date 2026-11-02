@@ -5,8 +5,11 @@
  * or the page doesn't exist. `unreachable`: no usable answer (network error, 5xx, too slow).
  * `unreadable`: the link leads somewhere the reader won't go (a private address, a short link
  * redirecting off the platform). `notSetUp`: the server has no working key for the platform's API.
+ * `refused`: the page answered but won't show itself to the server (a 4xx such as 402 or 403).
+ * `noCaption`: the platform answered with no caption to read (TikTok's oEmbed without its title).
+ * The last two are "couldn't read it": the user can paste the caption or add a screenshot instead.
  */
-export type SourceFailure = 'unavailable' | 'unreachable' | 'unreadable' | 'notSetUp';
+export type SourceFailure = 'unavailable' | 'unreachable' | 'unreadable' | 'notSetUp' | 'refused' | 'noCaption';
 
 export class SourceError extends Error {
   readonly reason: SourceFailure;

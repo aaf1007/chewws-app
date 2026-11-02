@@ -13,6 +13,7 @@ export { ListRow } from './list-row';
 export { NavRow } from './nav-row';
 export { ScoreBadge, formatScore, type ScoreTone } from './score-badge';
 export { Screen } from './screen';
+export { ScreenshotField } from './screenshot-field';
 export { SearchField } from './search-field';
 export { SectionHeader } from './section-header';
 export { ShoppingListRow } from './shopping-list-row';

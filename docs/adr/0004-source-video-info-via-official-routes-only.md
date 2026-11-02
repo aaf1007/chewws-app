@@ -6,3 +6,7 @@ We read caption, thumbnail and creator only through each platform's official rou
 
 - Fetching the public Reel page logged out to read the caption: deferred until before public launch, pending a legal check.
 - Downloading and transcribing the video: rejected (App Store 5.2.3).
+
+## Note (2026-10-27): when a source can't be read
+
+TikTok's oEmbed stopped returning the caption, creator and thumbnail around 2026-10-19, and big recipe sites answer 402 to apps. We stay on official routes: oEmbed is still tried first and used whenever it answers in full. We don't read TikTok's embed page or its internal page data, and we don't send a browser User-Agent to get past a site's refusal. A Draft whose source gave no caption, or refused us, says the app couldn't read it (not "recipe not in caption"), keeps the link, and offers the Instagram paths: paste the caption or add a screenshot, each built like a "Try again". See `.scratch/recipe-app-v1/decisions.md`, "User decision: when a source can't be read".

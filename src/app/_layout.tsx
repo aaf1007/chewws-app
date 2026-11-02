@@ -25,14 +25,16 @@ function RootNavigator() {
     if (session.status !== 'loading') SplashScreen.hideAsync();
   }, [session.status]);
 
-  // Something shared into the app from the share sheet opens the save screen with it, once the
-  // user is signed in, the same screen `recipeapp://save?url=…` opens.
+  // Something shared into the app from the share sheet (a link, with any text or image) opens the
+  // save screen with it, once the user is signed in, the same screen `recipeapp://save?url=…` opens.
   const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntentContext();
   useEffect(() => {
     if (session.status !== 'signedIn' || !hasShareIntent) return;
+    // An image shared with the link (an Instagram Reel's screenshot) comes as a file.
+    const image = shareIntent.files?.find((file) => file.mimeType.startsWith('image/'));
     router.push({
       pathname: '/save',
-      params: { url: shareIntent.webUrl ?? '', text: shareIntent.text ?? '' },
+      params: { url: shareIntent.webUrl ?? '', text: shareIntent.text ?? '', image: image?.path ?? '' },
     });
     resetShareIntent();
   }, [session.status, hasShareIntent, shareIntent, resetShareIntent]);

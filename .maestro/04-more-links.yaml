@@ -7,12 +7,12 @@ appId: com.ant1007.recipeapp
 ---
 - runFlow: subflows/sign-in-dev.yaml
 
-# An Instagram link can't be saved yet (ticket 05).
-- openLink: "recipeapp://save?url=https%3A%2F%2Fwww.instagram.com%2Freel%2FC1a2b3c4d5e%2F"
+# An Instagram profile can't be saved (Reels can, from ticket 05).
+- openLink: "recipeapp://save?url=https%3A%2F%2Fwww.instagram.com%2Fpastaqueen%2F"
 - extendedWaitUntil:
     visible: "Save Recipe"
     timeout: 10000
-- assertVisible: "Instagram links can’t be saved yet."
+- assertVisible: "That Instagram link isn’t a Reel or a post."
 - tapOn: "Cancel"
 
 # A YouTube Short: a Draft from its description, with its channel, shown as from YouTube.

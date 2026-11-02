@@ -4,13 +4,17 @@ import { Icon, type IconName } from './icon';
 import { Text } from './text';
 import { colors, radii, spacing, type ColorRole } from './theme';
 
-/** What a Draft banner says: still being built, built without a recipe, or a failed build. */
-export type DraftBannerKind = 'building' | 'notInCaption' | 'failed';
+/**
+ * What a Draft banner says: still being built, built without a recipe, a failed build, or a source
+ * the app couldn't read (the user can paste its caption or add a screenshot).
+ */
+export type DraftBannerKind = 'building' | 'notInCaption' | 'failed' | 'couldNotRead';
 
 const ICON: Record<DraftBannerKind, { name: IconName; tone: ColorRole }> = {
   building: { name: 'hourglass-outline', tone: 'textMuted' },
   notInCaption: { name: 'document-text-outline', tone: 'accent' },
   failed: { name: 'alert-circle-outline', tone: 'danger' },
+  couldNotRead: { name: 'eye-off-outline', tone: 'accent' },
 };
 
 /**
