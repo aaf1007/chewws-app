@@ -431,6 +431,36 @@ test('a save sent again after its answer was lost uploads no second set of photo
   await stored(now);
 });
 
+test('when a photo can\'t be uploaded, no log is saved and the photos that went up are removed', async () => {
+  const [phone] = await signInOnPhones('cook', 1);
+  const recipe = await phone.data.createRecipe(shakshuka);
+  const failing = phone.data.newCookLogPhotoId();
+  const photos = [
+    { kind: 'new' as const, id: phone.data.newCookLogPhotoId(), jpeg: screenshotBytes() },
+    { kind: 'new' as const, id: failing, jpeg: otherPhoto() },
+  ];
+  phone.serverAnswersFor(failing, 500);
+
+  await expect(phone.data.addCookLog(recipe, { cookedOn: '2026-10-30', photos })).rejects.toMatchObject({
+    code: 'photo_not_saved',
+  });
+  expect(phone.requestsMade().some((r) => r.path.includes('add_cook_log'))).toBe(false);
+  expect(await phone.data.listCookLogs(recipe)).toEqual([]);
+  expect(await storedCookLogPhotos(phone)).toEqual([]);
+
+  // The same for an edit: the log keeps its photo, and only that photo is stored.
+  phone.serverAnswersFor(failing, null);
+  const id = await added(phone, recipe, { cookedOn: '2026-10-30', photos: [photos[0]] });
+  const log = await onlyLog(phone, recipe);
+  phone.serverAnswersFor(failing, 500);
+  const more = [{ kind: 'new' as const, id: phone.data.newCookLogPhotoId(), jpeg: screenshotBytes() }, photos[1]];
+  await expect(
+    phone.data.editCookLog(log, { cookedOn: log.cookedOn, photos: [{ kind: 'saved', id: photos[0].id }, ...more] }),
+  ).rejects.toMatchObject({ code: 'photo_not_saved' });
+  expect((await onlyLog(phone, recipe)).photos.map((p) => p.id)).toEqual([photos[0].id]);
+  expect(await storedCookLogPhotos(phone)).toEqual([`${id}/${photos[0].id}.jpg`]);
+});
+
 test('a Cook Log can have at most 4 photos, however they are added', async () => {
   const me = await signInWithUsername('cook');
   const recipe = await me.data.createRecipe(shakshuka);
