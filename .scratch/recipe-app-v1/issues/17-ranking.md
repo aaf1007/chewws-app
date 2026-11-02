@@ -8,12 +8,12 @@ Skipping the comparisons places it at the middle of its band. Scores are spread 
 
 **Blocked by:** 16 (Cook Logs and the Saved/Cooked filter).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] Only Cooked Recipes can be ranked
-- [ ] Picking a band, then answering comparisons, places the Recipe by binary search within that band (e2e owed: data layer and tests pass; the screens wait on `.maestro/17-ranking.yaml` passing on the simulator)
-- [ ] Skipping places the Recipe at the middle of its band (e2e owed: data layer and tests pass; the screens wait on `.maestro/17-ranking.yaml` passing on the simulator)
+- [x] Picking a band, then answering comparisons, places the Recipe by binary search within that band (data layer and tests; flow 17 passes on the simulator)
+- [x] Skipping places the Recipe at the middle of its band (data layer and tests; flow 17 passes on the simulator)
 - [x] Scores follow the even-spread formula and update when the band changes
-- [ ] The user sees their full Ranking in order with Scores (e2e owed: data layer and tests pass; the screens wait on `.maestro/17-ranking.yaml` passing on the simulator)
-- [ ] Re-ranking moves the Recipe; deleting a Recipe removes it and recomputes its band (e2e owed: data layer and tests pass; the screens wait on `.maestro/17-ranking.yaml` passing on the simulator)
+- [x] The user sees their full Ranking in order with Scores (data layer and tests; flow 17 passes on the simulator)
+- [x] Re-ranking moves the Recipe; deleting a Recipe removes it and recomputes its band (data layer and tests; flow 17 passes on the simulator)
 - [x] Data-layer tests: a known sequence of answers yields the expected position and Score; a band of 100 needs at most 7 comparisons; Friends can read a Ranking, strangers can't
