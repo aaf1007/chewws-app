@@ -1,6 +1,7 @@
 import type { CookPlan, CookPlanList, CookPlanListItem, CookPlanPrompt, CookPlanPromptStep, CookPlanRecipe, RecipeCookPlan, UserId } from '@/data';
 import { localDay } from '@/data';
-import { formatDay } from '@/ui';
+// From its own module, not '@/ui', so this copy loads in Node for its tests.
+import { formatDay } from '@/ui/days';
 
 const handles = (usernames: readonly (string | null)[]) =>
   usernames.flatMap((name) => (name ? [`@${name}`] : [])).join(', ');
@@ -85,9 +86,12 @@ export function whoHasText(item: CookPlanListItem, me: UserId | null): string | 
   return `${andList(names)} ${one ? 'has' : 'have'} it`;
 }
 
-/** Who Claimed a line: "You're buying it", "@jo is buying it"; null when nobody has. */
+/**
+ * Who Claimed a line: "You're buying it", "@jo is buying it"; null when nobody has, or once it's
+ * checked off (bought, so nobody is still buying it). The Claim stays stored: unchecked, it shows again.
+ */
 export function claimText(item: CookPlanListItem, list: CookPlanList, me: UserId | null): string | null {
-  if (item.claim.status !== 'claimed') return null;
+  if (item.claim.status !== 'claimed' || item.check.status === 'checked') return null;
   const { claimedBy } = item.claim;
   if (claimedBy !== null && claimedBy === me) return "You're buying it";
   const name = memberName(list, claimedBy);
