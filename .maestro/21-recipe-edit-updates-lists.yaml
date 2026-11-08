@@ -1,0 +1,210 @@
+# Ticket 21: editing a Recipe updates the lists it's on. The dev user's Garlic bread (garlic,
+# butter, parsley) is on their Shopping List and in a Cook Plan with sam, and they've checked the
+# butter off. They edit it: 3 cloves of garlic instead of 2, no parsley, and paprika added. Both
+# lists follow: the garlic shows the new amount, paprika joins, parsley goes, and the butter checked
+# off beforehand stays checked off.
+# Run with `npm run e2e -- .maestro/21-recipe-edit-updates-lists.yaml`.
+appId: com.ant1007.recipeapp
+---
+- runScript: scripts/befriend-sam.js
+- runFlow: subflows/sign-in-dev.yaml
+
+# Garlic bread: 2 cloves garlic, 4 tbsp butter, a handful of parsley.
+- tapOn: "Write a Recipe"
+- extendedWaitUntil:
+    visible:
+      id: "recipe-title"
+    timeout: 10000
+- tapOn:
+    id: "recipe-title"
+- inputText: "Garlic bread"
+- tapOn:
+    id: "line-1-text"
+- inputText: "2 cloves garlic"
+- tapOn:
+    id: "line-1-amount"
+- inputText: "2 cloves"
+- tapOn:
+    id: "line-1-ingredient"
+- inputText: "garlic"
+- hideKeyboard
+- tapOn: "Add line"
+- scrollUntilVisible:
+    element:
+      id: "line-2-ingredient"
+    direction: DOWN
+- tapOn:
+    id: "line-2-text"
+- inputText: "4 tbsp butter"
+- tapOn:
+    id: "line-2-amount"
+- inputText: "4 tbsp"
+- tapOn:
+    id: "line-2-ingredient"
+- inputText: "butter"
+- hideKeyboard
+- scrollUntilVisible:
+    element: "Add line"
+    direction: UP
+- tapOn: "Add line"
+- scrollUntilVisible:
+    element:
+      id: "line-3-ingredient"
+    direction: DOWN
+- tapOn:
+    id: "line-3-text"
+- inputText: "A handful of parsley"
+- hideKeyboard
+- scrollUntilVisible:
+    element:
+      id: "line-3-amount"
+    direction: DOWN
+- tapOn:
+    id: "line-3-amount"
+- inputText: "a handful"
+- tapOn:
+    id: "line-3-ingredient"
+- inputText: "parsley"
+- hideKeyboard
+- scrollUntilVisible:
+    element: "Save Recipe"
+    direction: DOWN
+- tapOn: "Save Recipe"
+
+# On the Shopping List.
+- extendedWaitUntil:
+    visible: "Add to Shopping List"
+    timeout: 10000
+- scrollUntilVisible:
+    element: "Add to Shopping List"
+    direction: DOWN
+- tapOn: "Add to Shopping List"
+- extendedWaitUntil:
+    visible: "On your Shopping List: garlic, butter, parsley."
+    timeout: 10000
+- tapOn: "Back"
+
+# In a plan with sam.
+- tapOn:
+    id: "tab-cook-plans"
+- tapOn:
+    id: "start-cook-plan"
+- extendedWaitUntil:
+    visible: "Invite: @sam"
+    timeout: 10000
+- tapOn: "Invite: @sam"
+- tapOn:
+    id: "create-cook-plan"
+- extendedWaitUntil:
+    visible: "with @sam"
+    timeout: 10000
+- tapOn: "Add a Recipe"
+- extendedWaitUntil:
+    visible: "Garlic bread, 3 ingredients"
+    timeout: 10000
+- tapOn: "Garlic bread, 3 ingredients"
+- extendedWaitUntil:
+    visible: "Garlic bread, Yours"
+    timeout: 10000
+- tapOn: "Back"
+
+# The butter is bought: checked off on the Shopping List.
+- tapOn:
+    id: "tab-shopping-list"
+- extendedWaitUntil:
+    visible: "Check off: butter"
+    timeout: 10000
+- tapOn: "Check off: butter"
+- extendedWaitUntil:
+    visible: "Uncheck: butter"
+    timeout: 10000
+- assertVisible: "Garlic bread · 2 cloves"
+- assertVisible: "Check off: parsley"
+
+# The edit: 3 cloves of garlic, no parsley, a teaspoon of paprika.
+- tapOn:
+    id: "tab-library"
+- tapOn: "Garlic bread, 3 ingredients.*"
+- extendedWaitUntil:
+    visible: "Edit Recipe"
+    timeout: 10000
+- tapOn: "Edit Recipe"
+- extendedWaitUntil:
+    visible:
+      id: "line-1-amount"
+    timeout: 10000
+- tapOn:
+    id: "line-1-amount"
+- eraseText: 20
+- inputText: "3 cloves"
+- hideKeyboard
+- scrollUntilVisible:
+    element: "Remove line 3"
+    direction: DOWN
+- tapOn: "Remove line 3"
+- scrollUntilVisible:
+    element: "Add line"
+    direction: UP
+- tapOn: "Add line"
+- scrollUntilVisible:
+    element:
+      id: "line-3-ingredient"
+    direction: DOWN
+- tapOn:
+    id: "line-3-text"
+- inputText: "1 tsp paprika"
+- hideKeyboard
+- scrollUntilVisible:
+    element:
+      id: "line-3-amount"
+    direction: DOWN
+- tapOn:
+    id: "line-3-amount"
+- inputText: "1 tsp"
+- tapOn:
+    id: "line-3-ingredient"
+- inputText: "paprika"
+- hideKeyboard
+- scrollUntilVisible:
+    element: "Save changes"
+    direction: DOWN
+- tapOn: "Save changes"
+- extendedWaitUntil:
+    visible: "1 tsp paprika. Ingredient: paprika"
+    timeout: 10000
+- tapOn: "Back"
+
+# The Shopping List follows: the new amount, paprika on, parsley gone, butter still checked off.
+- tapOn:
+    id: "tab-shopping-list"
+- extendedWaitUntil:
+    visible: "Check off: paprika"
+    timeout: 10000
+- assertVisible: "Garlic bread · 3 cloves"
+- assertVisible: "Garlic bread · 1 tsp"
+- assertNotVisible: "Check off: parsley"
+- assertNotVisible: "Garlic bread · 2 cloves"
+- assertVisible: "Uncheck: butter"
+- assertVisible: "Garlic bread · 4 tbsp"
+
+# So does the plan's list.
+- tapOn:
+    id: "tab-cook-plans"
+- extendedWaitUntil:
+    visible: "Garlic bread, with @sam"
+    timeout: 10000
+- tapOn: "Garlic bread, with @sam"
+- extendedWaitUntil:
+    visible:
+      id: "cook-plan-list"
+    timeout: 10000
+- tapOn:
+    id: "cook-plan-list"
+- extendedWaitUntil:
+    visible: "Check off: paprika"
+    timeout: 10000
+- assertVisible: "Garlic bread · 3 cloves"
+- assertVisible: "Garlic bread · 1 tsp"
+- assertVisible: "Garlic bread · 4 tbsp"
+- assertNotVisible: "Check off: parsley"
+- assertNotVisible: "Garlic bread · 2 cloves"
