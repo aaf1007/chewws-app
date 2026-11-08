@@ -1131,7 +1131,13 @@ export type Database = {
         Returns: Json
       }
       edit_recipe: {
-        Args: { lines: Json; recipe_id: string; steps: string[]; title: string }
+        Args: {
+          lines: Json
+          list_lines?: Json
+          recipe_id: string
+          steps: string[]
+          title: string
+        }
         Returns: string
       }
       fail_draft: {
