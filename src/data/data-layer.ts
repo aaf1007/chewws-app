@@ -24,6 +24,7 @@ import {
   isShoppingListChange,
   toCookPlanList,
   toListLines,
+  toNamedListLines,
   withCookPlanChanges,
   withItems,
   withListChanges,
@@ -1534,11 +1535,29 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     return parseRecipeId(data);
   }
 
-  /** Replaces the Recipe's title, lines and steps. */
+  /**
+   * Replaces the Recipe's title, lines and steps, and the lists it's on follow (ticket 21): its
+   * owner's Shopping List and every active Cook Plan it's in, as if it had been taken off and put
+   * back, except that checked-off lines and Claims stay. The server gets the list engine's lines
+   * for the edited Recipe with it, by Ingredient name.
+   */
   async function editRecipe(id: RecipeId, input: RecipeInput): Promise<void> {
-    const { data, error } = await client.rpc('edit_recipe', { recipe_id: id, ...toRecipeArgs(input) });
+    const args = toRecipeArgs(input);
+    const listLines = toNamedListLines(
+      args.lines.map((line) => ({ ingredientName: line.ingredient_name, amountText: line.amount_text })),
+    );
+    const { data, error } = await client.rpc('edit_recipe', {
+      recipe_id: id,
+      ...args,
+      list_lines: listLines.map((line) => ({ ingredient_name: line.ingredientName, amount_texts: line.amountTexts })),
+    });
     if (error) fail(error);
     if (!data) throw new DataError('recipe_not_found', 'That Recipe no longer exists.');
+    const me = await listOwner();
+    if (me) {
+      listsOf(me).refreshWatched();
+      listsOf(me).refreshWatchedPlans();
+    }
   }
 
   /**
@@ -3467,6 +3486,11 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       if (cache && watchingPlan(id)) void refreshPlan(cache);
     }
 
+    /** After an edit of a Recipe, which may be in any of them (ticket 21): every plan list shown. */
+    function refreshWatchedPlans() {
+      for (const id of plans.keys()) refreshPlanIfWatched(id);
+    }
+
     queue.subscribe(() => {
       emit();
       emitPlan();
@@ -3503,6 +3527,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       losePlan,
       dismissLostPlan,
       refreshPlanIfWatched,
+      refreshWatchedPlans,
       isLostPlan: (id: CookPlanId) => lostPlans.some((l) => l.planId === id),
       keepCookPlans,
       keepCookPlan,

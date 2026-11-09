@@ -3,7 +3,7 @@
 // covered through the data layer in shopping-list.test.ts.
 import { expect, test } from 'vitest';
 
-import { toListLines } from '../src/data/list-engine';
+import { toListLines, toNamedListLines } from '../src/data/list-engine';
 import { parseIngredientId, parseRecipeId } from '../src/data/types';
 
 const garlic = { id: parseIngredientId('00000000-0000-4000-8000-00000000000a'), name: 'garlic' };
@@ -61,4 +61,24 @@ test('Ingredients to skip get no line; nothing to skip, no Recipes or no lines g
   expect(toListLines(recipes, new Set([salt.id, garlic.id]))).toEqual([]);
   expect(toListLines([])).toEqual([]);
   expect(toListLines([{ id: bread, lines: [] }])).toEqual([]);
+});
+
+test('a Recipe being saved gets the same lines by Ingredient name: first appearance first, amounts trimmed in line order, blanks dropped', () => {
+  const named = (ingredientName: string, amountText: string | null) => ({ ingredientName, amountText });
+  expect(
+    toNamedListLines([
+      named('garlic', '2 cloves'),
+      named("hellmann", ' 1 jar '),
+      named('crème fraîche', ''),
+      named('garlic', '   '),
+      named('garlic', '1 clove, minced'),
+      named('salt', null),
+    ]),
+  ).toEqual([
+    { ingredientName: 'garlic', amountTexts: ['2 cloves', '1 clove, minced'] },
+    { ingredientName: 'hellmann', amountTexts: ['1 jar'] },
+    { ingredientName: 'crème fraîche', amountTexts: [] },
+    { ingredientName: 'salt', amountTexts: [] },
+  ]);
+  expect(toNamedListLines([])).toEqual([]);
 });

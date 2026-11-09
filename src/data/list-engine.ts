@@ -7,6 +7,7 @@
  *   and are never added together: "2 cloves" and "1 clove" stay two amounts. Blank ones are dropped.
  * - A Recipe that lists an Ingredient twice is under that line once, with both amounts.
  * - Ingredients in `skip` (for a Shopping List, what the user has) get no line.
+ * - A Recipe being saved, its Ingredients known by name only, gets the same lines by name (ticket 21).
  *
  * Where a checked-off line's Ingredient goes is decided by the `check_off` database function, not
  * here: it writes another user's Pantry, so the server can't take the client's word for it.
@@ -45,23 +46,58 @@ export function toListLines(
 ): ListLine[] {
   const lines = new Map<IngredientId, ListLine>();
   for (const recipe of recipes) {
-    for (const { ingredient, amountText } of recipe.lines) {
-      if (skip.has(ingredient.id)) continue;
-      let line = lines.get(ingredient.id);
+    const needed = recipe.lines.filter((l) => !skip.has(l.ingredient.id));
+    for (const { first, amountTexts } of amountsByIngredient(needed, (l) => l.ingredient.id)) {
+      let line = lines.get(first.ingredient.id);
       if (!line) {
-        line = { ingredient, amounts: [] };
-        lines.set(ingredient.id, line);
+        line = { ingredient: first.ingredient, amounts: [] };
+        lines.set(first.ingredient.id, line);
       }
-      let mine = line.amounts.find((a) => a.recipeId === recipe.id);
-      if (!mine) {
-        mine = { recipeId: recipe.id, amountTexts: [] };
-        line.amounts.push(mine);
-      }
-      const amount = amountText?.trim();
-      if (amount) mine.amountTexts.push(amount);
+      const mine = line.amounts.find((a) => a.recipeId === recipe.id);
+      if (mine) mine.amountTexts.push(...amountTexts);
+      else line.amounts.push({ recipeId: recipe.id, amountTexts });
     }
   }
   return [...lines.values()];
+}
+
+/** One Recipe's list line for an Ingredient known by its name only, before it has an id. */
+export type NamedListLine = { ingredientName: string; amountTexts: string[] };
+
+/**
+ * One Recipe's list lines as `toListLines` makes them, for a Recipe being saved, whose Ingredients
+ * are known by their (normalised) names only: an edit sends these, and the server finds the ids
+ * once it has made any new Ingredient (ticket 21).
+ */
+export function toNamedListLines(
+  lines: readonly { ingredientName: string; amountText: string | null }[],
+): NamedListLine[] {
+  return amountsByIngredient(lines, (l) => l.ingredientName).map(({ first, amountTexts }) => ({
+    ingredientName: first.ingredientName,
+    amountTexts,
+  }));
+}
+
+/**
+ * One Recipe's amounts for each Ingredient, the Ingredients in the order they first appear, each
+ * with its lines' amounts in line order, trimmed, blank ones dropped, never added together. `keyOf`
+ * names a line's Ingredient. The one place the engine groups a Recipe's lines.
+ */
+function amountsByIngredient<L extends { amountText: string | null }, K>(
+  lines: readonly L[],
+  keyOf: (line: L) => K,
+): { first: L; amountTexts: string[] }[] {
+  const byKey = new Map<K, { first: L; amountTexts: string[] }>();
+  for (const line of lines) {
+    let found = byKey.get(keyOf(line));
+    if (!found) {
+      found = { first: line, amountTexts: [] };
+      byKey.set(keyOf(line), found);
+    }
+    const amount = line.amountText?.trim();
+    if (amount) found.amountTexts.push(amount);
+  }
+  return [...byKey.values()];
 }
 
 /**

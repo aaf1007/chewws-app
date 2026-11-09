@@ -242,7 +242,7 @@ test("a Friend can't read the owner's screenshot, pasted caption, Want to Cook o
   expect((await kim.client.storage.from('recipe-images').createSignedUrl(path, 3600)).data).toBeNull();
 
   // Reading isn't writing.
-  const edit = await kim.client.rpc('edit_recipe', { recipe_id: reel, title: 'Mine now', steps: [], lines: [] });
+  const edit = await kim.client.rpc('edit_recipe', { recipe_id: reel, title: 'Mine now', steps: [], lines: [], list_lines: [] });
   const update = await kim.client.from('recipes').update({ title: 'Mine now' }).eq('id', reel).select('id');
   const removeLines = await kim.client.from('recipe_lines').delete().eq('recipe_id', reel).select('recipe_id');
   const wantToCook = await kim.client.rpc('set_want_to_cook', { recipe_id: reel, want_to_cook: false });
