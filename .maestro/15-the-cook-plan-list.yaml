@@ -118,6 +118,8 @@ appId: com.ant1007.recipeapp
 - extendedWaitUntil:
     visible: "Uncheck: garlic"
     timeout: 3000
+# Bought, the garlic stops saying who's buying it (its Claim stays; user decision 4, 2026-11-08).
+- assertNotVisible: "You're buying it"
 - tapOn: "Claim: egg"
 - extendedWaitUntil:
     visible: "Unclaim: egg"
