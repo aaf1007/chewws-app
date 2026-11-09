@@ -84,10 +84,19 @@ const shakshukaSteps = [
 
 test('a YouTube Shorts link produces a Draft from the video’s description, with thumbnail and channel name', async () => {
   const claude = recordingExtract();
-  const a = await signInTestUser('a', { extract: claude.extract });
+  // Hold the read of the video until the check below has seen the Draft building.
+  const read = gate();
+  const a = await signInTestUser('a', {
+    extract: claude.extract,
+    youtube: async (videoId, signal) => {
+      await read.wait();
+      return fixtureAdapters.youtube(videoId, signal);
+    },
+  });
 
   const { recipeId: id } = await a.data.saveFromLink({ url: YOUTUBE_SHORT.url });
   expect(await a.data.getRecipe(id)).toMatchObject({ title: 'YouTube video', build: { status: 'building' } });
+  read.open();
   await a.drafts.settled();
 
   const draft = await a.data.getRecipe(id);

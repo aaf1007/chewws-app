@@ -4,6 +4,7 @@ import { Alert, View } from 'react-native';
 
 import { hasCode, messageOf } from '@/auth/errors';
 import { CaptionInputs, NOTHING_ADDED, hasAddedCaption, type AddedCaption } from '@/components/caption-inputs';
+import { DraftTags, keptTagNames, suggestedDraftTags } from '@/components/draft-tags';
 import { couldNotReadCopy, failureMessage, notFoundCopy, sourceText } from '@/components/draft-copy';
 import { RecipeForm } from '@/components/recipe-form';
 import { SourceVideoLink } from '@/components/source-video';
@@ -48,6 +49,30 @@ function AddCaption({ recipeId, page, onAdded }: { recipeId: RecipeId; page: boo
         testID="build-from-caption"
       />
     </View>
+  );
+}
+
+/**
+ * What the user reviews and fixes: the Recipe as the builder filled it in, and its suggested Tags,
+ * all kept to begin with. "Mark reviewed" saves it with the Tags still kept.
+ */
+function DraftForm({ recipe, reload }: { recipe: Extract<Recipe, { status: 'draft' }>; reload: () => void }) {
+  const [tags, setTags] = useState(() => suggestedDraftTags(recipe.suggestedTags));
+  return (
+    <RecipeForm
+      initial={recipe}
+      submitLabel="Mark reviewed"
+      beforeSubmit={<DraftTags value={tags} onChange={setTags} />}
+      onSubmit={async (input) => {
+        try {
+          await data.reviewDraft(recipe.id, input, keptTagNames(tags));
+        } catch (e) {
+          if (hasCode(e, 'draft_building')) reload();
+          throw e;
+        }
+        router.replace({ pathname: '/recipe/[id]', params: { id: recipe.id } });
+      }}
+    />
   );
 }
 
@@ -147,21 +172,8 @@ export default function ReviewDraft() {
         </>
       ) : null}
       {build.status === 'building' ? null : (
-        <RecipeForm
-          // A Retry that builds it again brings new lines; start the form over from them.
-          key={`${recipe.updatedAt}`}
-          initial={recipe}
-          submitLabel="Mark reviewed"
-          onSubmit={async (input) => {
-            try {
-              await data.reviewDraft(recipe.id, input);
-            } catch (e) {
-              if (hasCode(e, 'draft_building')) reload();
-              throw e;
-            }
-            router.replace({ pathname: '/recipe/[id]', params: { id: recipe.id } });
-          }}
-        />
+        // A Retry that builds it again brings new lines and Tags; start the form over from them.
+        <DraftForm key={`${recipe.updatedAt}`} recipe={recipe} reload={reload} />
       )}
     </Screen>
   );

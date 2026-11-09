@@ -4,10 +4,10 @@
 
 **Blocked by:** 03 (Save a TikTok link into a Draft).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The Draft builder suggests Tags, which appear on the Draft and can be accepted or removed
-- [ ] The user can add, remove and create Tags on any Recipe
-- [ ] Search returns the user's Recipes matching title, linked Ingredient or Tag
-- [ ] The user can mark and unmark Recipes as Want to Cook and view the Want to Cook list
-- [ ] Data-layer tests: search by Ingredient finds the right Recipes; one user's Tags and Want to Cook are invisible to another user
+- [x] The Draft builder suggests Tags, which appear on the Draft and can be accepted or removed
+- [x] The user can add, remove and create Tags on any Recipe
+- [x] Search returns the user's Recipes matching title, linked Ingredient or Tag
+- [x] The user can mark and unmark Recipes as Want to Cook and view the Want to Cook list
+- [x] Data-layer tests: search by Ingredient finds the right Recipes; one user's Tags and Want to Cook are invisible to another user

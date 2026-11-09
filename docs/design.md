@@ -39,7 +39,7 @@ Also: `spacing` (`xxs` 2 to `xxl` 32), `radii` (`sm`, `md` 10, `lg`, `sheet` 24,
 | `Screen`         | Safe area, background and optional large title; `scroll` for long content, with a header bar that gets a background once content scrolls under it and a compact title once the large title has gone; works under a navigation header or without one (both in the gallery) |
 | `Text`           | Text in a `variant` of the type scale and a colour-role `tone`                                     |
 | `Icon`           | An Ionicons glyph in a token size and tone                                                         |
-| `Button`         | `filled` (accent), `outlined` or `plain`, with an optional icon                                    |
+| `Button`         | `filled` (accent), `outlined` or `plain`, with an optional icon; `selected` for one that's on or off (Want to Cook: filled when on) |
 | `FilterTiles`    | Three equal tiles, icon above label; the selected one is filled with the accent                    |
 | `SearchField`    | Gray rounded field with a magnifier and an optional filter button                                  |
 | `ListRow`        | Thumbnail (or placeholder), optional Score badge, bold title with muted suffix, meta lines, ⋮ more |
@@ -55,5 +55,6 @@ Also: `spacing` (`xxs` 2 to `xxl` 32), `radii` (`sm`, `md` 10, `lg`, `sheet` 24,
 | `SourceVideoCard` | Bordered card for the video a Recipe came from: portrait thumbnail (or placeholder), platform overline, creator, accent "Watch on TikTok"; opens the video when pressed. `kind="page"` for a web page: square picture (globe placeholder), the site as overline, "Open the page". An Instagram Reel is the plain card (the word "Instagram", no logo) or the user's screenshot as its picture. `onThumbnailError` lets the screen re-fetch an expired thumbnail |
 | `DraftBanner`    | Gray rounded banner on a Draft: building (hourglass), recipe not in caption (accent page), failed (red alert), couldn't read the source (accent slashed eye), with a bold title, muted message and small accent actions ("Try again") |
 | `ScreenshotField` | A screenshot the user adds to a link: label over an outlined "Add screenshot" button, or the picture in a bordered row with accent "Change" and red "Remove" |
+| `TagChips`, `TagChip`, `SuggestedTagChip` | A wrapping row of Tags as pills. `TagChip`: a Recipe's Tag in gray with a × ("Remove Italian"). `SuggestedTagChip`: a Draft's suggested Tag, accent-filled and ticked while kept, outlined with a + while left out; tapping switches |
 | `EmptyState`     | Centred icon, title and message for a screen with nothing in it yet                                |
 | `tabScreenOptions`, `tabIcon` | The signed-in tab bar's style and icons                                               |

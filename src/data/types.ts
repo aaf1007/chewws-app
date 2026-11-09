@@ -3,6 +3,7 @@ export type RecipeId = string & { readonly __brand: 'RecipeId' };
 export type IngredientId = string & { readonly __brand: 'IngredientId' };
 export type ShoppingListId = string & { readonly __brand: 'ShoppingListId' };
 export type ShoppingListItemId = string & { readonly __brand: 'ShoppingListItemId' };
+export type TagId = string & { readonly __brand: 'TagId' };
 
 export type Profile = {
   id: UserId;
@@ -80,6 +81,12 @@ export type SourceVideo = {
  */
 export type CaptionInput = { caption?: string | null; screenshot?: ArrayBuffer | null };
 
+/**
+ * A label on a user's Recipes (cuisine, meal type, "quick"), theirs alone. `name` is as they first
+ * spelled it; names are the same Tag without regard to case.
+ */
+export type Tag = { id: TagId; name: string };
+
 type RecipeFields = {
   id: RecipeId;
   ownerId: UserId;
@@ -99,10 +106,21 @@ type RecipeFields = {
  * user hasn't reviewed yet, with where its build is.
  */
 export type Recipe =
-  | (RecipeFields & { status: 'reviewed' })
+  | (RecipeFields & {
+      status: 'reviewed';
+      /** Its Tags, by name without regard to case. */
+      tags: Tag[];
+      /** When the user marked it Want to Cook; null when it isn't marked. */
+      wantToCookSince: string | null;
+    })
   | (RecipeFields & {
       status: 'draft';
       build: DraftBuild;
+      /**
+       * The Tag names the Draft builder suggests, each spelled as the user's Tag of that name when
+       * they have one. Not Tags yet: `reviewDraft` makes the ones the user keeps.
+       */
+      suggestedTags: string[];
       /**
        * Whether the user can paste a caption or add a screenshot to build it again
        * (`addCaptionToDraft`): a failed Draft, or one built with no recipe found, with builds left.
@@ -264,6 +282,14 @@ export function parseShoppingListId(raw: string): ShoppingListId {
   }
   // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the one brand constructor
   return raw as ShoppingListId;
+}
+
+export function parseTagId(raw: string): TagId {
+  if (!UUID.test(raw)) {
+    throw new DataError('invalid_tag_id', `Not a Tag id: ${raw}`);
+  }
+  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the one brand constructor
+  return raw as TagId;
 }
 
 export function parseShoppingListItemId(raw: string): ShoppingListItemId {
