@@ -53,6 +53,7 @@ import {
   type RankingSession,
 } from './ranking-engine';
 import { validateRecipeInput } from './recipe-input';
+import { localDay } from './local-day';
 import { searchWords } from './search-words';
 import { MAX_REVIEW_TAGS, checkTagName, normaliseTagName, tagKey, tidyTagNames } from './tag-name';
 import { sessionIdOf, type SessionStorage } from './session-storage';
@@ -87,12 +88,15 @@ import {
   type CookPlanListView,
   type CookPlanRecipeAmounts,
   type CookPlanMember,
+  type CookPlanPrompt,
+  type CookPlanPromptStep,
   type CookPlanRead,
   type CookPlanRecipe,
   type CookPlansRead,
   type CopyRecipeResult,
   type CreateCookPlanResult,
   type DeleteCookLogResult,
+  type DismissCookPlanPromptResult,
   type DraftBuild,
   type DraftBuildFailure,
   type DraftSummary,
@@ -110,6 +114,7 @@ import {
   type LeaveCookPlanResult,
   type LeaveSharedShoppingListResult,
   type ListSync,
+  type MarkCookPlanCookedResult,
   type NotSavedListChange,
   type OtherProfile,
   type Pantry,
@@ -176,7 +181,7 @@ const UNCLAIMED_KICK_AFTER_MS = 30_000;
 const BUILD_ATTEMPTS = 3;
 /** YouTube data older than this is read again before it's shown (YouTube's API terms). */
 const YOUTUBE_DATA_MAX_AGE_MS = 30 * 24 * 60 * 60_000;
-/** How long opening a Recipe waits for that refresh before showing what's stored. */
+/** How long opening a Recipe waits for that refresh before showing what's stored, by default. */
 const REFRESH_WAIT_MS = 5_000;
 /** The private bucket of the users' own images: the screenshots they add (decisions 05). */
 const RECIPE_IMAGES = 'recipe-images';
@@ -270,14 +275,6 @@ type CookPlanRow = Pick<
 const COOK_PLAN_COLUMNS = 'id, creator_id, cook_on, status, cooked_at, cooked_by, created_at';
 type CookPlanPersonRow = Database['public']['Views']['cook_plan_people']['Row'];
 type CookPlanRecipeListRow = Database['public']['Views']['cook_plan_recipe_list']['Row'];
-
-/** The calendar day `days` after `now`'s on this phone, as `YYYY-MM-DD`. */
-function localDay(now: number, days = 0): string {
-  const date = new Date(now);
-  date.setDate(date.getDate() + days);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
 
 /**
  * The day a Cook Log says the Recipe was cooked: a calendar date `YYYY-MM-DD` that exists, no
@@ -669,6 +666,8 @@ export type DataLayerOptions = {
    * refresh in-process, with fake platforms.
    */
   refreshSourceVideo?: (recipeId: RecipeId) => Promise<void>;
+  /** How long opening a Recipe waits for that refresh before showing what's stored: 5 s by default. */
+  refreshWaitMs?: number;
   /**
    * Asks the server to send the push a user's action earns someone else ("Friend request"), and
    * settles once it has asked. By default it calls the `notify` Edge Function (10 s at most), which
@@ -692,6 +691,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   const live = options.liveUpdates ?? true;
   const storage = options.storage ?? memoryStorage();
   const now = options.now ?? Date.now;
+  const refreshWaitMs = options.refreshWaitMs ?? REFRESH_WAIT_MS;
   const newId = options.newId ?? (() => crypto.randomUUID());
   const startDraftBuild =
     options.startDraftBuild ??
@@ -1427,6 +1427,94 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     return data.map((row) => ({ id: parseCookPlanId(row.plan_id), cookOn: row.cook_on, withUsernames: row.with_usernames }));
   }
 
+  /**
+   * "We cooked it" (decisions 18): marks a Cook Plan the user is in cooked, for everyone in it at
+   * once. It moves to the archive, and nothing in it changes after but checking lines off. There's
+   * no undo, so the screen confirms first. Marking it again changes nothing (`alreadyCooked`).
+   */
+  async function markCookPlanCooked(planId: CookPlanId): Promise<MarkCookPlanCookedResult> {
+    const { data, error } = await client.rpc('mark_cook_plan_cooked', { plan_id: planId });
+    if (error) fail(error);
+    const status = statusOf('mark_cook_plan_cooked', data, ['cooked', 'alreadyCooked', 'notFound']);
+    await refreshPlanList(planId);
+    return { status };
+  }
+
+  /** "Not now": the cooked plan's prompt goes for the signed-in user only; the others still see theirs. */
+  async function dismissCookPlanPrompt(planId: CookPlanId): Promise<DismissCookPlanPromptResult> {
+    const { data, error } = await client.rpc('dismiss_cook_plan_prompt', { plan_id: planId });
+    if (error) fail(error);
+    return { status: statusOf('dismiss_cook_plan_prompt', data, ['dismissed', 'notCooked', 'notFound']) };
+  }
+
+  /**
+   * The user's own copies of each of these Recipes (ticket 14's "Open your copy"), newest first, by
+   * the Recipe they were saved from.
+   */
+  async function yourCopiesOf(me: UserId, recipeIds: readonly RecipeId[]): Promise<Map<RecipeId, RecipeId[]>> {
+    const copies = new Map<RecipeId, RecipeId[]>();
+    if (recipeIds.length === 0) return copies;
+    const { data, error } = await client
+      .from('recipes')
+      .select('id, copied_from_recipe_id')
+      .eq('owner_id', me)
+      .in('copied_from_recipe_id', [...recipeIds])
+      .order('created_at', { ascending: false })
+      .order('id');
+    if (error) fail(error);
+    for (const row of data) {
+      if (row.copied_from_recipe_id === null) continue;
+      const original = parseRecipeId(row.copied_from_recipe_id);
+      copies.set(original, [...(copies.get(original) ?? []), parseRecipeId(row.id)]);
+    }
+    return copies;
+  }
+
+  /**
+   * The prompts these Cook Plans hold for the signed-in user (decisions 18): one for each cooked
+   * plan with Recipes, until they've logged every Recipe from it (on their own Recipe, or their copy
+   * of someone else's) or tapped "Not now". Each Recipe says what's next (`CookPlanPromptStep`), and
+   * the prompt what a Cook Log from it starts with. Needs a connection.
+   */
+  async function cookPlanPrompts(plans: readonly CookPlan[]): Promise<CookPlanPrompt[]> {
+    const cooked = plans.flatMap((plan) => (plan.status === 'cooked' && plan.recipes.length > 0 ? [plan] : []));
+    if (cooked.length === 0) return [];
+    const me = await currentUserId();
+    const planIds = cooked.map((plan) => plan.id);
+    const othersRecipes = [...new Set(cooked.flatMap((plan) => plan.recipes.filter((r) => r.owner.id !== me).map((r) => r.id)))];
+    const [mine, logs, copies] = await Promise.all([
+      client.from('cook_plan_members').select('plan_id, prompt_dismissed_at').eq('user_id', me).in('plan_id', planIds),
+      client.from('cook_logs').select('recipe_id, cook_plan_id').eq('user_id', me).in('cook_plan_id', planIds),
+      yourCopiesOf(me, othersRecipes),
+    ]);
+    if (mine.error) fail(mine.error);
+    if (logs.error) fail(logs.error);
+
+    return cooked.flatMap((plan): CookPlanPrompt[] => {
+      const membership = mine.data.find((row) => row.plan_id === plan.id);
+      if (!membership || membership.prompt_dismissed_at !== null) return [];
+      const logged = new Set(logs.data.filter((row) => row.cook_plan_id === plan.id).map((row) => row.recipe_id));
+      const stepOf = (recipe: CookPlanRecipe): CookPlanPromptStep => {
+        if (recipe.owner.id === me) return logged.has(recipe.id) ? { kind: 'logged' } : { kind: 'logYours' };
+        const yours = copies.get(recipe.id) ?? [];
+        if (yours.some((copy) => logged.has(copy))) return { kind: 'logged' };
+        return yours.length > 0 ? { kind: 'useYourCopy', copyId: yours[0] } : { kind: 'saveYourCopy' };
+      };
+      const recipes = plan.recipes.map((recipe) => ({ recipe, step: stepOf(recipe) }));
+      if (recipes.every(({ step }) => step.kind === 'logged')) return [];
+      const cookedDay = localDay(Date.parse(plan.cookedAt));
+      return [
+        {
+          planId: plan.id,
+          // The plan's day, unless it had none or came after the cook: then the day it was cooked.
+          cookedOn: plan.cookOn !== null && plan.cookOn <= cookedDay ? plan.cookOn : cookedDay,
+          companions: plan.members.filter((m) => m.id !== me).map((m) => ({ id: m.id, username: m.username })),
+          recipes,
+        },
+      ];
+    });
+  }
+
   async function createRecipe(input: RecipeInput): Promise<RecipeId> {
     const { data, error } = await client.rpc('create_recipe', toRecipeArgs(input));
     if (error) fail(error);
@@ -1586,7 +1674,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   async function getRecipe(id: RecipeId): Promise<Recipe | null> {
     let row = await readRecipe(id);
     if (row && isStaleYouTube(row.source_video, now())) {
-      await waitAtMost(REFRESH_WAIT_MS, requestSourceRefresh(id));
+      await waitAtMost(refreshWaitMs, requestSourceRefresh(id));
       row = await readRecipe(id);
     }
     if (!row) return getSomeoneElsesRecipe(id);
@@ -1619,16 +1707,9 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
         .from('recipe_lines')
         .select('position, original_text, amount_text, ingredient:ingredients(id, name)')
         .eq('recipe_id', id),
-      client
-        .from('recipes')
-        .select('id')
-        .eq('owner_id', me)
-        .eq('copied_from_recipe_id', id)
-        .order('created_at', { ascending: false })
-        .order('id')
-        .limit(1),
+      yourCopiesOf(me, [id]),
     ]);
-    for (const read of [recipe, lines, copies]) if (read.error) fail(read.error);
+    for (const read of [recipe, lines]) if (read.error) fail(read.error);
     const row = recipe.data;
     if (!row || !lines.data) return null;
     // The platform's description only: the screenshot is the owner's own image, and members see
@@ -1643,7 +1724,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
             thumbnailUrl: row.source_thumbnail_url,
           }
         : null;
-    const copy = copies.data?.[0];
+    const copy = copies.get(id)?.[0];
     return {
       status: 'someoneElses',
       id: parseRecipeId(row.id),
@@ -1662,7 +1743,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       ...(sourceVideo ? { sourceVideo } : {}),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
-      yourCopy: copy ? parseRecipeId(copy.id) : null,
+      yourCopy: copy ?? null,
     };
   }
 
@@ -2614,6 +2695,15 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     if (error) return { status: 'refused', error: toDataError(error) };
     if (result === 'applied') return { status: 'sent' };
     if (result === 'superseded') return { status: 'superseded' };
+    // A Claim made offline that comes back gone because the plan was cooked meanwhile (decisions
+    // 18): the user is told it wasn't saved. Gone for any other reason (they left, the line went),
+    // it's dropped as before.
+    if (change.kind === 'claim' || change.kind === 'unclaim') {
+      const plan = await readAs(me, (token) =>
+        client.from('cook_plans').select('status').eq('id', change.list.id).maybeSingle().setHeader('Authorization', bearer(token)),
+      ).catch(() => null);
+      if (plan?.status === 'reached' && plan.data?.status === 'cooked') return { status: 'dropped', tellUser: true };
+    }
     return { status: 'dropped' };
   }
 
@@ -3828,6 +3918,9 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     readCookPlans,
     readCookPlan,
     recipeCookPlans,
+    markCookPlanCooked,
+    dismissCookPlanPrompt,
+    cookPlanPrompts,
     getCookPlanList,
     watchCookPlanList,
     claim,

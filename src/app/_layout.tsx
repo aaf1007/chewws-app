@@ -81,6 +81,7 @@ function RootNavigator() {
         <Stack.Screen name="cook-plan/[id]/invite" options={{ title: '' }} />
         <Stack.Screen name="cook-plan/[id]/add-recipe" options={{ title: '' }} />
         <Stack.Screen name="cook-plan/[id]/list" options={{ title: '' }} />
+        <Stack.Screen name="cook-plan/[id]/log/[recipeId]" options={{ title: '' }} />
         <Stack.Screen name="username" options={{ title: '' }} />
       </Stack.Protected>
       <Stack.Protected guard={session.status === 'signedOut'}>

@@ -124,6 +124,11 @@ export default function CookPlanListScreen() {
           testID="cook-plan-list-not-saved"
         />
       ))}
+      {list?.status === 'cooked' ? (
+        <Text tone="textMuted" testID="cook-plan-list-cooked">
+          This Cook Plan has been cooked, so Claims are over. You can still check things off.
+        </Text>
+      ) : null}
       {changeError ? <Text tone="danger">{changeError}</Text> : null}
       {state.status === 'failed' ? <Text tone="danger">{state.error.message}</Text> : null}
 

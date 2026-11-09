@@ -54,6 +54,14 @@
 //     The dev user writes Shakshuka, Dal, Ramen and Toast and logs each cooked yesterday, and ranks
 //     Shakshuka then Dal in Liked (ticket 17), all as the dev user, as their phone would. Ramen and
 //     Toast are Cooked and not ranked yet.
+//   node scripts/e2e-db.mjs plans-with-sam
+//     sam and the dev user become Friends, and the dev user starts two Cook Plans with him (ticket
+//     18): first one with no day holding the dev user's Toast and "Sam's flatbread", then one on
+//     yesterday holding the dev user's Dal and "Sam's shakshuka". Each adds their own, as their phone
+//     would.
+//   node scripts/e2e-db.mjs sam-marks-plan-cooked
+//     sam marks the newest active Cook Plan the dev user started that he is in cooked
+//     (mark_cook_plan_cooked, as sam): "We cooked it" on his phone.
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -129,6 +137,11 @@ async function samWrites(title, lines) {
  * makes them (decisions 15).
  */
 async function samAddsToPlan(planId, recipeId) {
+  await addsToPlan(SAM, planId, recipeId);
+}
+
+/** `userId` adds their Recipe to a Cook Plan, with its lines, as `samAddsToPlan` does. */
+async function addsToPlan(userId, planId, recipeId) {
   const lines = await query(
     `select l.ingredient_id,
        coalesce(array_agg(btrim(l.amount_text) order by l.position) filter (where btrim(l.amount_text) <> ''), '{}') as amount_texts
@@ -136,12 +149,12 @@ async function samAddsToPlan(planId, recipeId) {
      group by l.ingredient_id order by min(l.position)`,
     [recipeId],
   );
-  const [{ answer }] = await asUser(SAM, 'select public.add_recipe_to_cook_plan($1, $2, $3::jsonb) as answer', [
+  const [{ answer }] = await asUser(userId, 'select public.add_recipe_to_cook_plan($1, $2, $3::jsonb) as answer', [
     planId,
     recipeId,
     JSON.stringify(lines),
   ]);
-  if (answer.status !== 'added') throw new Error(`sam's add: ${JSON.stringify(answer)}`);
+  if (answer.status !== 'added') throw new Error(`the add: ${JSON.stringify(answer)}`);
 }
 
 /** The newest active Cook Plan the dev user started that sam is in. */
@@ -349,6 +362,34 @@ const commands = {
       if (placed.status !== 'placed') throw new Error(`ranking ${title}: ${JSON.stringify(placed)}`);
     }
     console.log('the dev user has four Cooked Recipes, Shakshuka and Dal ranked in Liked');
+  },
+  async 'plans-with-sam'() {
+    await befriend(SAM, DEV_USER);
+    const devWrites = async (title, lines) => {
+      const [{ id }] = await asUser(DEV_USER, 'select public.create_recipe($1, $2, $3) as id', [title, ['Cook it.'], JSON.stringify(lines)]);
+      return id;
+    };
+    for (const [day, mine, his] of [
+      [null, ['Toast', [{ original_text: '2 slices bread', amount_text: '2 slices', ingredient_name: 'bread' }]], ["Sam's flatbread", [{ original_text: '300g flour', amount_text: '300g', ingredient_name: 'flour' }]]],
+      ['yesterday', ['Dal', [{ original_text: '200g lentils', amount_text: '200g', ingredient_name: 'lentil' }]], ["Sam's shakshuka", [{ original_text: '4 eggs', amount_text: '4', ingredient_name: 'egg' }]]],
+    ]) {
+      const [{ planId }] = await asUser(
+        DEV_USER,
+        day ? "select public.create_cook_plan((now() at time zone 'utc')::date - 1) as \"planId\"" : 'select public.create_cook_plan(null) as "planId"',
+        [],
+      );
+      const [{ answer }] = await asUser(DEV_USER, 'select public.invite_to_cook_plan($1, $2) as answer', [planId, SAM]);
+      if (answer.status !== 'invited') throw new Error(`the invite: ${JSON.stringify(answer)}`);
+      await addsToPlan(DEV_USER, planId, await devWrites(...mine));
+      await addsToPlan(SAM, planId, await samWrites(...his));
+    }
+    console.log('the dev user has two Cook Plans with sam');
+  },
+  async 'sam-marks-plan-cooked'() {
+    const planId = await devsPlanWithSam();
+    const [{ answer }] = await asUser(SAM, 'select public.mark_cook_plan_cooked($1) as answer', [planId]);
+    if (answer.status !== 'cooked') throw new Error(`sam's "We cooked it": ${JSON.stringify(answer)}`);
+    console.log(`sam marked ${planId} cooked`);
   },
   async 'alex-accepts'() {
     const [{ answer }] = await asUser(ALEX, 'select public.respond_to_friend_request($1, true) as answer', [DEV_USER]);

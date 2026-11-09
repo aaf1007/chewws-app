@@ -54,6 +54,8 @@ export type DraftFakes = {
   pushFails?: boolean;
   /** This many of the app's notify kicks are lost on the way (no signal), sending nothing. */
   loseNotifyKicks?: number;
+  /** How long opening a Recipe waits for its Source Video refresh (the app's 5 s by default). */
+  refreshWaitMs?: number;
 };
 
 /** The Draft builds a user's app started, run in-process with the fakes instead of build-draft. */
@@ -233,6 +235,7 @@ export async function signInAttacker(label = 'user', fakes: DraftFakes = {}): Pr
     sessionStorage,
     startDraftBuild,
     refreshSourceVideo: inProcessSourceRefresh(client, fakes),
+    refreshWaitMs: fakes.refreshWaitMs,
     sendNotification,
   });
   const userId = await data.signInWithPassword(account);

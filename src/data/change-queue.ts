@@ -191,8 +191,11 @@ export type Delivery =
   | { status: 'sent' }
   /** A later change to its item, made elsewhere, stands instead: whoever shows the list reads it again. */
   | { status: 'superseded' }
-  /** Its item is gone, so there's nothing to change. */
-  | { status: 'dropped' }
+  /**
+   * Its item is gone, so there's nothing to change. `tellUser`: the user should hear it wasn't
+   * saved; if nobody is waiting on it (it was made offline), it waits in `gaveUp` to be told.
+   */
+  | { status: 'dropped'; tellUser?: boolean }
   /** The server will never take it. */
   | { status: 'refused'; error: DataError }
   /** The server answered with an error of its own (5xx): it may pass, so the change is tried again. */
@@ -427,8 +430,12 @@ export function createChangeQueue<C>(options: {
         settle(head.id, { status: 'refused', error: delivery.error });
         continue;
       }
+      const name = nameOf(head);
       onDelivered(head, delivery);
-      dispatch({ type: 'sent', id: head.id });
+      // Whoever made it and still waits hears it was dropped; otherwise, if asked, the user is told
+      // with the changes given up.
+      const untold = delivery.status === 'dropped' && delivery.tellUser === true && !waiting.has(head.id);
+      dispatch(untold ? { type: 'gaveUp', id: head.id, name } : { type: 'sent', id: head.id });
       await save();
       settle(head.id, delivery);
     }

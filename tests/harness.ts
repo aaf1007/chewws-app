@@ -626,6 +626,7 @@ export async function signInOnPhones(
           now: () => (clock === null ? Date.now() : clock),
           startDraftBuild,
           refreshSourceVideo: inProcessSourceRefresh(client, fakes),
+          refreshWaitMs: fakes.refreshWaitMs,
           sendNotification,
         });
         return {
@@ -1179,6 +1180,45 @@ export async function friendshipReadersNotAllowed(): Promise<string[]> {
      where coalesce(qual, '') ~* '\\mfriendships\\M' or coalesce(with_check, '') ~* '\\mfriendships\\M'
      order by 1`,
     [FRIENDSHIP_READERS],
+  );
+  return rows.map((r) => r.name);
+}
+
+/** For race tests only: `user` marking a Cook Plan cooked ("We cooked it") on another phone, not committed yet. */
+export const holdCookPlanMarkCooked = (user: Someone, planId: string) =>
+  holdCallAs(user, 'select public.mark_cook_plan_cooked($1)', [planId]);
+
+/**
+ * The database functions that change a Cook Plan row itself (`update … cook_plans`), and whether
+ * each reads it `for update` first, the plan's lock that every change to a plan takes (decisions 14,
+ * 18), as `name: locks | doesn't lock`.
+ */
+export async function cookPlanRowWriters(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname || ': '
+       || case when p.prosrc ~* 'from\\s+public\\.cook_plans\\s+p\\s+where[^;]*for\\s+update' then 'locks' else 'doesn''t lock' end as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private')
+       and p.prosrc ~* 'update\\s+(public\\.)?cook_plans\\M'
+     order by 1`,
+    [],
+  );
+  return rows.map((r) => r.name);
+}
+
+/**
+ * The database functions that write a member's "Not now" (`prompt_dismissed_at`), and whether each
+ * writes only the caller's own row (`user_id = auth.uid()`), as `name: own row | any row`.
+ */
+export async function promptDismissalWriters(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname || ': '
+       || case when p.prosrc ~* 'user_id\\s*=\\s*\\(select auth\\.uid\\(\\)\\)' then 'own row' else 'any row' end as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private')
+       and p.prosrc ~* 'prompt_dismissed_at\\s*='
+     order by 1`,
+    [],
   );
   return rows.map((r) => r.name);
 }

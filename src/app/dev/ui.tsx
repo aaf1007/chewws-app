@@ -10,6 +10,7 @@ import {
   CompanionPicker,
   ComparisonCard,
   CookLogCard,
+  CookedPrompt,
   DayPicker,
   DraftBanner,
   EmptyState,
@@ -450,6 +451,20 @@ export default function UiGallery() {
 
       <SectionHeader title="Comparison card" />
       <ComparisonCard title="Shakshuka with feta and a very long name" step="Comparison 2" onBetter={noop} onWorse={noop} />
+
+      <SectionHeader title="Cooked prompt" />
+      <CookedPrompt
+        title="You cooked it!"
+        message="Log how each Recipe went, then rank it."
+        recipes={[
+          { key: 'dal', title: 'Dal', detail: 'Yours', status: 'done', done: 'Logged' },
+          { key: 'pasta', title: 'Garlic bread', detail: 'Yours', status: 'toDo', action: 'Log it', onPress: noop },
+          { key: 'shakshuka', title: 'Shakshuka with feta', detail: '@sam’s', status: 'toDo', action: 'Save your copy first', onPress: noop },
+          { key: 'ramen', title: 'Ramen', detail: '@jo’s · you have a copy', status: 'toDo', action: 'Use your copy', onPress: noop },
+        ]}
+        onDismiss={noop}
+        onOpen={noop}
+      />
     </Screen>
   );
 }

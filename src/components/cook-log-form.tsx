@@ -28,20 +28,29 @@ export type Companion = { id: UserId; username: string | null };
 /**
  * The Cook Log form shared by "Add Cook Log" and "Edit Cook Log": the day, notes, photos and the
  * Friends cooked with. It hands what's filled in to `onSubmit`, which throws with what to tell the
- * user when it wasn't saved. A companion on the log who isn't a Friend any more stays chosen.
+ * user when it wasn't saved. A companion on the log who isn't a Friend any more stays chosen, as
+ * do the others in a Cook Plan it's logged from.
  */
 export function CookLogForm({
   initial,
+  prefill,
   submitLabel,
   onSubmit,
 }: {
   initial?: CookLog;
+  /**
+   * What a new log starts with, from a cooked Cook Plan's prompt (decisions 18): its day, and the
+   * others in the plan as chosen companions, Friends or not.
+   */
+  prefill?: { cookedOn: string; companions: readonly Companion[] };
   submitLabel: string;
   onSubmit: (input: CookLogInput, people: readonly Companion[]) => Promise<void>;
 }) {
-  const [cookedOn, setCookedOn] = useState(initial?.cookedOn ?? localToday());
+  const [cookedOn, setCookedOn] = useState(initial?.cookedOn ?? prefill?.cookedOn ?? localToday());
   const [notes, setNotes] = useState(initial?.notes ?? '');
-  const [companions, setCompanions] = useState<UserId[]>(initial?.companions.map((c) => c.id) ?? []);
+  const [companions, setCompanions] = useState<UserId[]>(
+    initial?.companions.map((c) => c.id) ?? prefill?.companions.map((c) => c.id) ?? [],
+  );
   const [photos, setPhotos] = useState<FormPhoto[]>(
     () => initial?.photos.map((p) => ({ key: p.id, uri: p.url, kind: 'saved', id: p.id })) ?? [],
   );
@@ -68,11 +77,9 @@ export function CookLogForm({
     };
   }, []);
 
-  // The log's companions first (a former Friend among them), then the other Friends.
-  const people = [
-    ...(initial?.companions ?? []),
-    ...(friends ?? []).filter((f) => !initial?.companions.some((c) => c.id === f.id)),
-  ];
+  // The log's companions (a former Friend among them) or the plan's others first, then the other Friends.
+  const first: readonly Companion[] = initial?.companions ?? prefill?.companions ?? [];
+  const people = [...first, ...(friends ?? []).filter((f) => !first.some((c) => c.id === f.id))];
 
   const toggle = (id: string) =>
     setCompanions((chosen) => {
