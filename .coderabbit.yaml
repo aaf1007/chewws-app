@@ -1,0 +1,9 @@
+# CodeRabbit reviews pull requests into main by default. Pull requests here are stacked: each one
+# targets the branch below it, so also review those.
+reviews:
+  auto_review:
+    enabled: true
+    base_branches:
+      - "feat/.*"
+      - "fix/.*"
+      - "chore/.*"
