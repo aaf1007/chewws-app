@@ -4,10 +4,10 @@ import { View } from 'react-native';
 import { messageOf } from '@/auth/errors';
 import { ScreenshotField, Text, TextField, spacing } from '@/ui';
 
-import { pickScreenshot, type PreparedScreenshot } from './screenshot';
+import { pickImage, type PreparedImage } from './picked-image';
 
 /** What the user added for the Draft builder to read: a pasted caption and a screenshot. */
-export type AddedCaption = { caption: string; screenshot: PreparedScreenshot | null };
+export type AddedCaption = { caption: string; screenshot: PreparedImage | null };
 
 export const NOTHING_ADDED: AddedCaption = { caption: '', screenshot: null };
 
@@ -44,7 +44,7 @@ export function CaptionInputs({
   const add = () => {
     setAdding(true);
     setError(null);
-    pickScreenshot()
+    pickImage()
       .then((screenshot) => {
         if (screenshot) onChange({ ...value, screenshot });
       })

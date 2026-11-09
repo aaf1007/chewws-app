@@ -40,6 +40,7 @@
     "eslint": "^9.39.5",
     "eslint-config-expo": "~58.0.4",
     "pg": "^8.23.1",
+    "supabase": "2.109.1",
     "typescript": "~6.0.3",
     "vitest": "^5.0.5"
   },
@@ -53,10 +54,10 @@
     "verify": "npm run typecheck && npm run lint && npm run db:types:check && npm test",
     "dev:up": "scripts/dev-up.sh",
     "e2e": "scripts/e2e.sh",
-    "db:start": "supabase start",
-    "db:stop": "supabase stop",
-    "db:reset": "supabase db reset",
-    "db:types": "supabase gen types typescript --local > src/data/database.types.ts",
+    "db:start": "scripts/supabase.sh start",
+    "db:stop": "scripts/supabase.sh stop",
+    "db:reset": "scripts/supabase.sh db reset",
+    "db:types": "scripts/supabase.sh gen types typescript --local > src/data/database.types.ts.tmp && mv src/data/database.types.ts.tmp src/data/database.types.ts || { rm -f src/data/database.types.ts.tmp; exit 1; }",
     "db:types:check": "scripts/check-db-types.sh"
   },
   "private": true

@@ -67,6 +67,8 @@ function RootNavigator() {
         <Stack.Screen name="recipe/new" options={{ title: '' }} />
         <Stack.Screen name="recipe/[id]/index" options={{ title: '' }} />
         <Stack.Screen name="recipe/[id]/edit" options={{ title: '' }} />
+        <Stack.Screen name="recipe/[id]/cook-log/new" options={{ title: '' }} />
+        <Stack.Screen name="recipe/[id]/cook-log/[logId]" options={{ title: '' }} />
         <Stack.Screen name="save" options={{ headerShown: false, presentation: 'modal' }} />
         <Stack.Screen name="drafts" options={{ title: '' }} />
         <Stack.Screen name="draft/[id]" options={{ title: '' }} />

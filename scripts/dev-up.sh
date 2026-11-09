@@ -2,6 +2,7 @@
 # Brings up everything the app needs on the simulator. Safe to rerun: each step skips what's already up.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. scripts/supabase-cli.sh
 
 SIM_UDID="${SIM_UDID:-E3E9E27B-8256-4587-BDE4-C77451E23541}" # iPhone 17
 BUNDLE_ID="com.ant1007.recipeapp"

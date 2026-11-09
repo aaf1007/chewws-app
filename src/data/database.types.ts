@@ -34,6 +34,123 @@ export type Database = {
   }
   public: {
     Tables: {
+      cook_log_companions: {
+        Row: {
+          added_at: string
+          cook_log_id: string
+          user_id: string
+        }
+        Insert: {
+          added_at?: string
+          cook_log_id: string
+          user_id: string
+        }
+        Update: {
+          added_at?: string
+          cook_log_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cook_log_companions_cook_log_id_fkey"
+            columns: ["cook_log_id"]
+            isOneToOne: false
+            referencedRelation: "cook_logs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cook_log_companions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      cook_log_photos: {
+        Row: {
+          cook_log_id: string
+          created_at: string
+          id: string
+          position: number
+        }
+        Insert: {
+          cook_log_id: string
+          created_at?: string
+          id: string
+          position: number
+        }
+        Update: {
+          cook_log_id?: string
+          created_at?: string
+          id?: string
+          position?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cook_log_photos_cook_log_id_fkey"
+            columns: ["cook_log_id"]
+            isOneToOne: false
+            referencedRelation: "cook_logs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      cook_logs: {
+        Row: {
+          cook_plan_id: string | null
+          cooked_on: string
+          created_at: string
+          id: string
+          notes: string | null
+          recipe_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          cook_plan_id?: string | null
+          cooked_on: string
+          created_at?: string
+          id: string
+          notes?: string | null
+          recipe_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          cook_plan_id?: string | null
+          cooked_on?: string
+          created_at?: string
+          id?: string
+          notes?: string | null
+          recipe_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cook_logs_cook_plan_id_fkey"
+            columns: ["cook_plan_id"]
+            isOneToOne: false
+            referencedRelation: "cook_plans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cook_logs_recipe_id_fkey"
+            columns: ["recipe_id"]
+            isOneToOne: false
+            referencedRelation: "recipes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cook_logs_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       cook_plan_amounts: {
         Row: {
           amount_texts: string[]
@@ -875,6 +992,18 @@ export type Database = {
         }
         Returns: string
       }
+      add_cook_log: {
+        Args: {
+          companions?: string[]
+          cook_plan_id?: string
+          cooked_on: string
+          id: string
+          notes?: string
+          photos?: string[]
+          recipe_id: string
+        }
+        Returns: Json
+      }
       add_manual_item: {
         Args: {
           changed_at?: string
@@ -915,6 +1044,14 @@ export type Database = {
         Returns: Json
       }
       claim_source_refresh: { Args: { recipe_id: string }; Returns: Json }
+      cook_log_companion_list: {
+        Args: { cook_log_ids: string[] }
+        Returns: {
+          cook_log_id: string
+          user_id: string
+          username: string
+        }[]
+      }
       cook_plan_check_off: {
         Args: { changed_at?: string; item_id: string; plan_id: string }
         Returns: string
@@ -936,7 +1073,20 @@ export type Database = {
         Args: { lines: Json; steps: string[]; title: string }
         Returns: string
       }
+      delete_cook_log: { Args: { id: string }; Returns: Json }
       draft_ready_push: { Args: { recipe_id: string }; Returns: Json }
+      edit_cook_log: {
+        Args: {
+          add_companions?: string[]
+          add_photos?: string[]
+          cooked_on?: string
+          id: string
+          notes?: string
+          remove_companions?: string[]
+          remove_photos?: string[]
+        }
+        Returns: Json
+      }
       edit_recipe: {
         Args: { lines: Json; recipe_id: string; steps: string[]; title: string }
         Returns: string
@@ -1063,7 +1213,7 @@ export type Database = {
         Returns: Json
       }
       search_recipes: {
-        Args: { want_to_cook_only?: boolean; words?: Json }
+        Args: { cooked?: boolean; want_to_cook_only?: boolean; words?: Json }
         Returns: {
           build_attempts: number
           build_failure:

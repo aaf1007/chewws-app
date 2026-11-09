@@ -6,6 +6,8 @@ export type ShoppingListItemId = string & { readonly __brand: 'ShoppingListItemI
 export type TagId = string & { readonly __brand: 'TagId' };
 export type CookPlanId = string & { readonly __brand: 'CookPlanId' };
 export type CookPlanItemId = string & { readonly __brand: 'CookPlanItemId' };
+export type CookLogId = string & { readonly __brand: 'CookLogId' };
+export type CookLogPhotoId = string & { readonly __brand: 'CookLogPhotoId' };
 
 /**
  * A user's Profile. `username` is null until they choose one. Your own Profile also says when you
@@ -214,6 +216,11 @@ export type RecipeSummary = {
   lineCount: number;
   stepCount: number;
   createdAt: string;
+  /**
+   * Present once the Recipe is Cooked (it has a Cook Log, decisions 16): how many times it was
+   * logged, and the newest day logged (`YYYY-MM-DD`). Absent while it's only Saved.
+   */
+  cooked?: { count: number; lastCookedOn: string };
 };
 
 /** What the user typed for one ingredient line. `ingredientName` is matched to an Ingredient. */
@@ -459,6 +466,68 @@ export type SetCookPlanDateResult = { status: 'set' | 'notActive' | 'notFound' }
 /** What `copyRecipe` did: made the user's own copy, or couldn't (they may not read it, or it's gone). */
 export type CopyRecipeResult = { status: 'copied'; recipeId: RecipeId } | { status: 'notFound' };
 
+/** A photo on a Cook Log, as a link valid for an hour (null when no link could be made: no signal). */
+export type CookLogPhoto = { id: CookLogPhotoId; url: string | null };
+
+/**
+ * One time a user cooked one of their Recipes (decisions 16): the day (`YYYY-MM-DD`, no time or
+ * zone), notes, up to 4 photos in order, and who they cooked with, by username (null: none chosen).
+ * A companion stays on the log after an unfriend. `cookPlanId`: the Cook Plan it was logged from.
+ */
+export type CookLog = {
+  id: CookLogId;
+  recipeId: RecipeId;
+  userId: UserId;
+  cookedOn: string;
+  notes: string | null;
+  companions: { id: UserId; username: string | null }[];
+  photos: CookLogPhoto[];
+  cookPlanId: CookPlanId | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/**
+ * A photo in the Cook Log form: one already on the log, or one just picked (JPEG bytes, scaled
+ * down). A picked photo's `id` (from `newCookLogPhotoId`) names its file: send the same one on
+ * every try of one save, so a try after a lost answer finds the file already there.
+ */
+export type CookLogPhotoInput =
+  | { kind: 'saved'; id: CookLogPhotoId }
+  | { kind: 'new'; id?: CookLogPhotoId; jpeg: ArrayBuffer };
+
+/**
+ * What the user filled in for a Cook Log. `cookedOn`: a day no later than tomorrow on this phone.
+ * Notes are trimmed (blank is none, at most 2000 characters). At most 4 photos, in order.
+ */
+export type CookLogInput = {
+  cookedOn: string;
+  notes?: string | null;
+  companions?: readonly UserId[];
+  photos?: readonly CookLogPhotoInput[];
+};
+
+/**
+ * What `addCookLog` did. Only `added` saved anything. `noSuchRecipe`: the user has no Recipe by that
+ * id (only your own can be logged); `notReviewed`: it's a Draft; `notCompanion`: someone who isn't
+ * a Friend (or, from a Cook Plan, a co-member); `noSuchCookPlan`: the user isn't in that plan.
+ */
+export type AddCookLogResult =
+  | { status: 'added'; cookLogId: CookLogId }
+  | { status: 'noSuchRecipe' | 'notReviewed' | 'noSuchCookPlan' }
+  | { status: 'notCompanion'; userId: UserId };
+
+/** What `editCookLog` did. Only `edited` changed anything; `notFound`: no such log of the user's. */
+export type EditCookLogResult =
+  | { status: 'edited' | 'notFound' | 'tooManyPhotos' }
+  | { status: 'notCompanion'; userId: UserId };
+
+/**
+ * What `deleteCookLog` did: deleted it, and whether its Recipe is still Cooked (another log) or is
+ * Saved again; or `notFound`, nothing deleted.
+ */
+export type DeleteCookLogResult = { status: 'deleted'; recipe: 'cooked' | 'saved' } | { status: 'notFound' };
+
 /** An active Cook Plan one of the user's Recipes is in, with the others in it, by username. */
 export type RecipeCookPlan = { id: CookPlanId; cookOn: string | null; withUsernames: string[] };
 
@@ -498,6 +567,22 @@ export function parseUserId(raw: string): UserId {
   }
   // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the one brand constructor
   return raw as UserId;
+}
+
+export function parseCookLogId(raw: string): CookLogId {
+  if (!UUID.test(raw)) {
+    throw new DataError('invalid_cook_log_id', `Not a Cook Log id: ${raw}`);
+  }
+  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the one brand constructor
+  return raw as CookLogId;
+}
+
+export function parseCookLogPhotoId(raw: string): CookLogPhotoId {
+  if (!UUID.test(raw)) {
+    throw new DataError('invalid_cook_log_photo_id', `Not a Cook Log photo id: ${raw}`);
+  }
+  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- the one brand constructor
+  return raw as CookLogPhotoId;
 }
 
 export function parseRecipeId(raw: string): RecipeId {

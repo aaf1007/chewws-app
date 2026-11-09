@@ -1,6 +1,8 @@
 export { ActionButtons, type Action } from './action-buttons';
 export { AddField } from './add-field';
 export { Button, type ButtonVariant } from './button';
+export { CompanionPicker } from './companion-picker';
+export { CookLogCard } from './cook-log-card';
 export { DayPicker, formatDay, localToday } from './day-picker';
 export { DraftBanner, type DraftBannerKind } from './draft-banner';
 export { EmptyState } from './empty-state';
@@ -14,6 +16,7 @@ export { ListRow } from './list-row';
 export { ListSwitcher, type ListSwitcherOption } from './list-switcher';
 export { NavRow } from './nav-row';
 export { PersonRow, type PersonAction } from './person-row';
+export { PhotoStrip, type StripPhoto } from './photo-strip';
 export { ScoreBadge, formatScore, type ScoreTone } from './score-badge';
 export { Screen } from './screen';
 export { ScreenshotField } from './screenshot-field';

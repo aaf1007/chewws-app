@@ -11,6 +11,7 @@
 # and says what didn't answer.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. scripts/supabase-cli.sh
 
 project_id="$(sed -n 's/^project_id *= *"\([^"]*\)".*/\1/p' supabase/config.toml | head -n 1)"
 api_port="$(awk '/^\[api\]/{a=1;next} /^\[/{a=0} a&&/^port *=/{print $3; exit}' supabase/config.toml)"

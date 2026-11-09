@@ -1,0 +1,135 @@
+# Ticket 16: Cook Logs and the Saved/Cooked filter. The dev user writes a Recipe, which is Saved;
+# logs it with notes, a photo from the photo library and sam (a Friend) as cooked with; finds it
+# under Cooked; edits the log, then deletes it, and finds the Recipe back under Saved.
+# Run with `npm run e2e -- .maestro/16-cook-logs.yaml` (add-photo.js and befriend-sam.js ask
+# scripts/net-control.mjs, which scripts/e2e.sh runs). One phone, no network: that sam, a Friend,
+# can read the dev user's Cook Log is proved in tests/cook-logs.test.ts until ticket 19's profile.
+appId: com.ant1007.recipeapp
+onFlowStart:
+  - runScript: scripts/add-photo.js
+---
+- runScript: scripts/befriend-sam.js
+- runFlow: subflows/sign-in-dev.yaml
+
+# A Recipe of the dev user's: Saved, not cooked yet.
+- tapOn: "Write a Recipe"
+- extendedWaitUntil:
+    visible:
+      id: "recipe-title"
+    timeout: 10000
+- tapOn:
+    id: "recipe-title"
+- inputText: "Shakshuka"
+- tapOn:
+    id: "line-1-text"
+- inputText: "4 eggs"
+- tapOn:
+    id: "line-1-ingredient"
+- inputText: "egg"
+- hideKeyboard
+- scrollUntilVisible:
+    element: "Save Recipe"
+    direction: DOWN
+- tapOn: "Save Recipe"
+- extendedWaitUntil:
+    visible: "Edit Recipe"
+    timeout: 10000
+- scrollUntilVisible:
+    element: "Not cooked yet. Add a Cook Log each time you cook it."
+    direction: DOWN
+    timeout: 30000
+
+# Log it: today, with notes, a photo and sam.
+- tapOn: "Add Cook Log"
+- extendedWaitUntil:
+    visible: "@sam"
+    timeout: 10000
+- assertVisible: "Today"
+- tapOn: "@sam"
+- tapOn:
+    id: "cook-log-notes"
+- inputText: "Less cumin next time"
+- hideKeyboard
+- tapOn:
+    id: "add-photo"
+- extendedWaitUntil:
+    visible: "Collections"
+    timeout: 30000
+- tapOn:
+    point: "16%,25%"
+- extendedWaitUntil:
+    visible: "Photo 1"
+    timeout: 15000
+- scrollUntilVisible:
+    element:
+      id: "save-cook-log"
+    direction: DOWN
+- tapOn:
+    id: "save-cook-log"
+# The log's card: its day, who it was cooked with and its notes.
+- extendedWaitUntil:
+    visible: "Cook Log, .*, with @sam. Less cumin next time"
+    timeout: 15000
+- assertNotVisible: "Not cooked yet. Add a Cook Log each time you cook it."
+
+# It's Cooked now: not under Saved, but under Cooked.
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "You’ve cooked them all"
+    timeout: 10000
+- tapOn: "Cooked"
+- extendedWaitUntil:
+    visible: "Shakshuka, 1 ingredient · 0 steps, Cooked once · last .*"
+    timeout: 10000
+
+# Edit the log's notes.
+- tapOn: "Shakshuka, .*"
+- scrollUntilVisible:
+    element:
+      id: "cook-log-1"
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    id: "cook-log-1"
+- extendedWaitUntil:
+    visible: "Edit Cook Log"
+    timeout: 10000
+- assertVisible: "Photo 1"
+- tapOn:
+    id: "cook-log-notes"
+- eraseText: 30
+- inputText: "Less cumin, more feta"
+- hideKeyboard
+- scrollUntilVisible:
+    element: "Save changes"
+    direction: DOWN
+- tapOn: "Save changes"
+- extendedWaitUntil:
+    visible: "Cook Log, .*, with @sam. Less cumin, more feta"
+    timeout: 15000
+
+# Delete it: it was the only one, so the Recipe goes back to Saved.
+- tapOn:
+    id: "cook-log-1"
+- extendedWaitUntil:
+    visible: "Edit Cook Log"
+    timeout: 10000
+- scrollUntilVisible:
+    element: "Delete Cook Log"
+    direction: DOWN
+- tapOn: "Delete Cook Log"
+- extendedWaitUntil:
+    visible: "It’s this Recipe’s only one, so the Recipe goes back to Saved."
+    timeout: 10000
+- tapOn: "Delete"
+- extendedWaitUntil:
+    visible: "Not cooked yet. Add a Cook Log each time you cook it."
+    timeout: 15000
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "Nothing cooked yet"
+    timeout: 10000
+- tapOn: "Saved"
+- extendedWaitUntil:
+    visible: "Shakshuka, 1 ingredient · 0 steps"
+    timeout: 10000

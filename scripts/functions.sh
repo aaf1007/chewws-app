@@ -12,6 +12,7 @@
 # A serve running in the other mode is restarted in the one asked for.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. scripts/supabase-cli.sh
 
 mode="${1:-dev}"
 case "$mode" in

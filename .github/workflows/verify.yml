@@ -28,7 +28,7 @@ jobs:
 
       - uses: supabase/setup-cli@v1
         with:
-          version: 2.109.1 # keep in step with the local CLI so generated DB types match
+          version: 2.109.1 # the supabase devDependency in package.json; scripts/supabase-cli.sh fails verify when they differ
 
       # Tests use auth, PostgREST, Storage (the screenshots users add, ticket 05), Realtime (shared
       # Shopping Lists change live on private channels, ticket 13) and Postgres through Kong; the rest is skipped to start faster. -x takes container names (mailpit,
