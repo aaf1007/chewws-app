@@ -49,7 +49,7 @@ Also: `spacing` (`xxs` 2 to `xxl` 32), `radii` (`sm`, `md` 10, `lg`, `sheet` 24,
 | `FloatingSegment` | White pill of segments floating at the bottom centre (`List \| Map`)                               |
 | `AddField`       | Gray rounded field with an Add button at its right, for adding one thing by name (Pantry, Staples) |
 | `IngredientRow`  | An Ingredient's name with an optional action at its right ("Used up", "Remove"), over a hairline   |
-| `ShoppingListRow` | A Shopping List line: optional check circle, name with muted detail lines (each Recipe's amounts), optional action; checked lines are muted and struck through |
+| `ShoppingListRow` | A Shopping List or Cook Plan list line: optional check circle, name with muted detail lines (each Recipe's amounts), optional notes with a small icon ("@sam has it"; the user's own, "You're buying it", in the accent), optional action; checked lines are muted and struck through |
 | `ListSwitcher`   | Which list a screen shows: a sideways-scrolling row of pills ("Your list", "Sam's list"), the selected one filled with the accent, the rest outlined |
 | `DayPicker`      | Which day something is planned for (a Cook Plan's): `ListSwitcher` pills for "No day", "Today", "Tomorrow" and the next two weeks ("Sat 2 Nov"); a chosen day outside them gets its own pill. `formatDay` writes a day the same way |
 | `SyncNotice`     | Gray rounded notice that list changes are waiting to sync: a slashed cloud while offline, arrows while sending, a clock while waiting to retry after a server error |

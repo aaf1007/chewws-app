@@ -3,10 +3,9 @@ import { useCallback, useState } from 'react';
 import { Alert, View } from 'react-native';
 
 import { messageOf } from '@/auth/errors';
+import { changesNotSavedMessage, notSavedMessage, syncNoticeOf } from '@/components/list-sync-copy';
 import {
   friendsListName,
-  type ListSync,
-  type NotSavedListChange,
   type SharedShoppingList,
   type ShoppingList as List,
   type ShoppingListId,
@@ -56,42 +55,9 @@ function checkedByOf(item: ShoppingListItem, list: List, me: UserId | null): str
 
 const nameOf = (item: ShoppingListItem) => (item.kind === 'ingredient' ? item.ingredient.name : item.text);
 
-const changes = (count: number) => (count === 1 ? '1 change' : `${count} changes`);
-
-/** What to tell the user about changes made on this phone that the server doesn't have yet. */
-function syncNoticeOf(sync: ListSync): { status: 'offline' | 'syncing' | 'retrying'; message: string } | null {
-  if (sync.status === 'offline') {
-    return {
-      status: 'offline',
-      message:
-        sync.waiting > 0
-          ? `You're offline. ${changes(sync.waiting)} will sync when you're back online.`
-          : "You're offline. This is your list as it was last loaded.",
-    };
-  }
-  if (sync.status === 'waitingToRetry') {
-    return { status: 'retrying', message: `The server had a problem. ${changes(sync.waiting)} will retry shortly.` };
-  }
-  if (sync.status === 'syncing' && sync.waiting > 0) {
-    return { status: 'syncing', message: `Syncing ${changes(sync.waiting)}…` };
-  }
-  return null;
-}
-
-const VERB: Record<NotSavedListChange['kind'], string> = {
-  checkOff: 'check off',
-  uncheck: 'uncheck',
-  addManualItem: 'add',
-};
-
-/** "Couldn't check off Foil." */
-const notSavedMessage = ({ kind, itemName }: NotSavedListChange) => `Couldn't ${VERB[kind]} ${itemName}.`;
-
 /** "Sam's list isn't shared with you any more. 2 changes weren't saved." */
 function noLongerSharedMessage(ownerUsername: string | null, changesNotSaved: number) {
-  const lost =
-    changesNotSaved === 0 ? '' : ` ${changes(changesNotSaved)} ${changesNotSaved === 1 ? "wasn't" : "weren't"} saved.`;
-  return `${friendsListName(ownerUsername)} isn't shared with you any more.${lost}`;
+  return `${friendsListName(ownerUsername)} isn't shared with you any more.${changesNotSavedMessage(changesNotSaved)}`;
 }
 
 const sharedWithDetail = (list: List | null) =>

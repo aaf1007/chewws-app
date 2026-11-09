@@ -11,8 +11,10 @@
 // /sam-stops-sharing (ticket 13: alex_cooks a Friend to share with; sam sharing their list with the
 // dev user, adding to it, checking it has the dev user's changes, and stopping), and /befriend-sam,
 // /sam-adds-recipe-to-plan and /sam-invites-dev (ticket 14: sam a Friend to invite; sam adding a
-// Recipe of his to the dev user's Cook Plan; sam inviting the dev user to his own, with the push);
-// nothing else. Listens on 127.0.0.1 only.
+// Recipe of his to the dev user's Cook Plan; sam inviting the dev user to his own, with the push),
+// and /sam-plans-shakshuka, /sam-claims-egg, /check-plan-list and /sam-removes-shakshuka (ticket 15:
+// sam adding a Recipe to the dev user's plan's list, claiming a line on it, checking it has the dev
+// user's changes, and taking his Recipe out); nothing else. Listens on 127.0.0.1 only.
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
@@ -37,6 +39,10 @@ const commands = {
   '/befriend-sam': [process.execPath, [script('./e2e-db.mjs'), 'befriend-sam']],
   '/sam-adds-recipe-to-plan': [process.execPath, [script('./e2e-db.mjs'), 'sam-adds-recipe-to-plan']],
   '/sam-invites-dev': [process.execPath, [script('./e2e-db.mjs'), 'sam-invites-dev']],
+  '/sam-plans-shakshuka': [process.execPath, [script('./e2e-db.mjs'), 'sam-plans-shakshuka']],
+  '/sam-claims-egg': [process.execPath, [script('./e2e-db.mjs'), 'sam-claims-egg']],
+  '/check-plan-list': [process.execPath, [script('./e2e-db.mjs'), 'check-plan-list']],
+  '/sam-removes-shakshuka': [process.execPath, [script('./e2e-db.mjs'), 'sam-removes-shakshuka']],
 };
 
 createServer((req, res) => {

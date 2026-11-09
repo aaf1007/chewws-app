@@ -1,23 +1,32 @@
 import { Pressable, StyleSheet, View } from 'react-native';
 
-import { Icon } from './icon';
+import { Icon, type IconName } from './icon';
 import { Text } from './text';
 import { colors, hairline, spacing } from './theme';
+
+/**
+ * A short fact about a line, under its details, with a small icon: who has it ("@sam has it"), or
+ * who is buying it. `mine` draws it in the accent, for what's the user's own ("You're buying it").
+ */
+export type ListLineNote = { icon: IconName; text: string; mine?: boolean };
 
 /**
  * One line of a Shopping List: an optional check circle at its left, a name, muted detail lines
  * under it (each Recipe's amounts), and an optional action at its right such as "Remove". A checked
  * line is muted and struck through. The check and the action are labelled with the name ("Check
- * off: garlic", "Remove: garlic"), so each row's buttons can be told apart.
+ * off: garlic", "Remove: garlic"), so each row's buttons can be told apart. A Cook Plan's list adds
+ * `notes` under the details: who has it and who is buying it.
  */
 export function ShoppingListRow({
   name,
   details = [],
+  notes = [],
   check,
   action,
 }: {
   name: string;
   details?: readonly string[];
+  notes?: readonly ListLineNote[];
   check?: { checked: boolean; onPress: () => void };
   action?: { label: string; onPress: () => void };
 }) {
@@ -47,6 +56,14 @@ export function ShoppingListRow({
             {detail}
           </Text>
         ))}
+        {notes.map((note, index) => (
+          <View key={index} style={styles.note} accessible accessibilityRole="text" accessibilityLabel={note.text}>
+            <Icon name={note.icon} size="sm" tone={note.mine ? 'accent' : 'textMuted'} />
+            <Text variant="caption" tone={note.mine ? 'accent' : 'textMuted'}>
+              {note.text}
+            </Text>
+          </View>
+        ))}
       </View>
       {action ? (
         <Pressable
@@ -75,6 +92,7 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
   },
   text: { flex: 1, gap: spacing.xxs },
+  note: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   struck: { textDecorationLine: 'line-through' },
   pressed: { opacity: 0.6 },
 });
