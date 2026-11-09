@@ -397,6 +397,9 @@ ANTHROPIC_API_KEY = "env(ANTHROPIC_API_KEY)"
 # The YouTube Data API key for YouTube links (decisions 04), kept like the Claude key: locally in
 # supabase/.env, on the hosted project with `supabase secrets set YOUTUBE_API_KEY=...`.
 YOUTUBE_API_KEY = "env(YOUTUBE_API_KEY)"
+# Optional: Expo's access token for "Draft ready" pushes when enhanced push security is on
+# (decisions 07). Locally in supabase/.env; hosted, `supabase secrets set EXPO_ACCESS_TOKEN=...`.
+EXPO_ACCESS_TOKEN = "env(EXPO_ACCESS_TOKEN)"
 
 [analytics]
 enabled = true

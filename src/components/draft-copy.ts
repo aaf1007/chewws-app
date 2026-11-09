@@ -120,3 +120,13 @@ export const NOT_IN_CAPTION = {
   title: 'Recipe not in caption',
   message: 'The caption doesn’t list the ingredients ("link in bio"?). Fill them in from the video.',
 };
+
+/**
+ * What the save screen says when the daily limit refuses a link (decisions 07): when the user can
+ * save again, as a time of day, "tomorrow" when that's not today.
+ */
+export function dailyLimitMessage(limit: number, retryAt: Date, now: Date): string {
+  const time = retryAt.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const when = retryAt.toDateString() === now.toDateString() ? time : `${time} tomorrow`;
+  return `You've saved ${limit} links in the last 24 hours, the daily limit. You can save again at ${when}.`;
+}

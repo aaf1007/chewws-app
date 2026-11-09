@@ -10,6 +10,7 @@ import type { Database } from '../src/data/database.types';
 import type { Extract } from '../supabase/functions/_shared/claude-extractor';
 import { buildDraft, type BuildOutcome, type Rpc } from '../supabase/functions/_shared/draft-builder';
 import { fixtureAdapters, fixtureExtract } from '../supabase/functions/_shared/draft-fixtures';
+import { recordingPushSender, type PushMessage, type PushSender } from '../supabase/functions/_shared/push-sender';
 import { screenshotLoader } from '../supabase/functions/_shared/screenshot';
 import { refreshSourceVideo } from '../supabase/functions/_shared/source-refresher';
 import { createSourceReader, type SourceAdapters } from '../supabase/functions/_shared/source-reader';
@@ -43,6 +44,10 @@ export type DraftFakes = {
   loseKicks?: number;
   /** For race tests only: a build waits for this before it downloads the user's screenshot. */
   beforeScreenshotDownload?: () => Promise<void>;
+  /** Push tokens the fake push service reports as no longer registered (DeviceNotRegistered). */
+  unregisteredPushTokens?: string[];
+  /** The push service can't be reached: every push fails to send. */
+  pushFails?: boolean;
 };
 
 /** The Draft builds a user's app started, run in-process with the fakes instead of build-draft. */
@@ -51,6 +56,8 @@ export type DraftBuilds = {
   settled(): Promise<void>;
   /** Runs another build of `recipeId` now, as a second kick of build-draft would. */
   build(recipeId: string): Promise<BuildOutcome>;
+  /** Every push these builds sent, in order, through the recording push sender (none really goes). */
+  pushesSent(): PushMessage[];
 };
 
 /** The fake adapters: the fixtures, with any of `fakes` in their place. */
@@ -92,9 +99,15 @@ export function inProcessDraftBuilds(fakes: DraftFakes = {}) {
   const readSource = createSourceReader(fakeAdapters(fakes)).read;
   const extract = fakes.extract ?? fixtureExtract;
   const loadScreenshot = screenshotLoaderFor(fakes);
+  const push = recordingPushSender({ unregistered: fakes.unregisteredPushTokens });
+  const sendPush: PushSender = fakes.pushFails
+    ? async () => {
+        throw new TypeError('fetch failed');
+      }
+    : push.send;
   const running = new Set<Promise<unknown>>();
   const build = (recipeId: string) => {
-    const done = buildDraft(recipeId, { rpc: serviceRpc, readSource, extract, loadScreenshot });
+    const done = buildDraft(recipeId, { rpc: serviceRpc, readSource, extract, loadScreenshot, sendPush });
     running.add(done);
     void done.finally(() => running.delete(done)).catch(() => {});
     return done;
@@ -104,6 +117,7 @@ export function inProcessDraftBuilds(fakes: DraftFakes = {}) {
       while (running.size > 0) await Promise.allSettled([...running]);
     },
     build,
+    pushesSent: push.sent,
   };
   // The app's kick settles once the build has started; the build goes on in the background.
   let kicksToLose = fakes.loseKicks ?? 0;

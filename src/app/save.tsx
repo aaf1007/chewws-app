@@ -10,17 +10,20 @@ import {
   hasAddedCaption,
   type AddedCaption,
 } from '@/components/caption-inputs';
-import { platformName, sourceText } from '@/components/draft-copy';
+import { dailyLimitMessage, platformName, sourceText } from '@/components/draft-copy';
 import { prepareScreenshot } from '@/components/screenshot';
-import { checkSharedLink, type DetectedSource, type RecipeId } from '@/data';
+import { DailyLimitError, checkSharedLink, type DetectedSource, type RecipeId } from '@/data';
 import { data } from '@/data/app';
+import { registerForDraftReady } from '@/notifications';
 import { Button, EmptyState, Screen, SourceVideoCard, Text, spacing } from '@/ui';
 
 type SaveState =
   | { status: 'ready' }
   | { status: 'saving' }
   | { status: 'saved'; recipeId: RecipeId; added: boolean }
-  | { status: 'failed'; message: string };
+  | { status: 'failed'; message: string }
+  /** Refused: the user has saved as many links as a day allows (decisions 07). */
+  | { status: 'dailyLimitReached'; message: string };
 
 const param = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value) || undefined;
 
@@ -95,8 +98,18 @@ export default function SaveLink() {
         draftId,
         ...(instagram ? { caption: added.caption, screenshot: added.screenshot?.jpeg ?? null } : {}),
       })
-      .then(({ recipeId }) => setState({ status: 'saved', recipeId, added: withCaption }))
-      .catch((e: unknown) => setState({ status: 'failed', message: messageOf(e) }));
+      .then(({ recipeId }) => {
+        setState({ status: 'saved', recipeId, added: withCaption });
+        // After the first link saved is when the app asks to send "Draft ready" (decisions 07).
+        void registerForDraftReady({ ask: true });
+      })
+      .catch((e: unknown) =>
+        setState(
+          e instanceof DailyLimitError
+            ? { status: 'dailyLimitReached', message: dailyLimitMessage(e.limit, new Date(e.retryAt), new Date()) }
+            : { status: 'failed', message: messageOf(e) },
+        ),
+      );
   };
 
   const card = link ? linkCard(link) : null;
@@ -115,11 +128,15 @@ export default function SaveLink() {
       ) : null}
       <View style={{ gap: spacing.sm }}>
         {unsupported ? <Text tone="danger">{unsupported}</Text> : null}
-        {state.status === 'failed' ? <Text tone="danger">{state.message}</Text> : null}
+        {state.status === 'failed' || state.status === 'dailyLimitReached' ? (
+          <Text tone="danger" testID={state.status === 'dailyLimitReached' ? 'daily-limit' : undefined}>
+            {state.message}
+          </Text>
+        ) : null}
         <Button
           label={state.status === 'saving' ? 'Saving…' : 'Save'}
           icon="bookmark-outline"
-          disabled={unsupported !== null || state.status === 'saving'}
+          disabled={unsupported !== null || state.status === 'saving' || state.status === 'dailyLimitReached'}
           onPress={save}
           testID="save-link"
         />

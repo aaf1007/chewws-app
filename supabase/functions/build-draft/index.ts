@@ -2,8 +2,9 @@
 // A thin Deno entry (docs/agents/verify.md): it checks the caller, answers 202 at once, and runs
 // buildDraft (supabase/functions/_shared/draft-builder.ts) with the real source reader (TikTok,
 // YouTube and web pages, every read through the guarded fetch; Instagram never), the user's
-// screenshot from Storage and Claude, or, with
-// DRAFT_FIXTURES=1 on a local stack only, with the canned ones the tests use.
+// screenshot from Storage and Claude, and sends "Draft ready" through Expo's push service; or, with
+// DRAFT_FIXTURES=1 on a local stack only, with the canned ones the tests use and a push sender
+// that only logs.
 
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient } from '@supabase/supabase-js';
@@ -11,6 +12,7 @@ import { createClient } from '@supabase/supabase-js';
 import { claudeExtractor, ExtractError, type Extract } from '../_shared/claude-extractor.ts';
 import { buildDraft, type Rpc } from '../_shared/draft-builder.ts';
 import { fixtureAdapters, fixtureExtract } from '../_shared/draft-fixtures.ts';
+import { expoPushSender, recordingPushSender, type PushSender } from '../_shared/push-sender.ts';
 import { createSafeFetch, dnsResolver } from '../_shared/safe-fetch.ts';
 import { screenshotLoader } from '../_shared/screenshot.ts';
 import { createSourceReader, realSourceAdapters } from '../_shared/source-reader.ts';
@@ -20,6 +22,8 @@ const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
 const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY')?.trim() ?? '';
 const youtubeKey = Deno.env.get('YOUTUBE_API_KEY')?.trim() ?? '';
+// Only needed when the Expo project turns on enhanced push security.
+const expoAccessToken = Deno.env.get('EXPO_ACCESS_TOKEN')?.trim() || undefined;
 
 /** The local stack's API, as the functions runtime sees it. A hosted project is never one of these. */
 const LOCAL_HOSTS = new Set(['kong', 'localhost', '127.0.0.1', 'host.docker.internal']);
@@ -58,6 +62,11 @@ const loadScreenshot = screenshotLoader(async (path) => {
   return data.arrayBuffer();
 });
 
+// "Draft ready" goes to Expo's push service, a fixed host. In fixture mode nothing is sent.
+const sendPush: PushSender = fixtures
+  ? recordingPushSender({ onSend: (messages) => console.log('build-draft: push not sent (DRAFT_FIXTURES):', messages) }).send
+  : expoPushSender(fetch, expoAccessToken);
+
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
@@ -89,7 +98,7 @@ Deno.serve(async (request) => {
   if (!draft) return json(404, { error: 'No such Draft.' });
 
   EdgeRuntime.waitUntil(
-    buildDraft(recipeId, { rpc, readSource, extract, loadScreenshot }).catch((e) => console.error('build-draft:', e)),
+    buildDraft(recipeId, { rpc, readSource, extract, loadScreenshot, sendPush }).catch((e) => console.error('build-draft:', e)),
   );
   return json(202, { status: 'building' });
 });

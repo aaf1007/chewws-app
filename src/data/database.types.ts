@@ -125,6 +125,27 @@ export type Database = {
         }
         Relationships: []
       }
+      push_tokens: {
+        Row: {
+          created_at: string
+          last_seen_at: string
+          token: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          last_seen_at?: string
+          token: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          last_seen_at?: string
+          token?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       recipe_lines: {
         Row: {
           amount_text: string | null
@@ -508,6 +529,7 @@ export type Database = {
         Args: { lines: Json; steps: string[]; title: string }
         Returns: string
       }
+      draft_ready_push: { Args: { recipe_id: string }; Returns: Json }
       edit_recipe: {
         Args: { lines: Json; recipe_id: string; steps: string[]; title: string }
         Returns: string
@@ -523,8 +545,11 @@ export type Database = {
         Args: { recipe_id: string; result: Json }
         Returns: boolean
       }
+      forget_push_token: { Args: { token: string }; Returns: undefined }
+      forget_push_tokens: { Args: { tokens: string[] }; Returns: undefined }
       has_ingredient: { Args: { ingredient_id: string }; Returns: boolean }
       ingredients_i_have: { Args: never; Returns: string[] }
+      register_push_token: { Args: { token: string }; Returns: undefined }
       remove_recipe_from_shopping_list: {
         Args: { recipe_id: string }
         Returns: undefined
