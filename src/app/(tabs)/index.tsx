@@ -28,7 +28,7 @@ const FILTERS = [
 
 type LibraryState =
   | { status: 'loading' }
-  | { status: 'loaded'; recipes: RecipeSummary[]; drafts: DraftSummary[]; tags: Tag[]; allCooked: boolean }
+  | { status: 'loaded'; recipes: RecipeSummary[]; drafts: DraftSummary[]; allCooked: boolean }
   | { status: 'error'; message: string };
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -143,14 +143,30 @@ export default function Library() {
       let live = true;
       const allCooked = async (recipes: RecipeSummary[]) =>
         filter === 'saved' && searched.trim() === '' && recipes.length === 0 && (await hasCooked());
-      Promise.all([recipesFor(filter, searched), data.listDrafts(), data.listTags()])
-        .then(async ([recipes, drafts, tags]) => ({ recipes, drafts, tags, allCooked: await allCooked(recipes) }))
+      Promise.all([recipesFor(filter, searched), data.listDrafts()])
+        .then(async ([recipes, drafts]) => ({ recipes, drafts, allCooked: await allCooked(recipes) }))
         .then((loaded) => live && setState({ status: 'loaded', ...loaded }))
         .catch((e: unknown) => live && setState({ status: 'error', message: messageOf(e) }));
       return () => {
         live = false;
       };
     }, [filter, searched]),
+  );
+
+  // The Tags row's Tags, read when the Library comes into focus (Tags change on other screens), not
+  // on each search or filter. A failed read leaves the row without its detail; it still opens.
+  const [tags, setTags] = useState<Tag[] | null>(null);
+  useFocusEffect(
+    useCallback(() => {
+      let live = true;
+      data
+        .listTags()
+        .then((read) => live && setTags(read))
+        .catch(() => undefined);
+      return () => {
+        live = false;
+      };
+    }, []),
   );
 
   const listTitle =
@@ -172,7 +188,8 @@ export default function Library() {
       <NavRow
         icon="pricetags-outline"
         label="Tags"
-        detail={state.status === 'loaded' ? tagsDetail(state.tags) : undefined}
+        detail={tags ? tagsDetail(tags) : undefined}
+        accessibilityLabel={tags ? `Tags, ${tags.length}` : 'Tags'}
         onPress={() => router.push('/tags')}
         testID="tags-row"
       />

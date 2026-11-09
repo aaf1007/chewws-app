@@ -9,9 +9,9 @@ appId: com.ant1007.recipeapp
 - runScript: scripts/dev-tagged-recipes.js
 - runFlow: subflows/sign-in-dev.yaml
 
-# The Library's Tags row names the user's Tags, and opens them with their counts.
+# The Library's Tags row says how many Tags the user has, and opens them with their counts.
 - extendedWaitUntil:
-    visible: "Tags, Italian, Leftovers, Weeknight"
+    visible: "Tags, 3"
     timeout: 10000
 - tapOn:
     id: "tags-row"
@@ -34,10 +34,10 @@ appId: com.ant1007.recipeapp
 - assertVisible: "Italian, 1 Recipe"
 - assertVisible: "Leftovers, 0 Recipes"
 
-# Gone from the Tags row, and search no longer finds a Recipe by it.
+# One fewer on the Tags row, and search no longer finds a Recipe by it.
 - tapOn: "Back"
 - extendedWaitUntil:
-    visible: "Tags, Italian, Leftovers"
+    visible: "Tags, 2"
     timeout: 10000
 - tapOn: "Search your Recipes"
 - inputText: "weeknight"
@@ -69,7 +69,7 @@ appId: com.ant1007.recipeapp
 - hideKeyboard
 - tapOn: "Back"
 - extendedWaitUntil:
-    visible: "Tags, Italian, Leftovers, WeekNight"
+    visible: "Tags, 3"
     timeout: 10000
 - tapOn:
     id: "tags-row"
@@ -105,5 +105,5 @@ appId: com.ant1007.recipeapp
     timeout: 10000
 - tapOn: "Back"
 - extendedWaitUntil:
-    visible: "Tags, None yet"
+    visible: "Tags, 0"
     timeout: 10000
