@@ -18,6 +18,7 @@ import {
   holdCookPlanCheckOff,
   holdCookPlanClaim,
   holdRecipeEdit,
+  holdShoppingListLinesThenRecipeRemoval,
   holdShoppingListRecipeRemoval,
   markCookPlanCookedInDatabase,
   signInOnPhones,
@@ -325,6 +326,63 @@ test('two edits at once, each dropping a line both Recipes needed: the second wa
   const list = readPlan(await jo.data.getCookPlanList(planId), usernames);
   expect(list.map((l) => l.line)).toEqual(['butter', 'garlic', 'lemon', 'milk', 'paprika', 'salt']);
   expect(list.find((l) => l.line === 'garlic')?.amounts).toEqual([['Garlic bread', '3 cloves'], ['Aglio e olio', '4 cloves']]);
+});
+
+test('an edit that renames the Recipe while it’s being taken off the Shopping List waits for the removal, and neither deadlocks', async () => {
+  const owner = await signInWithUsername('owner');
+  const bread = await owner.data.createRecipe({ title: 'Garlic bread', lines: breadBefore, steps: [] });
+  const pasta = await owner.data.createRecipe({ title: 'Aglio e olio', lines: aglio, steps: [] });
+  await owner.data.addRecipeToShoppingList(bread);
+  await owner.data.addRecipeToShoppingList(pasta);
+  const breadLines = (await owner.data.getShoppingList()).items
+    .filter((i) => i.kind === 'ingredient' && i.recipes.some((r) => r.recipe.id === bread))
+    .map((i) => i.id);
+
+  // The owner's other phone has locked the bread's lines to take it off, and is about to reach for
+  // its amounts; this phone's edit renames it, which renames its amounts on the list.
+  const held = await holdShoppingListLinesThenRecipeRemoval(owner, breadLines, bread);
+  const editing = owner.data.editRecipe(bread, { title: 'Cheesy garlic bread', lines: breadAfter, steps: [] });
+  await held.waitForWaiting(1);
+  await held.finish();
+  await editing;
+
+  expect(view(await owner.data.getShoppingList())).toEqual([
+    { ingredient: 'chive', recipes: [['Aglio e olio', '1 bunch']], checked: false },
+    { ingredient: 'garlic', recipes: [['Aglio e olio', '4 cloves']], checked: false },
+  ]);
+});
+
+test('an edit that renames the Recipe and adds an Ingredient takes that Ingredient’s line in id order with the rest, so a removal holding it doesn’t deadlock', async () => {
+  const owner = await signInWithUsername('owner');
+  const pasta = await owner.data.createRecipe({ title: 'Aglio e olio', lines: aglio, steps: [] });
+  await owner.data.addRecipeToShoppingList(pasta);
+  // Of the pasta's two lines, the bread is on the later one (by id), and the edit adds the earlier.
+  const [first, later] = (await owner.data.getShoppingList()).items
+    .flatMap((i) => (i.kind === 'ingredient' ? [{ id: i.id, name: i.ingredient.name }] : []))
+    .sort((a, b) => (a.id < b.id ? -1 : 1));
+  const lineFor = (name: string) =>
+    name === 'garlic' ? line('3 cloves garlic', '3 cloves', 'garlic') : line('Chives', '1 tbsp', 'chives');
+  const butter = line('4 tbsp butter', '4 tbsp', 'butter');
+  const bread = await owner.data.createRecipe({ title: 'Garlic bread', lines: [lineFor(later.name), butter], steps: [] });
+  await owner.data.addRecipeToShoppingList(bread);
+
+  // The other phone takes the pasta off and has locked the earlier line so far; the edit, which
+  // now needs that line too, waits for it before taking any other.
+  const held = await holdShoppingListLinesThenRecipeRemoval(owner, [first.id], pasta);
+  const editing = owner.data.editRecipe(bread, {
+    title: 'Cheesy garlic bread',
+    lines: [lineFor(later.name), butter, lineFor(first.name)],
+    steps: [],
+  });
+  await held.waitForWaiting(1);
+  await held.finish();
+  await editing;
+
+  expect(view(await owner.data.getShoppingList())).toEqual([
+    { ingredient: 'butter', recipes: [['Cheesy garlic bread', '4 tbsp']], checked: false },
+    { ingredient: 'chive', recipes: [['Cheesy garlic bread', '1 tbsp']], checked: false },
+    { ingredient: 'garlic', recipes: [['Cheesy garlic bread', '3 cloves']], checked: false },
+  ]);
 });
 
 // Live and offline ---------------------------------------------------------------------------------

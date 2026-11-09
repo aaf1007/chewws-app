@@ -109,6 +109,10 @@ async function holdInTransaction(sql: string, params: unknown[], before: [string
     },
     commit: () => end('commit'),
     release: () => end('rollback'),
+    /** Runs one more statement in the held transaction, which stays open. */
+    run: async (more: string, moreParams: unknown[]) => {
+      await session.query(more, moreParams);
+    },
   };
 }
 
@@ -207,6 +211,35 @@ export const holdLeave = (friend: Someone, listId: string) =>
 /** For race tests only: `user` taking their Recipe off their Shopping List on another phone, not committed yet. */
 export const holdShoppingListRecipeRemoval = (user: Someone, recipeId: string) =>
   holdCallAs(user, 'select public.remove_recipe_from_shopping_list($1)', [recipeId]);
+
+/**
+ * For race tests only: `user` taking their Recipe off their Shopping List on another phone, stopped
+ * after locking the lines `itemIds` (in id order, as the removal starts) and before it goes on.
+ * `finish()` runs the removal in the same transaction, which takes the rest of its locks and
+ * reaches for the Recipe's amounts, and commits.
+ */
+export async function holdShoppingListLinesThenRecipeRemoval(user: Someone, itemIds: string[], recipeId: string) {
+  const held = await holdInTransaction(
+    'select 1 from public.shopping_list_items where id = any ($1::uuid[]) order by id for update',
+    [itemIds],
+  );
+  return {
+    waitForWaiting: held.waitForWaiting,
+    async finish() {
+      try {
+        await held.run("select set_config('request.jwt.claims', $1, true)", [
+          JSON.stringify({ sub: user.userId, role: 'authenticated' }),
+        ]);
+        await held.run('set local role authenticated', []);
+        await held.run('select public.remove_recipe_from_shopping_list($1)', [recipeId]);
+      } catch (error) {
+        await held.release();
+        throw error;
+      }
+      await held.commit();
+    },
+  };
+}
 
 /** For race tests only: `user` checking an item off on another phone, not committed yet. */
 export const holdCheckOff = (user: Someone, itemId: string) =>
@@ -689,10 +722,6 @@ const EDIT_RECIPE = 'select public.edit_recipe($1, $2, $3, $4::jsonb, $5::jsonb)
 export const holdRecipeEdit = (user: Someone, recipeId: string, title: string, lines: EditedLine[]) =>
   holdCallAs(user, EDIT_RECIPE, editArgs(recipeId, title, lines));
 
-/** For race tests only: `user` editing their Recipe on another phone, started and not awaited (see `startCallAs`). */
-export const startRecipeEdit = (user: Someone, recipeId: string, title: string, lines: EditedLine[]) =>
-  startCallAs(user, EDIT_RECIPE, editArgs(recipeId, title, lines));
-
 /** For race tests only: `user` inviting `friend` into a Cook Plan on another phone, not committed yet. */
 export const holdCookPlanInvite = (user: Someone, planId: string, friend: Someone) =>
   holdCallAs(user, 'select public.invite_to_cook_plan($1, $2)', [planId, friend.userId]);
@@ -878,7 +907,6 @@ export async function markCookPlanCookedInDatabase(planId: string, by: Someone):
 const COOK_PLAN_LIST_TRIGGERS = [
   'private.drop_cook_plan_line_if_unneeded',
   'private.put_recipe_on_cook_plan_list',
-  'private.remove_cook_plan_recipe_lines',
   'private.take_recipe_off_cook_plan_lines',
 ];
 
@@ -927,6 +955,18 @@ export async function functionsWritingListAmounts(): Promise<string[]> {
      where n.nspname in ('public', 'private') and p.prosrc ~* $1
      order by 1`,
     ['(insert\\s+into|delete\\s+from)\\s+(public\\.)?(shopping_list|cook_plan)_amounts\\M'],
+  );
+  return rows.map((r) => r.name);
+}
+
+/** The database functions (public and private) whose code calls `fn` (schema-qualified), by name. */
+export async function callersOf(fn: string): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select n.nspname || '.' || p.proname as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private') and p.prosrc ~* $1
+     order by 1`,
+    [`${fn.replace('.', '\\.')}\\s*\\(`],
   );
   return rows.map((r) => r.name);
 }
