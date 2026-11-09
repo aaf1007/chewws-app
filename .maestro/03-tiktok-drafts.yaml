@@ -1,0 +1,119 @@
+# Ticket 03: saves a TikTok link, reviews the Draft the Draft builder filled in, and saves a
+# "link in bio" one that comes back as recipe-not-in-caption, filled in by hand.
+# Run with `npm run e2e -- .maestro/03-tiktok-drafts.yaml`. The functions run with
+# DRAFT_FIXTURES=1 (scripts/functions.sh e2e): canned captions and Claude answers, no network.
+# The share sheet can't be driven here; it opens the save screen with the shared link, which the
+# recipeapp://save?url=… link below does too (the share path itself was checked by hand).
+appId: com.ant1007.recipeapp
+---
+- runFlow: subflows/sign-in-dev.yaml
+- assertVisible: "No recipes yet"
+- assertNotVisible:
+    id: "drafts-row"
+
+# Share a TikTok with the whole recipe in its caption; saving is one tap.
+- openLink: "recipeapp://save?url=https%3A%2F%2Fwww.tiktok.com%2F%40pastaqueen%2Fvideo%2F7400000000000000001"
+- extendedWaitUntil:
+    visible: "Save Recipe"
+    timeout: 10000
+- assertVisible: "TikTok, TikTok video, https://www.tiktok.com/@pastaqueen/video/7400000000000000001"
+- tapOn:
+    id: "save-link"
+- assertVisible: "Saved as a Draft"
+- tapOn: "View Drafts"
+
+# It builds in the background and shows up ready to review.
+- extendedWaitUntil:
+    visible: "Creamy garlic pasta, Ready to review, TikTok · Pasta Queen"
+    timeout: 15000
+- tapOn: "Creamy garlic pasta, Ready to review, TikTok · Pasta Queen"
+- extendedWaitUntil:
+    visible: "Review Draft"
+    timeout: 10000
+- assertVisible: "TikTok, Pasta Queen, Watch on TikTok"
+- assertNotVisible:
+    id: "not-in-caption"
+
+# Fix the title, then mark it reviewed: it's a Recipe now, with its Source Video.
+- tapOn:
+    id: "recipe-title"
+- eraseText: 30
+- inputText: "Garlic pasta for two"
+- hideKeyboard
+- scrollUntilVisible:
+    element: "Mark reviewed"
+    direction: DOWN
+- tapOn: "Mark reviewed"
+- extendedWaitUntil:
+    notVisible: "Review Draft"
+    timeout: 10000
+- assertVisible: "Garlic pasta for two"
+- assertVisible: "TikTok, Pasta Queen, Watch on TikTok"
+- assertVisible: ".*4 cloves garlic \\(minced\\).*"
+# Back to the Drafts list, empty now, and on to the Library, where it is.
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "No Drafts"
+    timeout: 10000
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "Garlic pasta for two, 7 ingredients · 3 steps"
+    timeout: 10000
+- assertNotVisible:
+    id: "drafts-row"
+
+# A "link in bio" caption: the Draft says the recipe isn't in the caption, with nothing filled in.
+- openLink: "recipeapp://save?url=https%3A%2F%2Fwww.tiktok.com%2F%40snackdad%2Fvideo%2F7400000000000000002"
+- extendedWaitUntil:
+    visible: "Save Recipe"
+    timeout: 10000
+- tapOn:
+    id: "save-link"
+- tapOn: "Done"
+- extendedWaitUntil:
+    visible:
+      id: "drafts-row"
+    timeout: 10000
+- tapOn:
+    id: "drafts-row"
+- extendedWaitUntil:
+    visible: "Crispy smash burgers, Recipe not in caption, TikTok · Snack Dad"
+    timeout: 15000
+- tapOn: "Crispy smash burgers, Recipe not in caption, TikTok · Snack Dad"
+- extendedWaitUntil:
+    visible:
+      id: "not-in-caption"
+    timeout: 10000
+- assertVisible: "Recipe not in caption.*"
+
+# Fill it in by hand and mark it reviewed.
+- tapOn:
+    id: "line-1-text"
+- inputText: "500g beef mince"
+- hideKeyboard
+- tapOn:
+    id: "line-1-amount"
+- inputText: "500g"
+- hideKeyboard
+- tapOn:
+    id: "line-1-ingredient"
+- inputText: "beef mince"
+- hideKeyboard
+- scrollUntilVisible:
+    element:
+      id: "step-1"
+    direction: DOWN
+- tapOn:
+    id: "step-1"
+- inputText: "Smash the beef onto a hot pan."
+- hideKeyboard
+- scrollUntilVisible:
+    element: "Mark reviewed"
+    direction: DOWN
+- tapOn: "Mark reviewed"
+- extendedWaitUntil:
+    notVisible: "Review Draft"
+    timeout: 10000
+- assertVisible: "Crispy smash burgers"
+- assertVisible: ".*500g beef mince.*"
+- assertVisible: "TikTok, Snack Dad, Watch on TikTok"

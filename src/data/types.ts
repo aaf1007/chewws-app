@@ -24,17 +24,69 @@ export type RecipeLine = {
   ingredient: Ingredient;
 };
 
-export type Recipe = {
+/**
+ * Why the Draft builder couldn't fill a Draft in. `sourceUnavailable`: the platform has no such
+ * video (private, deleted). `sourceUnreachable`: the platform didn't answer. `unreadable`: no
+ * recipe could be read from what it said. `timedOut`: the build took too long. `notSetUp`: the
+ * server can't call Claude yet (no API key).
+ */
+export type DraftBuildFailure = 'sourceUnavailable' | 'sourceUnreachable' | 'unreadable' | 'timedOut' | 'notSetUp';
+
+/**
+ * Where the Draft builder is with a Recipe. Hand-written and reviewed Recipes are `built`. A
+ * failed build can be tried again while `canRetry` (3 builds in all); it can always be filled in
+ * by hand.
+ */
+export type DraftBuild =
+  | { status: 'building' }
+  | { status: 'built' }
+  | { status: 'failed'; reason: DraftBuildFailure; canRetry: boolean };
+
+export type SourcePlatform = 'tiktok' | 'youtube' | 'instagram' | 'web';
+
+/** The video a Recipe was saved from, as the platform described it. Null fields: not known (yet). */
+export type SourceVideo = {
+  platform: SourcePlatform;
+  originalUrl: string;
+  creatorName: string | null;
+  creatorUrl: string | null;
+  thumbnailUrl: string | null;
+};
+
+type RecipeFields = {
   id: RecipeId;
   ownerId: UserId;
   title: string;
-  status: 'draft' | 'reviewed';
+  /** False when the Draft builder found no recipe in the caption ("link in bio"). */
   recipeFound: boolean;
   lines: RecipeLine[];
   steps: string[];
+  /** The video it was saved from; absent for a Recipe written by hand. */
+  sourceVideo?: SourceVideo;
   createdAt: string;
   updatedAt: string;
 };
+
+/**
+ * A Recipe in the user's library (`reviewed`), or a `draft` the Draft builder fills in and the
+ * user hasn't reviewed yet, with where its build is.
+ */
+export type Recipe =
+  | (RecipeFields & { status: 'reviewed' })
+  | (RecipeFields & { status: 'draft'; build: DraftBuild });
+
+/** A Draft as the Drafts list shows it. */
+export type DraftSummary = {
+  id: RecipeId;
+  title: string;
+  build: DraftBuild;
+  recipeFound: boolean;
+  sourceVideo: SourceVideo | null;
+  createdAt: string;
+};
+
+/** What `saveFromLink` did: saved the link as a Draft, which builds in the background. */
+export type SaveFromLinkResult = { status: 'saved'; recipeId: RecipeId };
 
 /**
  * What a user has: the Ingredients in their Pantry and their Staples, each sorted by name. A Staple

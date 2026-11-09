@@ -45,6 +45,8 @@ AppState.addEventListener('change', (state) => {
   if (state === 'active') {
     client.auth.startAutoRefresh();
     void data.syncListChanges();
+    // Drafts whose build got lost (no signal at the save, say) are kicked again.
+    data.resumeDraftBuilds().catch(() => {});
   } else {
     client.auth.stopAutoRefresh();
   }

@@ -25,6 +25,6 @@
     "jest.config.js",
     "android",
     "ios",
-    "supabase/functions"
+    "supabase/functions/*/index.ts"
   ]
 }

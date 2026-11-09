@@ -390,8 +390,10 @@ inspector_port = 8183
 # The Deno major version to use.
 deno_version = 2
 
-# [edge_runtime.secrets]
-# secret_key = "env(SECRET_VALUE)"
+[edge_runtime.secrets]
+# The Draft builder's Claude key (decisions 03). Locally it comes from supabase/.env; on the hosted
+# project, set it with `supabase secrets set ANTHROPIC_API_KEY=...`. Never an EXPO_PUBLIC_ value.
+ANTHROPIC_API_KEY = "env(ANTHROPIC_API_KEY)"
 
 [analytics]
 enabled = true

@@ -1,3 +1,4 @@
+export { detectSource, type DetectedSource } from '../../supabase/functions/_shared/detect-source';
 export { memoryStorage, type KeyValueStorage } from './change-queue';
 export { createDataLayer, type DataLayer, type DataLayerOptions } from './data-layer';
 export { normaliseIngredientName } from './ingredient-matcher';
@@ -8,6 +9,9 @@ export {
   parseRecipeId,
   parseShoppingListItemId,
   type CheckState,
+  type DraftBuild,
+  type DraftBuildFailure,
+  type DraftSummary,
   type IdTokenProvider,
   type Ingredient,
   type IngredientId,
@@ -21,6 +25,7 @@ export {
   type RecipeLine,
   type RecipeLineInput,
   type RecipeSummary,
+  type SaveFromLinkResult,
   type SessionState,
   type ShoppingList,
   type ShoppingListId,
@@ -28,5 +33,7 @@ export {
   type ShoppingListItemId,
   type ShoppingListRecipeAmounts,
   type ShoppingListView,
+  type SourcePlatform,
+  type SourceVideo,
   type UserId,
 } from './types';

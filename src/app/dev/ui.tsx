@@ -6,6 +6,7 @@ import {
   ActionButtons,
   AddField,
   Button,
+  DraftBanner,
   EmptyState,
   FilterTiles,
   FloatingSegment,
@@ -13,11 +14,13 @@ import {
   IngredientLineRow,
   IngredientRow,
   ListRow,
+  NavRow,
   ScoreBadge,
   Screen,
   SearchField,
   SectionHeader,
   ShoppingListRow,
+  SourceVideoCard,
   StepEditor,
   StepRow,
   SyncNotice,
@@ -153,6 +156,36 @@ export default function UiGallery() {
         <ListRow title="Lemon pasta" meta={['No photo, with Score']} score={10} onMore={noop} />
         <ListRow title="Green salad" titleSuffix="10 min" meta={['No photo, no Score']} />
       </View>
+
+      <SectionHeader title="Nav row" />
+      <NavRow icon="document-text-outline" label="Drafts (2)" detail="1 ready to review" onPress={noop} />
+
+      <SectionHeader title="Source video cards" />
+      <SourceVideoCard
+        platform="TikTok"
+        title="Pasta Queen"
+        detail="Watch on TikTok"
+        thumbnailUrl={photo('photo-1546069901-ba9599a7e63c').uri}
+        onPress={noop}
+      />
+      <SourceVideoCard platform="TikTok" title="TikTok video" detail="https://vm.tiktok.com/ZMabc123/" />
+
+      <SectionHeader title="Draft banners" />
+      <DraftBanner kind="building" title="Building this Draft…" message="It’ll be ready in a moment." />
+      <DraftBanner
+        kind="notInCaption"
+        title="Recipe not in caption"
+        message="The caption doesn’t list the ingredients. Fill them in from the video."
+      />
+      <DraftBanner
+        kind="failed"
+        title="Couldn't build this Draft"
+        message="Couldn't reach TikTok."
+        actions={[
+          { label: 'Try again', onPress: noop },
+          { label: 'Fill in by hand', onPress: noop },
+        ]}
+      />
 
       <SectionHeader title="Action buttons" />
       <ActionButtons

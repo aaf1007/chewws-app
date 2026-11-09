@@ -10,14 +10,28 @@ import {
   type ShoppingListItemId,
   type UserId,
 } from '../src/data';
-import { createTestAccount, createTestClient, signInAttacker, type TestAccount } from './access-harness';
+import {
+  createTestAccount,
+  createTestClient,
+  inProcessDraftBuilds,
+  signInAttacker,
+  type DraftBuilds,
+  type DraftFakes,
+  type TestAccount,
+} from './access-harness';
 
-export type TestUser = { userId: UserId; data: DataLayer };
+export type { DraftBuilds, DraftFakes };
 
-/** A fresh signed-in user. Behaviour tests reach the app only through `data`, its data-layer actions. */
-export async function signInTestUser(label = 'user'): Promise<TestUser> {
-  const { userId, data } = await signInAttacker(label);
-  return { userId, data };
+export type TestUser = { userId: UserId; data: DataLayer; drafts: DraftBuilds };
+
+/**
+ * A fresh signed-in user. Behaviour tests reach the app only through `data`, its data-layer
+ * actions. Their saved links build in-process with `fakes` (canned TikTok videos and Claude
+ * answers by default), with no network; `drafts.settled()` waits for those builds.
+ */
+export async function signInTestUser(label = 'user', fakes: DraftFakes = {}): Promise<TestUser> {
+  const { userId, data, drafts } = await signInAttacker(label, fakes);
+  return { userId, data, drafts };
 }
 
 /** Sessions waiting, directly or through others, on the session with this pid. Live, never cached. */
@@ -97,6 +111,35 @@ export async function holdShoppingListRemoval(itemId: ShoppingListItemId): Promi
   return { waitForWaiting, commit };
 }
 
+/** Runs one statement on the database as its owner, for the few things no action can reach. */
+async function asDatabaseOwner<T extends pg.QueryResultRow>(sql: string, params: unknown[]) {
+  const db = new pg.Client({ connectionString: inject('supabase').dbUrl });
+  await db.connect();
+  try {
+    return (await db.query<T>(sql, params)).rows;
+  } finally {
+    await db.end();
+  }
+}
+
+/** How many link saves a user has made (ticket 07 counts them for the daily limit). */
+export async function countLinkSaves(user: Pick<TestUser, 'userId'>): Promise<number> {
+  const rows = await asDatabaseOwner<{ count: number }>(
+    'select count(*)::int as count from public.link_saves where user_id = $1',
+    [user.userId],
+  );
+  return rows[0].count;
+}
+
+/** The Draft's current build was claimed `minutes` ago, as if it had been running that long. */
+export async function backdateDraftBuild(recipeId: string, minutes: number): Promise<void> {
+  await asDatabaseOwner(
+    `update public.recipes set build_started_at = now() - make_interval(mins => $2)
+     where id = $1 and build_started_at is not null`,
+    [recipeId, minutes],
+  );
+}
+
 /**
  * A request that left a phone: whose session it carried (the `sub` of its `Authorization` bearer
  * token, read without checking it; null for none, as with the anon key) and its path, such as
@@ -137,6 +180,11 @@ export type TestPhone = TestUser & {
    * before it goes out until `release()` is called; `reached` resolves when it's waiting.
    */
   holdNextRequest(text: string): { reached: Promise<void>; release(): void };
+  /**
+   * The phone's next request that names `text` reaches the server and is carried out, but its
+   * answer is lost on the way back (the signal drops): the phone sees a network failure.
+   */
+  loseNextAnswer(text: string): void;
   /** Every request that has left this phone (with a signal), in order, faulted ones included. */
   requestsMade(): SentRequest[];
   /** Sets the phone's clock; list changes made from now on are stamped from it. */
@@ -198,6 +246,8 @@ export type PhoneOptions = {
    * Off by default: tests then decide when a session is refreshed.
    */
   autoRefreshToken?: boolean;
+  /** The fakes the phone's Draft builds use (see `signInTestUser`). */
+  fakes?: DraftFakes;
 };
 
 /**
@@ -208,7 +258,7 @@ export type PhoneOptions = {
 export async function signInOnPhones(
   label: string,
   count: number,
-  { autoRefreshToken = false }: PhoneOptions = {},
+  { autoRefreshToken = false, fakes = {} }: PhoneOptions = {},
 ): Promise<TestPhone[]> {
   const account = await createTestAccount(label);
   return Promise.all(
@@ -224,6 +274,7 @@ export async function signInOnPhones(
       };
       const holds = new Map<string, { reached(): void; released: Promise<void> }>();
       const sent: SentRequest[] = [];
+      const answersToLose = new Set<string>();
       const fetchThroughSignal: typeof fetch = async (input, init) => {
         const request = `${input instanceof Request ? input.url : String(input)} ${typeof init?.body === 'string' ? init.body : ''}`;
         for (const [text, hold] of holds) {
@@ -244,6 +295,12 @@ export async function signInOnPhones(
           return Promise.resolve(new Response(JSON.stringify(f.json), { status: f.status, headers }));
         }
         if (f) return Promise.resolve(new Response(`Server error ${f.status}`, { status: f.status }));
+        const lost = [...answersToLose].find((text) => request.includes(text));
+        if (lost !== undefined) {
+          answersToLose.delete(lost);
+          await fetch(input, init);
+          throw new TypeError('Network request failed');
+        }
         return fetch(input, init);
       };
       const network = {
@@ -259,6 +316,7 @@ export async function signInOnPhones(
           return { reached: reached.promise, release: released.resolve };
         },
         requestsMade: () => [...sent],
+        loseNextAnswer: (text: string) => void answersToLose.add(text),
       };
       const first = createPhone(new Map(), new Map());
       await first.data.signInWithPassword(account);
@@ -311,13 +369,16 @@ export async function signInOnPhones(
           },
         };
         const client = createTestClient(fetchThroughSignal, authClientStorage, { autoRefreshToken });
+        const { drafts, startDraftBuild } = inProcessDraftBuilds(fakes);
         const data = createDataLayer(client, {
           storage,
           sessionStorage,
           now: () => (clock === null ? Date.now() : clock),
+          startDraftBuild,
         });
         return {
           data,
+          drafts,
           ...network,
           setClock: (at) => void (clock = at.getTime()),
           saved: () => new Map(items),

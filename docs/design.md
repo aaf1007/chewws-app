@@ -51,5 +51,8 @@ Also: `spacing` (`xxs` 2 to `xxl` 32), `radii` (`sm`, `md` 10, `lg`, `sheet` 24,
 | `IngredientRow`  | An Ingredient's name with an optional action at its right ("Used up", "Remove"), over a hairline   |
 | `ShoppingListRow` | A Shopping List line: optional check circle, name with muted detail lines (each Recipe's amounts), optional action; checked lines are muted and struck through |
 | `SyncNotice`     | Gray rounded notice that list changes are waiting to sync: a slashed cloud while offline, arrows while sending, a clock while waiting to retry after a server error |
+| `NavRow`         | A row that opens another screen: accent icon, bold label ("Drafts (2)"), muted detail, chevron |
+| `SourceVideoCard` | Bordered card for the video a Recipe came from: portrait thumbnail (or placeholder), platform overline, creator, accent "Watch on TikTok"; opens the video when pressed |
+| `DraftBanner`    | Gray rounded banner on a Draft: building (hourglass), recipe not in caption (accent page), failed (red alert), with a bold title, muted message and small accent actions ("Try again") |
 | `EmptyState`     | Centred icon, title and message for a screen with nothing in it yet                                |
 | `tabScreenOptions`, `tabIcon` | The signed-in tab bar's style and icons                                               |

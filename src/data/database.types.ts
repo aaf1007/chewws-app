@@ -52,6 +52,35 @@ export type Database = {
         }
         Relationships: []
       }
+      link_saves: {
+        Row: {
+          id: string
+          recipe_id: string | null
+          saved_at: string
+          user_id: string
+        }
+        Insert: {
+          id?: string
+          recipe_id?: string | null
+          saved_at?: string
+          user_id: string
+        }
+        Update: {
+          id?: string
+          recipe_id?: string | null
+          saved_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "link_saves_recipe_id_fkey"
+            columns: ["recipe_id"]
+            isOneToOne: false
+            referencedRelation: "recipes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       pantry_entries: {
         Row: {
           created_at: string
@@ -140,6 +169,12 @@ export type Database = {
       }
       recipes: {
         Row: {
+          build_attempts: number
+          build_failure:
+            | Database["public"]["Enums"]["draft_build_failure"]
+            | null
+          build_started_at: string | null
+          build_status: Database["public"]["Enums"]["draft_build_status"]
           created_at: string
           id: string
           owner_id: string
@@ -150,6 +185,12 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          build_attempts?: number
+          build_failure?:
+            | Database["public"]["Enums"]["draft_build_failure"]
+            | null
+          build_started_at?: string | null
+          build_status?: Database["public"]["Enums"]["draft_build_status"]
           created_at?: string
           id?: string
           owner_id?: string
@@ -160,6 +201,12 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          build_attempts?: number
+          build_failure?:
+            | Database["public"]["Enums"]["draft_build_failure"]
+            | null
+          build_started_at?: string | null
+          build_status?: Database["public"]["Enums"]["draft_build_status"]
           created_at?: string
           id?: string
           owner_id?: string
@@ -276,6 +323,65 @@ export type Database = {
         }
         Relationships: []
       }
+      source_videos: {
+        Row: {
+          caption: string | null
+          creator_name: string | null
+          creator_url: string | null
+          external_id: string | null
+          fetched_at: string | null
+          id: string
+          original_url: string
+          pasted_text: string | null
+          platform: Database["public"]["Enums"]["source_platform"]
+          recipe_id: string
+          recipe_site_url: string | null
+          screenshot_path: string | null
+          thumbnail_url: string | null
+          title: string | null
+        }
+        Insert: {
+          caption?: string | null
+          creator_name?: string | null
+          creator_url?: string | null
+          external_id?: string | null
+          fetched_at?: string | null
+          id?: string
+          original_url: string
+          pasted_text?: string | null
+          platform: Database["public"]["Enums"]["source_platform"]
+          recipe_id: string
+          recipe_site_url?: string | null
+          screenshot_path?: string | null
+          thumbnail_url?: string | null
+          title?: string | null
+        }
+        Update: {
+          caption?: string | null
+          creator_name?: string | null
+          creator_url?: string | null
+          external_id?: string | null
+          fetched_at?: string | null
+          id?: string
+          original_url?: string
+          pasted_text?: string | null
+          platform?: Database["public"]["Enums"]["source_platform"]
+          recipe_id?: string
+          recipe_site_url?: string | null
+          screenshot_path?: string | null
+          thumbnail_url?: string | null
+          title?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "source_videos_recipe_id_fkey"
+            columns: ["recipe_id"]
+            isOneToOne: true
+            referencedRelation: "recipes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       staples: {
         Row: {
           created_at: string
@@ -327,6 +433,7 @@ export type Database = {
         Args: { changed_at?: string; item_id: string }
         Returns: string
       }
+      claim_draft_build: { Args: { recipe_id: string }; Returns: Json }
       create_recipe: {
         Args: { lines: Json; steps: string[]; title: string }
         Returns: string
@@ -335,11 +442,35 @@ export type Database = {
         Args: { lines: Json; recipe_id: string; steps: string[]; title: string }
         Returns: string
       }
+      fail_draft: {
+        Args: {
+          reason: Database["public"]["Enums"]["draft_build_failure"]
+          recipe_id: string
+        }
+        Returns: boolean
+      }
+      finish_draft: {
+        Args: { recipe_id: string; result: Json }
+        Returns: boolean
+      }
       has_ingredient: { Args: { ingredient_id: string }; Returns: boolean }
       ingredients_i_have: { Args: never; Returns: string[] }
       remove_recipe_from_shopping_list: {
         Args: { recipe_id: string }
         Returns: undefined
+      }
+      retry_draft: { Args: { recipe_id: string }; Returns: string }
+      review_draft: {
+        Args: { lines: Json; recipe_id: string; steps: string[]; title: string }
+        Returns: string
+      }
+      save_from_link: {
+        Args: {
+          platform: Database["public"]["Enums"]["source_platform"]
+          recipe_id: string
+          url: string
+        }
+        Returns: Json
       }
       uncheck: {
         Args: { changed_at?: string; item_id: string }
@@ -347,7 +478,15 @@ export type Database = {
       }
     }
     Enums: {
+      draft_build_failure:
+        | "source_unavailable"
+        | "source_unreachable"
+        | "unreadable"
+        | "timed_out"
+        | "not_set_up"
+      draft_build_status: "building" | "built" | "failed"
       recipe_status: "draft" | "reviewed"
+      source_platform: "tiktok" | "youtube" | "instagram" | "web"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -478,7 +617,16 @@ export const Constants = {
   },
   public: {
     Enums: {
+      draft_build_failure: [
+        "source_unavailable",
+        "source_unreachable",
+        "unreadable",
+        "timed_out",
+        "not_set_up",
+      ],
+      draft_build_status: ["building", "built", "failed"],
       recipe_status: ["draft", "reviewed"],
+      source_platform: ["tiktok", "youtube", "instagram", "web"],
     },
   },
 } as const
