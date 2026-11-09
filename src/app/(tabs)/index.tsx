@@ -4,7 +4,7 @@ import { FlatList, View } from 'react-native';
 
 import { messageOf } from '@/auth/errors';
 import { cookedDetail } from '@/components/cook-log-copy';
-import type { DraftSummary, RecipeSummary } from '@/data';
+import type { DraftSummary, RecipeSummary, Tag } from '@/data';
 import { data } from '@/data/app';
 import {
   EmptyState,
@@ -28,7 +28,7 @@ const FILTERS = [
 
 type LibraryState =
   | { status: 'loading' }
-  | { status: 'loaded'; recipes: RecipeSummary[]; drafts: DraftSummary[]; allCooked: boolean }
+  | { status: 'loaded'; recipes: RecipeSummary[]; drafts: DraftSummary[]; tags: Tag[]; allCooked: boolean }
   | { status: 'error'; message: string };
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -51,6 +51,9 @@ function draftsDetail(drafts: DraftSummary[]): string {
     .filter(Boolean)
     .join(' · ');
 }
+
+/** "Italian, quick, Weeknight" for the Tags row, or that there are none yet. */
+const tagsDetail = (tags: Tag[]) => (tags.length === 0 ? 'None yet' : tags.map((t) => t.name).join(', '));
 
 /**
  * The Recipes a filter shows, searched when the user has typed something: Want to Cook; Saved, the
@@ -140,8 +143,8 @@ export default function Library() {
       let live = true;
       const allCooked = async (recipes: RecipeSummary[]) =>
         filter === 'saved' && searched.trim() === '' && recipes.length === 0 && (await hasCooked());
-      Promise.all([recipesFor(filter, searched), data.listDrafts()])
-        .then(async ([recipes, drafts]) => ({ recipes, drafts, allCooked: await allCooked(recipes) }))
+      Promise.all([recipesFor(filter, searched), data.listDrafts(), data.listTags()])
+        .then(async ([recipes, drafts, tags]) => ({ recipes, drafts, tags, allCooked: await allCooked(recipes) }))
         .then((loaded) => live && setState({ status: 'loaded', ...loaded }))
         .catch((e: unknown) => live && setState({ status: 'error', message: messageOf(e) }));
       return () => {
@@ -165,6 +168,14 @@ export default function Library() {
           testID="drafts-row"
         />
       ) : null}
+      {/* Always there, so a Tag on no Recipe can still be found and deleted (issue 22). */}
+      <NavRow
+        icon="pricetags-outline"
+        label="Tags"
+        detail={state.status === 'loaded' ? tagsDetail(state.tags) : undefined}
+        onPress={() => router.push('/tags')}
+        testID="tags-row"
+      />
       <FilterTiles options={FILTERS} value={filter} onChange={setFilter} />
       {state.status === 'error' ? <Text tone="danger">{state.message}</Text> : null}
       {state.status === 'loaded' && state.recipes.length === 0 ? emptyStateOf(filter, searched, state.allCooked) : null}
