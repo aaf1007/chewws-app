@@ -1,0 +1,109 @@
+# Ticket 22: Delete a Tag. The dev user's five Recipes are Tagged Weeknight, Garlic bread Italian
+# too, and Leftovers is on none (scripts/dev-tagged-recipes.js). Library > Tags shows each Tag with
+# its count; deleting Weeknight asks first, naming its Recipes, and it goes from the list, from the
+# Tags row and from search. Typed again on Garlic bread as "WeekNight", it's a new Tag spelled that
+# way. Deleting the rest leaves the empty state.
+# Run with `npm run e2e -- .maestro/22-delete-a-tag.yaml`.
+appId: com.ant1007.recipeapp
+---
+- runScript: scripts/dev-tagged-recipes.js
+- runFlow: subflows/sign-in-dev.yaml
+
+# The Library's Tags row names the user's Tags, and opens them with their counts.
+- extendedWaitUntil:
+    visible: "Tags, Italian, Leftovers, Weeknight"
+    timeout: 10000
+- tapOn:
+    id: "tags-row"
+- extendedWaitUntil:
+    visible: "Weeknight, 5 Recipes"
+    timeout: 10000
+- assertVisible: "Italian, 1 Recipe"
+- assertVisible: "Leftovers, 0 Recipes"
+
+# Deleting Weeknight asks first, naming the first three of its Recipes and how many more.
+- tapOn: "Delete: Weeknight"
+- extendedWaitUntil:
+    visible: "Delete “Weeknight”?"
+    timeout: 10000
+- assertVisible: "It comes off “Dal”, “Garlic bread”, “Ramen” and 2 more."
+- tapOn: "Delete"
+- extendedWaitUntil:
+    notVisible: "Weeknight, 5 Recipes"
+    timeout: 10000
+- assertVisible: "Italian, 1 Recipe"
+- assertVisible: "Leftovers, 0 Recipes"
+
+# Gone from the Tags row, and search no longer finds a Recipe by it.
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "Tags, Italian, Leftovers"
+    timeout: 10000
+- tapOn: "Search your Recipes"
+- inputText: "weeknight"
+- extendedWaitUntil:
+    visible: "No matches\\..*"
+    timeout: 10000
+- eraseText: 10
+- hideKeyboard
+
+# Typed again on Garlic bread in a new spelling: a new Tag, spelled the new way.
+- extendedWaitUntil:
+    visible: "Garlic bread, 0 ingredients · 1 step"
+    timeout: 10000
+- tapOn: "Garlic bread, 0 ingredients · 1 step"
+- scrollUntilVisible:
+    element:
+      id: "add-tag"
+    direction: DOWN
+- assertVisible: "Italian"
+- assertNotVisible: "Remove Weeknight"
+- tapOn:
+    id: "add-tag"
+- inputText: "WeekNight"
+- tapOn:
+    id: "add-tag-submit"
+- extendedWaitUntil:
+    visible: "Remove WeekNight"
+    timeout: 10000
+- hideKeyboard
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "Tags, Italian, Leftovers, WeekNight"
+    timeout: 10000
+- tapOn:
+    id: "tags-row"
+- extendedWaitUntil:
+    visible: "WeekNight, 1 Recipe"
+    timeout: 10000
+
+# A Tag on no Recipe says so; deleting every Tag leaves the empty state.
+- tapOn: "Delete: Leftovers"
+- extendedWaitUntil:
+    visible: "Delete “Leftovers”?"
+    timeout: 10000
+- assertVisible: "It isn’t on any Recipe."
+- tapOn: "Delete"
+- extendedWaitUntil:
+    notVisible: "Leftovers, 0 Recipes"
+    timeout: 10000
+- tapOn: "Delete: Italian"
+- extendedWaitUntil:
+    visible: "It comes off “Garlic bread”."
+    timeout: 10000
+- tapOn: "Delete"
+- extendedWaitUntil:
+    notVisible: "Italian, 1 Recipe"
+    timeout: 10000
+- tapOn: "Delete: WeekNight"
+- extendedWaitUntil:
+    visible: "Delete “WeekNight”?"
+    timeout: 10000
+- tapOn: "Delete"
+- extendedWaitUntil:
+    visible: "No Tags yet"
+    timeout: 10000
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "Tags, None yet"
+    timeout: 10000

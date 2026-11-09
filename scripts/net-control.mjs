@@ -18,7 +18,7 @@
 // Cooked Recipes, two of them ranked), and /plans-with-sam and /sam-marks-plan-cooked (ticket 18:
 // two Cook Plans with sam; sam marking the newest one cooked), and /sam-cooked-and-ranked and
 // /sam-unfriends-dev (ticket 19: sam a Friend with Cook Logs and a Ranking; sam unfriending the dev
-// user); nothing else. Listens on 127.0.0.1 only.
+// user), and /dev-tagged-recipes (ticket 22: the dev user's Tagged Recipes); nothing else. Listens on 127.0.0.1 only.
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
@@ -52,6 +52,7 @@ const commands = {
   '/sam-marks-plan-cooked': [process.execPath, [script('./e2e-db.mjs'), 'sam-marks-plan-cooked']],
   '/sam-cooked-and-ranked': [process.execPath, [script('./e2e-db.mjs'), 'sam-cooked-and-ranked']],
   '/sam-unfriends-dev': [process.execPath, [script('./e2e-db.mjs'), 'sam-unfriends-dev']],
+  '/dev-tagged-recipes': [process.execPath, [script('./e2e-db.mjs'), 'dev-tagged-recipes']],
 };
 
 createServer((req, res) => {
