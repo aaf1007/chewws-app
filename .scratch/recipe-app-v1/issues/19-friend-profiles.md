@@ -4,8 +4,8 @@
 
 **Blocked by:** 11 (Usernames and Friends), 17 (Ranking).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A Friend's profile shows their username, Ranking with Scores, and Cook Logs
-- [ ] The user can save their own copy of a Recipe from a Friend's profile
-- [ ] Data-layer tests: a Friend can load the profile; a stranger and an unfriended user can't
+- [x] A Friend's profile shows their username, Ranking with Scores, and Cook Logs
+- [x] The user can save their own copy of a Recipe from a Friend's profile
+- [x] Data-layer tests: a Friend can load the profile; a stranger and an unfriended user can't

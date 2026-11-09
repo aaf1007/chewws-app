@@ -6,7 +6,7 @@ export { ComparisonCard } from './comparison-card';
 export { CompanionPicker } from './companion-picker';
 export { CookLogCard } from './cook-log-card';
 export { CookedPrompt, type CookedPromptRecipe } from './cooked-prompt';
-export { DayPicker, formatDay, localToday } from './day-picker';
+export { DayPicker, formatDate, formatDay, localToday } from './day-picker';
 export { DraftBanner, type DraftBannerKind } from './draft-banner';
 export { EmptyState } from './empty-state';
 export { FilterTiles, type FilterTileOption } from './filter-tiles';

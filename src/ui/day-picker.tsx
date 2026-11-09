@@ -24,6 +24,12 @@ export function formatDay(day: Day, today: Day = localToday()): string {
   return day.slice(0, 4) === today.slice(0, 4) ? short : `${short} ${day.slice(0, 4)}`;
 }
 
+/** A day with its year, as the app writes a date: "2 Nov 2026" (day, month, year; no weekday). */
+export function formatDate(day: Day): string {
+  const date = at(day);
+  return `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${day.slice(0, 4)}`;
+}
+
 /**
  * Which day something is planned for, or none: pills for "No day", "Today", "Tomorrow" and the
  * next two weeks ("Sat 2 Nov"), scrolling sideways. A day already chosen outside them (a past one,

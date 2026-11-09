@@ -782,6 +782,23 @@ export async function functionsRestatingTheRecipeReadRule(): Promise<string[]> {
 }
 
 /**
+ * The database functions (public and private), other than the rule itself, that ask
+ * private.can_read_recipe, by name: every way to read another user's Recipe (decisions 14, 19).
+ */
+export async function functionsAskingTheRecipeReadRule(): Promise<string[]> {
+  const rows = await asDatabaseOwner<{ name: string }>(
+    `select distinct n.nspname || '.' || p.proname as name
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'private')
+       and p.proname <> 'can_read_recipe'
+       and p.prosrc ~* 'can_read_recipe\\('
+     order by 1`,
+    [],
+  );
+  return rows.map((r) => r.name);
+}
+
+/**
  * Every row-level policy that reads `cook_plan_members` itself instead of asking
  * private.is_cook_plan_member, as `table: policy name`.
  */

@@ -163,8 +163,9 @@ function RecipeBody({ recipe }: { recipe: Recipe }) {
 }
 
 /**
- * Another member's Recipe, from a Cook Plan (decisions 14): read it, and save your own copy to
- * change, Tag or cook from (ADR-0002). Its Tags, Want to Cook and screenshot stay its owner's.
+ * Someone else's Recipe, from a Cook Plan (decisions 14) or a Friend's profile (decisions 19): read
+ * it, and save your own copy to change, Tag or cook from (ADR-0002), or open the copy you saved.
+ * Its Tags, Want to Cook and screenshot stay its owner's.
  */
 function SomeoneElsesRecipe({ recipe, reload }: { recipe: Extract<Recipe, { status: 'someoneElses' }>; reload: () => void }) {
   const [saving, setSaving] = useState(false);
