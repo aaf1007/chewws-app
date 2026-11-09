@@ -3,14 +3,17 @@
 // wires the real source reader, Claude and a service-role `rpc`; tests wire fakes.
 
 import { normaliseIngredientName } from '../../../src/data/ingredient-matcher.ts';
-import { ExtractError, type Extract } from './claude-extractor.ts';
-import { SourceError, type SharedLink, type SourceReader } from './source-reader.ts';
+import { ExtractError, type Extract, type Extraction } from './claude-extractor.ts';
+import { SourceError, type SharedLink, type SourceMaterial, type SourceReader } from './source-reader.ts';
 
 /** Why a build failed, as `fail_draft` stores it. */
 export type BuildFailure = 'source_unavailable' | 'source_unreachable' | 'unreadable' | 'timed_out' | 'not_set_up';
 
 /** Calls one of the builder's database functions as the service role, and returns its result. */
-export type Rpc = (fn: 'claim_draft_build' | 'finish_draft' | 'fail_draft', args: Record<string, unknown>) => Promise<unknown>;
+export type Rpc = (
+  fn: 'claim_draft_build' | 'finish_draft' | 'fail_draft' | 'store_source_refresh',
+  args: Record<string, unknown>,
+) => Promise<unknown>;
 
 export type DraftBuilderDeps = {
   rpc: Rpc;
@@ -47,10 +50,24 @@ function failureOf(error: unknown, timedOut: boolean): BuildFailure {
   if (timedOut) return 'timed_out';
   if (error instanceof SourceError) {
     if (error.reason === 'unreadable') return 'unreadable';
+    if (error.reason === 'notSetUp') return 'not_set_up';
     return error.reason === 'unavailable' ? 'source_unavailable' : 'source_unreachable';
   }
   if (error instanceof ExtractError) return error.reason === 'notSetUp' ? 'not_set_up' : 'unreadable';
   return 'unreadable';
+}
+
+/**
+ * Any other link (decisions 04): no Claude call, and a Draft to fill in by hand, titled after the
+ * page (or its host).
+ */
+function plainPage(material: SourceMaterial): Extraction {
+  return {
+    title: material.title ?? new URL(material.originalUrl).hostname.replace(/^www\./u, ''),
+    recipeFound: false,
+    lines: [],
+    steps: [],
+  };
 }
 
 /**
@@ -66,7 +83,7 @@ export async function buildDraft(recipeId: string, deps: DraftBuilderDeps): Prom
   const timer = setTimeout(() => budget.abort(new Error('The build ran out of time.')), deps.budgetMs ?? BUDGET_MS);
   try {
     const material = await deps.readSource(shared, budget.signal);
-    const extraction = await deps.extract(material, budget.signal);
+    const extraction = material.kind === 'page' ? plainPage(material) : await deps.extract(material, budget.signal);
     const lines = extraction.lines.flatMap((line) => {
       const name = normaliseIngredientName(line.ingredient);
       const text = line.text.trim();

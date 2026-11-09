@@ -2,7 +2,7 @@ import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import { Alert } from 'react-native';
 
 import { hasCode, messageOf } from '@/auth/errors';
-import { failureMessage, NOT_IN_CAPTION } from '@/components/draft-copy';
+import { failureMessage, notFoundCopy, sourceText } from '@/components/draft-copy';
 import { RecipeForm } from '@/components/recipe-form';
 import { SourceVideoLink } from '@/components/source-video';
 import { useWhileFocused } from '@/components/use-while-focused';
@@ -42,6 +42,8 @@ export default function ReviewDraft() {
     return <Redirect href={{ pathname: '/recipe/[id]', params: { id: recipe.id } }} />;
   }
   const { build } = recipe;
+  const notFound = notFoundCopy(recipe.sourceVideo?.platform);
+  const readFrom = recipe.sourceVideo ? sourceText(recipe.sourceVideo.platform) : 'caption';
 
   const retry = () =>
     data
@@ -51,12 +53,14 @@ export default function ReviewDraft() {
 
   return (
     <Screen title="Review Draft" scroll>
-      {recipe.sourceVideo ? <SourceVideoLink video={recipe.sourceVideo} /> : null}
+      {recipe.sourceVideo ? (
+        <SourceVideoLink recipeId={recipe.id} video={recipe.sourceVideo} recipeTitle={recipe.title} />
+      ) : null}
       {build.status === 'building' ? (
         <DraftBanner
           kind="building"
           title="Building this Draft…"
-          message="Reading the recipe from the caption. It’ll be ready in a moment."
+          message={`Reading the recipe from the ${readFrom}. It’ll be ready in a moment.`}
           testID="draft-building"
         />
       ) : null}
@@ -69,7 +73,7 @@ export default function ReviewDraft() {
         />
       ) : null}
       {build.status === 'built' && !recipe.recipeFound ? (
-        <DraftBanner kind="notInCaption" title={NOT_IN_CAPTION.title} message={NOT_IN_CAPTION.message} testID="not-in-caption" />
+        <DraftBanner kind="notInCaption" title={notFound.title} message={notFound.message} testID="not-in-caption" />
       ) : null}
       {build.status === 'building' ? null : (
         <RecipeForm

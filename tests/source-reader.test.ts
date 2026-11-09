@@ -5,6 +5,7 @@ import { describe, expect, test } from 'vitest';
 
 import { parseExtraction } from '../supabase/functions/_shared/claude-extractor';
 import { detectSource } from '../supabase/functions/_shared/detect-source';
+import { createSafeFetch } from '../supabase/functions/_shared/safe-fetch';
 import { tiktokOEmbedAdapter } from '../supabase/functions/_shared/source-reader';
 
 describe('detectSource', () => {
@@ -97,7 +98,8 @@ function fakeTikTok(redirects: Record<string, string>) {
     if (init?.method !== 'HEAD' || next === undefined) return new Response(null, { status: 200 });
     return new Response(null, { status: 302, headers: { Location: next } });
   };
-  return { fetchFn, requested };
+  // Through the guarded fetch every adapter reads with (ticket 04); every host is a public one here.
+  return { fetchFn: createSafeFetch({ fetch: fetchFn, resolveHost: async () => ['93.184.216.34'] }), requested };
 }
 
 describe('the TikTok adapter following a short link', () => {

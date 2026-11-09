@@ -10,6 +10,7 @@ import type { Database } from '../src/data/database.types';
 import type { Extract } from '../supabase/functions/_shared/claude-extractor';
 import { buildDraft, type BuildOutcome, type Rpc } from '../supabase/functions/_shared/draft-builder';
 import { fixtureAdapters, fixtureExtract } from '../supabase/functions/_shared/draft-fixtures';
+import { refreshSourceVideo } from '../supabase/functions/_shared/source-refresher';
 import { createSourceReader, type SourceAdapters } from '../supabase/functions/_shared/source-reader';
 
 const { url, anonKey, serviceRoleKey } = inject('supabase');
@@ -28,11 +29,14 @@ const serviceRpc: Rpc = async (fn, args) => {
 };
 
 /**
- * The fake boundary for Draft builds (spec, Testing Decisions): the TikTok adapter and the Claude
- * call. By default, the canned videos and answers in supabase/functions/_shared/draft-fixtures.ts.
+ * The fake boundary for Draft builds (spec, Testing Decisions): the source adapters (TikTok,
+ * YouTube, web pages) and the Claude call. By default, the canned videos, pages and answers in
+ * supabase/functions/_shared/draft-fixtures.ts. Refreshing a Source Video reads the same fakes.
  */
 export type DraftFakes = {
   tiktok?: SourceAdapters['tiktok'];
+  youtube?: SourceAdapters['youtube'];
+  page?: SourceAdapters['page'];
   extract?: Extract;
   /** This many of the app's kicks are lost on the way (no signal), starting no build. */
   loseKicks?: number;
@@ -46,8 +50,34 @@ export type DraftBuilds = {
   build(recipeId: string): Promise<BuildOutcome>;
 };
 
+/** The fake adapters: the fixtures, with any of `fakes` in their place. */
+const fakeAdapters = (fakes: DraftFakes): SourceAdapters => ({
+  tiktok: fakes.tiktok ?? fixtureAdapters.tiktok,
+  youtube: fakes.youtube ?? fixtureAdapters.youtube,
+  page: fakes.page ?? fixtureAdapters.page,
+});
+
+/**
+ * What the refresh-source-video function does, in-process with the fakes: it claims the refresh
+ * as the user (`client`, their session), and stores what it read as the service role.
+ */
+export function inProcessSourceRefresh(client: SupabaseClient<Database>, fakes: DraftFakes = {}) {
+  return async (recipeId: string) => {
+    await refreshSourceVideo(recipeId, {
+      claim: async (id) => {
+        const { data, error } = await client.rpc('claim_source_refresh', { recipe_id: id });
+        if (error) throw error;
+        return data;
+      },
+      rpc: serviceRpc,
+      adapters: fakeAdapters(fakes),
+      signal: new AbortController().signal,
+    });
+  };
+}
+
 export function inProcessDraftBuilds(fakes: DraftFakes = {}) {
-  const readSource = createSourceReader({ tiktok: fakes.tiktok ?? fixtureAdapters.tiktok }).read;
+  const readSource = createSourceReader(fakeAdapters(fakes)).read;
   const extract = fakes.extract ?? fixtureExtract;
   const running = new Set<Promise<unknown>>();
   const build = (recipeId: string) => {
@@ -126,7 +156,11 @@ export async function signInAttacker(label = 'user', fakes: DraftFakes = {}): Pr
   const sessionStorage = createSessionStorage(memoryAuthStorage());
   const client = createTestClient(undefined, sessionStorage);
   const { drafts, startDraftBuild } = inProcessDraftBuilds(fakes);
-  const data = createDataLayer(client, { sessionStorage, startDraftBuild });
+  const data = createDataLayer(client, {
+    sessionStorage,
+    startDraftBuild,
+    refreshSourceVideo: inProcessSourceRefresh(client, fakes),
+  });
   const userId = await data.signInWithPassword(account);
   return { userId, data, drafts, client };
 }

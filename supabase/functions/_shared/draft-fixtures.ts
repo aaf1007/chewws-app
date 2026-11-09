@@ -1,16 +1,27 @@
-// Canned TikTok videos and Claude answers, so Drafts build with no network: the data-layer tests
-// use them in-process, and the Maestro flows through the build-draft function when it runs with
-// DRAFT_FIXTURES=1 (scripts/functions.sh e2e; see docs/agents/verify.md). The fake adapter answers
-// only for these videos; the fake Claude call answers only for these captions.
+// Canned TikTok and YouTube videos, web pages and Claude answers, so Drafts build with no network:
+// the data-layer tests use them in-process, and the Maestro flows through the build-draft and
+// refresh-source-video functions when they run with DRAFT_FIXTURES=1 (scripts/functions.sh e2e;
+// see docs/agents/verify.md). The fake adapters answer only for these videos and pages (pages go
+// through the real HTML readers); the fake Claude call answers only for these captions and site
+// Recipes.
 
 import { ExtractError, type Extract, type Extraction } from './claude-extractor.ts';
-import { SourceError, type SourceAdapters, type VideoInfo } from './source-reader.ts';
+import { readPage } from './page-reader.ts';
+import { SourceError, type SourceAdapters, type SourceMaterial, type VideoInfo } from './source-reader.ts';
 
 /** A small striped picture, inline, so a Source Video's thumbnail loads with no network. */
 const THUMBNAIL =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAFoAAAB4CAIAAAD9rnJoAAAAuklEQVR42u3QIREAIBAAMHIRhRwIMqFJhCMABoX7Cm92twQrp1dCUaBDhw4dOnTo0KFDhw4dOnTo0KFDhw506NChQ4cOHTp0JHXc1Qg6dOjQoUOHDh06dOjQoUOHDh06dOjQgQ4dOnTo0KFDh46sjrcXQYcOHTp06NChQ4cOHTp06NChQ4cOHTrQoUOHDh06dOjQkdUxZiPo0KFDhw4dOnTo0KFDhw4dOnTo0KFDBzp06NChQ4cOHTqSfBqVr3l16IFuAAAAAElFTkSuQmCC';
 
-type Fixture = { url: string; video: VideoInfo; extraction: Extraction };
+type Fixture = {
+  url: string;
+  video: VideoInfo;
+  extraction: Extraction;
+  /** What the platform says when it's asked again later (a thumbnail URL that has changed). */
+  later?: VideoInfo;
+  /** The caption only links to the recipe: Claude finds it only with the site's Recipe. */
+  recipeOnSite?: boolean;
+};
 
 /** A caption with the whole recipe in it. */
 export const FULL_RECIPE: Fixture = {
@@ -76,20 +87,195 @@ export const UNREADABLE: Fixture = {
   extraction: { title: '', recipeFound: false, lines: [], steps: [] },
 };
 
-const FIXTURES = [FULL_RECIPE, LINK_IN_BIO, UNREADABLE];
+const SHAKSHUKA: Extraction = {
+  title: 'Shakshuka',
+  recipeFound: true,
+  lines: [
+    { text: '2 tbsp olive oil', amount: '2 tbsp', ingredient: 'olive oil' },
+    { text: '1 onion, diced', amount: '1', ingredient: 'onion' },
+    { text: '2 cloves garlic, sliced', amount: '2 cloves', ingredient: 'garlic' },
+    { text: '1 tsp ground cumin', amount: '1 tsp', ingredient: 'ground cumin' },
+    { text: '1 can (400g) crushed tomatoes', amount: '1 can (400g)', ingredient: 'crushed tomatoes' },
+    { text: '4 eggs', amount: '4', ingredient: 'eggs' },
+    { text: "a handful of Rosa's feta", amount: 'a handful', ingredient: 'feta' },
+  ],
+  steps: [
+    'Soften the onion and garlic in the oil.',
+    'Add the cumin and tomatoes and simmer for 10 minutes.',
+    'Make four wells, crack in the eggs, cover and cook until set.',
+    'Crumble over the feta.',
+  ],
+};
 
-/** TikTok as the fixtures have it: any other video is unavailable, as a deleted one is. */
-export const fixtureAdapters: SourceAdapters = {
-  async tiktok(url) {
-    const fixture = FIXTURES.find((f) => f.url === url);
-    if (!fixture) throw new SourceError('unavailable', `No fixture for ${url}.`);
-    return fixture.video;
+/** A canned web page; `extraction` is Claude's canned answer for its Recipe. */
+type PageFixture = { url: string; html: string; extraction?: Extraction };
+
+/** A recipe site's page: a schema.org Recipe in an `@graph`, with its method in sections. */
+export const SHAKSHUKA_PAGE: PageFixture = {
+  url: 'https://cooking.example.com/recipes/shakshuka',
+  html: `<!doctype html>
+<html><head>
+<title>Rosa&#39;s Shakshuka | Cooking Example</title>
+<meta property="og:title" content="Rosa&#39;s Shakshuka">
+<meta property="og:image" content="${THUMBNAIL}">
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@graph": [
+  {"@type": "WebPage", "@id": "https://cooking.example.com/recipes/shakshuka", "name": "Rosa's Shakshuka"},
+  {"@type": ["Recipe", "NewsArticle"], "name": "Rosa&#39;s Shakshuka",
+   "author": {"@type": "Person", "name": "Rosa Martínez"},
+   "image": ["${THUMBNAIL}"],
+   "recipeIngredient": ["2 tbsp olive oil", "1 onion, diced", "2 cloves garlic, sliced", "1 tsp ground cumin",
+     "1 can (400g) crushed tomatoes", "4 eggs", "a handful of Rosa&#39;s feta"],
+   "recipeInstructions": [
+     {"@type": "HowToSection", "name": "The sauce", "itemListElement": [
+       {"@type": "HowToStep", "text": "Soften the onion and garlic in the oil."},
+       {"@type": "HowToStep", "text": "Add the cumin and tomatoes and simmer for 10 minutes."}]},
+     {"@type": "HowToSection", "name": "The eggs", "itemListElement": [
+       {"@type": "HowToStep", "text": "Make four wells, crack in the eggs, cover &amp; cook until set."},
+       {"@type": "HowToStep", "text": "Crumble over the feta."}]}]}
+]}
+</script>
+</head><body><h1>Rosa's Shakshuka</h1></body></html>`,
+  extraction: SHAKSHUKA,
+};
+
+/** Any other page: no recipe on it, just a title and a picture. */
+export const PLAIN_PAGE: PageFixture = {
+  url: 'https://blog.example.org/my-kitchen-tour',
+  html: `<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<title>Blog – Example</title>
+<meta content="My kitchen tour &amp; favourite tools" property="og:title">
+<meta property='og:image' content='${THUMBNAIL}'>
+</head><body><p>Come see my kitchen.</p></body></html>`,
+};
+
+const PAGES = [SHAKSHUKA_PAGE, PLAIN_PAGE];
+
+/** A TikTok whose caption links to a recipe site (and to Instagram, which isn't followed). */
+export const SITE_LINK: Fixture = {
+  url: 'https://www.tiktok.com/@brunchclub/video/7400000000000000004',
+  video: {
+    externalId: '7400000000000000004',
+    caption:
+      'Sunday shakshuka 🍳 Follow me on https://www.instagram.com/brunchclub/ and get the full recipe on my blog → https://cooking.example.com/recipes/shakshuka #brunch',
+    creatorName: 'Brunch Club',
+    creatorUrl: 'https://www.tiktok.com/@brunchclub',
+    thumbnailUrl: THUMBNAIL,
+  },
+  extraction: SHAKSHUKA,
+  recipeOnSite: true,
+};
+
+/** A YouTube Short with the whole recipe in its description. */
+export const YOUTUBE_SHORT: Fixture = {
+  url: 'https://www.youtube.com/shorts/LemonPasta1',
+  video: {
+    externalId: 'LemonPasta1',
+    title: 'Lemon pasta in 10 minutes #shorts',
+    caption:
+      'The easiest lemon pasta 🍋\n\nIngredients:\n- 200g linguine\n- 1 lemon (zest and juice)\n- 2 tbsp olive oil\n- 30g parmesan, grated\n- black pepper\n\nCook the linguine. Toss it with the lemon, oil and parmesan. Season with pepper.\n\n#shorts #pasta',
+    creatorName: 'Lemon Kitchen',
+    creatorUrl: 'https://www.youtube.com/channel/UCLemonKitchen0000000000',
+    thumbnailUrl: THUMBNAIL,
+  },
+  extraction: {
+    title: 'Lemon pasta',
+    recipeFound: true,
+    lines: [
+      { text: '200g linguine', amount: '200g', ingredient: 'linguine' },
+      { text: '1 lemon (zest and juice)', amount: '1', ingredient: 'lemon' },
+      { text: '2 tbsp olive oil', amount: '2 tbsp', ingredient: 'olive oil' },
+      { text: '30g parmesan, grated', amount: '30g', ingredient: 'parmesan' },
+      { text: 'black pepper', amount: null, ingredient: 'black pepper' },
+    ],
+    steps: ['Cook the linguine.', 'Toss it with the lemon, oil and parmesan.', 'Season with pepper.'],
   },
 };
 
-/** Claude as the fixtures have it: the canned answer for each canned caption. */
-export const fixtureExtract: Extract = async (material) => {
+/**
+ * A YouTube video whose stored thumbnail URL no longer loads (`.invalid` never resolves); asked
+ * again, YouTube gives a new one.
+ */
+export const EXPIRED_THUMBNAIL: Fixture = {
+  url: 'https://youtu.be/OldThumbnl1',
+  video: {
+    externalId: 'OldThumbnl1',
+    title: 'Garlic butter rice',
+    caption: 'Garlic butter rice: 1 cup rice, 2 tbsp butter, 3 cloves garlic. Cook the rice, then stir in the garlic butter.',
+    creatorName: 'Rice Guy',
+    creatorUrl: 'https://www.youtube.com/channel/UCRiceGuy00000000000000',
+    thumbnailUrl: 'https://thumbnails.invalid/vi/OldThumbnl1/expired.jpg',
+  },
+  later: {
+    externalId: 'OldThumbnl1',
+    title: 'Garlic butter rice',
+    caption: 'Garlic butter rice: 1 cup rice, 2 tbsp butter, 3 cloves garlic. Cook the rice, then stir in the garlic butter.',
+    creatorName: 'Rice Guy',
+    creatorUrl: 'https://www.youtube.com/channel/UCRiceGuy00000000000000',
+    thumbnailUrl: THUMBNAIL,
+  },
+  extraction: {
+    title: 'Garlic butter rice',
+    recipeFound: true,
+    lines: [
+      { text: '1 cup rice', amount: '1 cup', ingredient: 'rice' },
+      { text: '2 tbsp butter', amount: '2 tbsp', ingredient: 'butter' },
+      { text: '3 cloves garlic', amount: '3 cloves', ingredient: 'garlic' },
+    ],
+    steps: ['Cook the rice, then stir in the garlic butter.'],
+  },
+};
+
+const FIXTURES = [FULL_RECIPE, LINK_IN_BIO, UNREADABLE, SITE_LINK, YOUTUBE_SHORT, EXPIRED_THUMBNAIL];
+
+const youtubeFixture = (videoId: string) =>
+  FIXTURES.find((f) => f.video.externalId === videoId && !/tiktok\.com/u.test(f.url));
+
+/**
+ * The platforms and pages as the fixtures have them: any other video or page is unavailable, as a
+ * deleted one is. `later`: as they answer when asked again (the refresh-source-video function).
+ */
+function adapters(later: boolean): SourceAdapters {
+  const video = (fixture: Fixture) => (later ? (fixture.later ?? fixture.video) : fixture.video);
+  return {
+    async tiktok(url) {
+      const fixture = FIXTURES.find((f) => f.url === url);
+      if (!fixture) throw new SourceError('unavailable', `No fixture for ${url}.`);
+      return video(fixture);
+    },
+    async youtube(videoId) {
+      const fixture = youtubeFixture(videoId);
+      if (!fixture) throw new SourceError('unavailable', `No fixture for YouTube video ${videoId}.`);
+      return video(fixture);
+    },
+    async page(url) {
+      const page = PAGES.find((p) => p.url === url);
+      if (!page) throw new SourceError('unavailable', `No fixture for ${url}.`);
+      return { url, ...readPage(page.html, url) };
+    },
+  };
+}
+
+export const fixtureAdapters: SourceAdapters = adapters(false);
+
+export const laterFixtureAdapters: SourceAdapters = adapters(true);
+
+const NOT_FOUND = (fixture: Fixture): Extraction => ({ title: fixture.extraction.title, recipeFound: false, lines: [], steps: [] });
+
+/**
+ * Claude as the fixtures have it: the canned answer for each canned caption, or for a recipe
+ * site's Recipe shared directly. A caption that only links to its recipe gives it only when the
+ * site's Recipe came with it, as Claude would.
+ */
+export const fixtureExtract: Extract = async (material: SourceMaterial) => {
+  if (material.caption === null && material.siteRecipe) {
+    const page = PAGES.find((p) => p.url === material.recipeSiteUrl);
+    if (page?.extraction) return page.extraction;
+  }
   const fixture = FIXTURES.find((f) => f.video.caption === material.caption);
   if (!fixture || fixture === UNREADABLE) throw new ExtractError('unreadable', 'No canned answer for this caption.');
+  if (fixture.recipeOnSite && material.siteRecipe === null) return NOT_FOUND(fixture);
   return fixture.extraction;
 };

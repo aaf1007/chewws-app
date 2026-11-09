@@ -1,0 +1,144 @@
+# Ticket 04: saves a YouTube Short, a TikTok whose caption links to a recipe site, a recipe site
+# shared directly, a plain page, and a YouTube video whose stored thumbnail no longer loads.
+# Run with `npm run e2e -- .maestro/04-more-links.yaml`. The functions run with DRAFT_FIXTURES=1
+# (scripts/functions.sh e2e): canned videos, pages and Claude answers, no network. The expired
+# thumbnail points at a `.invalid` host, which never resolves; refreshing it gives a canned one.
+appId: com.ant1007.recipeapp
+---
+- runFlow: subflows/sign-in-dev.yaml
+
+# An Instagram link can't be saved yet (ticket 05).
+- openLink: "recipeapp://save?url=https%3A%2F%2Fwww.instagram.com%2Freel%2FC1a2b3c4d5e%2F"
+- extendedWaitUntil:
+    visible: "Save Recipe"
+    timeout: 10000
+- assertVisible: "Instagram links can’t be saved yet."
+- tapOn: "Cancel"
+
+# A YouTube Short: a Draft from its description, with its channel, shown as from YouTube.
+- openLink: "recipeapp://save?url=https%3A%2F%2Fwww.youtube.com%2Fshorts%2FLemonPasta1"
+- extendedWaitUntil:
+    visible: "YouTube, YouTube video, https://www.youtube.com/shorts/LemonPasta1"
+    timeout: 10000
+- tapOn:
+    id: "save-link"
+- assertVisible: "Saved as a Draft"
+- assertVisible: "It’s being filled in from the description. Review it in Drafts when it’s ready."
+- tapOn: "View Drafts"
+- extendedWaitUntil:
+    visible: "Lemon pasta, Ready to review, YouTube · Lemon Kitchen"
+    timeout: 15000
+- tapOn: "Lemon pasta, Ready to review, YouTube · Lemon Kitchen"
+- extendedWaitUntil:
+    visible: "Review Draft"
+    timeout: 10000
+- assertVisible: "YouTube, Lemon Kitchen, Watch on YouTube"
+- scrollUntilVisible:
+    element: "Mark reviewed"
+    direction: DOWN
+- tapOn: "Mark reviewed"
+- extendedWaitUntil:
+    notVisible: "Review Draft"
+    timeout: 10000
+- assertVisible: "YouTube, Lemon Kitchen, Watch on YouTube"
+- assertVisible: ".*200g linguine.*"
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "No Drafts"
+    timeout: 10000
+- tapOn: "Back"
+
+# Three more links, saved one after the other.
+- openLink: "recipeapp://save?url=https%3A%2F%2Fwww.tiktok.com%2F%40brunchclub%2Fvideo%2F7400000000000000004"
+- extendedWaitUntil:
+    visible: "Save Recipe"
+    timeout: 10000
+- tapOn:
+    id: "save-link"
+- tapOn: "Done"
+- openLink: "recipeapp://save?url=https%3A%2F%2Fcooking.example.com%2Frecipes%2Fshakshuka"
+- extendedWaitUntil:
+    visible: "Link, cooking.example.com, https://cooking.example.com/recipes/shakshuka"
+    timeout: 10000
+- assertVisible: "The app reads the recipe from the page and saves it as a Draft for you to review."
+- tapOn:
+    id: "save-link"
+- tapOn: "Done"
+- openLink: "recipeapp://save?url=https%3A%2F%2Fblog.example.org%2Fmy-kitchen-tour"
+- extendedWaitUntil:
+    visible: "Save Recipe"
+    timeout: 10000
+- tapOn:
+    id: "save-link"
+- tapOn: "Done"
+- openLink: "recipeapp://save?url=https%3A%2F%2Fyoutu.be%2FOldThumbnl1"
+- extendedWaitUntil:
+    visible: "Save Recipe"
+    timeout: 10000
+- tapOn:
+    id: "save-link"
+- tapOn: "Done"
+- extendedWaitUntil:
+    visible:
+      id: "drafts-row"
+    timeout: 10000
+- tapOn:
+    id: "drafts-row"
+
+# Each built as its source allows.
+- extendedWaitUntil:
+    visible: "Shakshuka, Ready to review, TikTok · Brunch Club"
+    timeout: 15000
+- extendedWaitUntil:
+    visible: "Shakshuka, Ready to review, cooking.example.com · Rosa Martínez"
+    timeout: 15000
+- extendedWaitUntil:
+    visible: "My kitchen tour & favourite tools, No recipe on this page, blog.example.org"
+    timeout: 15000
+- extendedWaitUntil:
+    visible: "Garlic butter rice, Ready to review, YouTube · Rice Guy"
+    timeout: 15000
+
+# The stored thumbnail never loads; it is read from YouTube again and the new one shows.
+- tapOn: "Garlic butter rice, Ready to review, YouTube · Rice Guy"
+- extendedWaitUntil:
+    visible:
+      id: "source-video-thumbnail"
+    timeout: 15000
+- assertNotVisible:
+    id: "source-video-placeholder"
+- assertVisible: "YouTube, Rice Guy, Watch on YouTube"
+- tapOn: "Back"
+
+# A plain page: its title and picture, and an empty Draft to fill in.
+- tapOn: "My kitchen tour & favourite tools, No recipe on this page, blog.example.org"
+- extendedWaitUntil:
+    visible:
+      id: "not-in-caption"
+    timeout: 10000
+- assertVisible: "No recipe on this page.*"
+- assertVisible: "blog.example.org, My kitchen tour & favourite tools, Open the page"
+- tapOn: "Back"
+
+# A recipe site shared directly: its schema.org Recipe, by its author.
+- tapOn: "Shakshuka, Ready to review, cooking.example.com · Rosa Martínez"
+- extendedWaitUntil:
+    visible: "cooking.example.com, Rosa Martínez, Open the page"
+    timeout: 10000
+- tapOn: "Back"
+
+# The TikTok whose caption only links to the recipe: built from the site's Recipe.
+- tapOn: "Shakshuka, Ready to review, TikTok · Brunch Club"
+- extendedWaitUntil:
+    visible: "TikTok, Brunch Club, Watch on TikTok"
+    timeout: 10000
+- scrollUntilVisible:
+    element: "Mark reviewed"
+    direction: DOWN
+- tapOn: "Mark reviewed"
+- extendedWaitUntil:
+    notVisible: "Review Draft"
+    timeout: 10000
+- assertVisible: "Shakshuka"
+- assertVisible: ".*1 tsp ground cumin.*"
+- assertVisible: "TikTok, Brunch Club, Watch on TikTok"

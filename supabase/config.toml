@@ -394,6 +394,9 @@ deno_version = 2
 # The Draft builder's Claude key (decisions 03). Locally it comes from supabase/.env; on the hosted
 # project, set it with `supabase secrets set ANTHROPIC_API_KEY=...`. Never an EXPO_PUBLIC_ value.
 ANTHROPIC_API_KEY = "env(ANTHROPIC_API_KEY)"
+# The YouTube Data API key for YouTube links (decisions 04), kept like the Claude key: locally in
+# supabase/.env, on the hosted project with `supabase secrets set YOUTUBE_API_KEY=...`.
+YOUTUBE_API_KEY = "env(YOUTUBE_API_KEY)"
 
 [analytics]
 enabled = true

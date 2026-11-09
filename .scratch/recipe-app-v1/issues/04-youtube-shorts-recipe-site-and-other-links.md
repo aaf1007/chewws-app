@@ -4,12 +4,12 @@
 
 **Blocked by:** 03 (Save a TikTok link into a Draft).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A YouTube Shorts link produces a Draft from the video's description, with thumbnail and channel name
-- [ ] YouTube metadata older than 30 days is re-fetched when the Recipe is viewed
-- [ ] A recipe-site URL found in a caption or description is fetched and its schema.org Recipe used to build the Draft
-- [ ] Sharing a recipe-site link directly produces a Draft from its schema.org Recipe
-- [ ] Any other link saves with a plain preview and an empty Draft to fill in
-- [ ] When a stored TikTok or YouTube thumbnail URL fails to load, it is re-fetched rather than shown broken
-- [ ] Data-layer tests with fake adapters cover: YouTube description → Draft; caption with recipe-site link → Draft from the site's recipe; unknown link → plain preview
+- [x] A YouTube Shorts link produces a Draft from the video's description, with thumbnail and channel name
+- [x] YouTube metadata older than 30 days is re-fetched when the Recipe is viewed
+- [x] A recipe-site URL found in a caption or description is fetched and its schema.org Recipe used to build the Draft
+- [x] Sharing a recipe-site link directly produces a Draft from its schema.org Recipe
+- [x] Any other link saves with a plain preview and an empty Draft to fill in
+- [x] When a stored TikTok or YouTube thumbnail URL fails to load, it is re-fetched rather than shown broken
+- [x] Data-layer tests with fake adapters cover: YouTube description → Draft; caption with recipe-site link → Draft from the site's recipe; unknown link → plain preview
