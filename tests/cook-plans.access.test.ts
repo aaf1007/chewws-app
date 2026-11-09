@@ -222,7 +222,7 @@ test('nobody writes plans, members or plan Recipes directly, not even a member',
 test("a member can't change another member's Recipe, nor see its Tags, Want to Cook, Drafts or screenshot", async () => {
   const { sam, jo, planId, pasta, reel, draft, expectUnchanged } = await plan();
 
-  const edit = await jo.client.rpc('edit_recipe', { recipe_id: pasta, title: 'Mine now', steps: [], lines: [] });
+  const edit = await jo.client.rpc('edit_recipe', { recipe_id: pasta, title: 'Mine now', steps: [], lines: [], list_lines: [] });
   const update = await jo.client.from('recipes').update({ title: 'Mine now' }).eq('id', pasta).select('id');
   const remove = await jo.client.from('recipes').delete().eq('id', pasta).select('id');
   const addLine = await jo.client.from('recipe_lines').insert({

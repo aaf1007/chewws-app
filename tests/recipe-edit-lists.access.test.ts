@@ -10,6 +10,7 @@ import type { CookPlanList, ShoppingList } from '../src/data';
 import type { Json } from '../src/data/database.types';
 import { createTestClient, signInAttacker, type Attacker } from './access-harness';
 import {
+  callersOf,
   cookPlanListFunctionsNotAskingMembership,
   functionsAskingTheRecipeReadRule,
   functionsReadingPantries,
@@ -100,7 +101,7 @@ test("a stranger, a Friend on the shared list and a plan member can't edit the R
 
 test('the owner’s edit must send list lines for exactly the edited Recipe’s Ingredients, or nothing changes', async () => {
   const { sam, bread, planId } = await setting();
-  const edit = (listLines: Json | undefined) =>
+  const edit = (listLines: Json) =>
     sam.client.rpc('edit_recipe', {
       recipe_id: bread,
       title: 'Garlic bread',
@@ -113,7 +114,7 @@ test('the owner’s edit must send list lines for exactly the edited Recipe’s 
     });
 
   for (const listLines of [
-    undefined,
+    null,
     [],
     [{ ingredient_name: 'garlic', amount_texts: ['3 cloves'] }],
     [
@@ -191,6 +192,16 @@ test('the add and remove rules stay written once: adding, removing and editing s
     'public.remove_recipe_from_shopping_list',
   ]);
   expect(await cookPlanListFunctionsNotAskingMembership()).toEqual([]);
+  // The two Cook Plan helpers ask nothing of membership: only a member's add, the remove trigger
+  // (fired by a member's removal) and the owner's edit call them.
+  expect(await callersOf('private.put_recipe_on_cook_plan_list')).toEqual([
+    'private.recipe_lines_edited',
+    'public.add_recipe_to_cook_plan',
+  ]);
+  expect(await callersOf('private.take_recipe_off_cook_plan_lines')).toEqual([
+    'private.recipe_lines_edited',
+    'private.remove_cook_plan_recipe_lines',
+  ]);
   expect(await functionsReadingPantries()).toEqual(['private.ingredients_had']);
   expect(await functionsRestatingTheRecipeReadRule()).toEqual([]);
   expect(await functionsAskingTheRecipeReadRule()).toEqual([
