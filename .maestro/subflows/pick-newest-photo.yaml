@@ -1,0 +1,15 @@
+# Taps "Add screenshot" and picks the newest photo in the system photo picker (top left; a flow
+# adds one with scripts/add-photo.js first), then waits until the app shows it as added.
+#   - runFlow: subflows/pick-newest-photo.yaml
+appId: com.ant1007.recipeapp
+---
+- tapOn:
+    id: "add-screenshot"
+- extendedWaitUntil:
+    visible: "Collections"
+    timeout: 30000
+- tapOn:
+    point: "16%,25%"
+- extendedWaitUntil:
+    visible: "Screenshot added"
+    timeout: 15000

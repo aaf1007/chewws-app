@@ -416,6 +416,14 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      add_caption_to_draft: {
+        Args: {
+          pasted_text?: string
+          recipe_id: string
+          with_screenshot?: boolean
+        }
+        Returns: string
+      }
       add_manual_item: {
         Args: {
           changed_at?: string
@@ -470,9 +478,11 @@ export type Database = {
       }
       save_from_link: {
         Args: {
+          pasted_text?: string
           platform: Database["public"]["Enums"]["source_platform"]
           recipe_id: string
           url: string
+          with_screenshot?: boolean
         }
         Returns: Json
       }
@@ -492,6 +502,8 @@ export type Database = {
         | "unreadable"
         | "timed_out"
         | "not_set_up"
+        | "no_caption"
+        | "source_refused"
       draft_build_status: "building" | "built" | "failed"
       recipe_status: "draft" | "reviewed"
       source_platform: "tiktok" | "youtube" | "instagram" | "web"
@@ -631,6 +643,8 @@ export const Constants = {
         "unreadable",
         "timed_out",
         "not_set_up",
+        "no_caption",
+        "source_refused",
       ],
       draft_build_status: ["building", "built", "failed"],
       recipe_status: ["draft", "reviewed"],

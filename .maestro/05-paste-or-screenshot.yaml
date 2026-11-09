@@ -1,0 +1,175 @@
+# Ticket 05: Instagram via a screenshot or a pasted caption, and the same two paths for sources the
+# app couldn't read. Saves three Instagram Reels (with nothing added; with a caption shared as text;
+# with a screenshot picked from the photo library), a TikTok whose oEmbed gives no caption and a
+# recipe page that answers 402. The Reels build from what was added (or say the recipe isn't in the
+# caption); the TikTok and the page say the app couldn't read them, and build from a screenshot and
+# a typed caption added on the Draft.
+# Run with `npm run e2e -- .maestro/05-paste-or-screenshot.yaml` (not with `maestro test` alone:
+# add-photo.js asks scripts/net-control.mjs, which scripts/e2e.sh runs, to put
+# .maestro/assets/caption-screenshot.jpg in the simulator's photo library). The functions run with
+# DRAFT_FIXTURES=1: canned TikTok, page and Claude answers (any screenshot reads as the miso salmon),
+# no network. The screenshot goes through the local Storage for real.
+appId: com.ant1007.recipeapp
+onFlowStart:
+  - runScript: scripts/add-photo.js
+---
+- runFlow: subflows/sign-in-dev.yaml
+
+# A Reel with nothing added: it saves, as a Draft with no recipe in its caption.
+- openLink: "recipeapp://save?url=https%3A%2F%2Fwww.instagram.com%2Freel%2FC1a2b3c4d5e%2F"
+- extendedWaitUntil:
+    visible: "Instagram, Instagram Reel, https://www.instagram.com/reel/C1a2b3c4d5e/"
+    timeout: 10000
+- assertVisible: "Paste caption"
+- assertVisible:
+    id: "add-screenshot"
+- tapOn:
+    id: "save-link"
+- assertVisible: "There was nothing to read it from, so fill it in from the Reel in Drafts."
+- tapOn: "Done"
+
+# A Reel shared with its caption as text: the caption is filled in, and read.
+- openLink: "recipeapp://save?url=https%3A%2F%2Fwww.instagram.com%2Freel%2FHoneyGarlic1%2F&text=Sticky%20honey%20garlic%20chicken%20%F0%9F%8D%AF%F0%9F%A7%84%20Save%20this%20one%21%0AIngredients%3A%0A-%204%20chicken%20thighs%0A-%203%20tbsp%20honey%0A-%203%20cloves%20garlic%2C%20minced%0A-%202%20tbsp%20soy%20sauce%0A-%201%20tbsp%20butter%0ASear%20the%20chicken%20skin-side%20down%20until%20crisp.%20Add%20the%20butter%2C%20garlic%2C%20honey%20and%20soy%20sauce%20and%20simmer%20until%20sticky."
+- extendedWaitUntil:
+    visible: "Instagram, Instagram Reel, https://www.instagram.com/reel/HoneyGarlic1/"
+    timeout: 10000
+- assertVisible: "Sticky honey garlic chicken.*"
+- tapOn:
+    id: "save-link"
+- assertVisible: "It’s being filled in from what you added. Review it in Drafts when it’s ready."
+- tapOn: "Done"
+
+# A Reel with a screenshot picked from the photo library (the newest photo, the one just added).
+- openLink: "recipeapp://save?url=https%3A%2F%2Fwww.instagram.com%2Freel%2FMisoSalmon1%2F"
+- extendedWaitUntil:
+    visible: "Instagram, Instagram Reel, https://www.instagram.com/reel/MisoSalmon1/"
+    timeout: 10000
+- runFlow: subflows/pick-newest-photo.yaml
+- tapOn:
+    id: "save-link"
+- extendedWaitUntil:
+    visible: "Saved as a Draft"
+    timeout: 15000
+- tapOn: "Done"
+
+# A TikTok whose oEmbed gives no caption, and a recipe page that answers 402.
+- openLink: "recipeapp://save?url=https%3A%2F%2Fwww.tiktok.com%2F%40quietcook%2Fvideo%2F7400000000000000005"
+- extendedWaitUntil:
+    visible: "Save Recipe"
+    timeout: 10000
+- tapOn:
+    id: "save-link"
+- tapOn: "Done"
+- openLink: "recipeapp://save?url=https%3A%2F%2Fpaywall.example.com%2Frecipes%2Ftonkotsu-ramen"
+- extendedWaitUntil:
+    visible: "Save Recipe"
+    timeout: 10000
+- tapOn:
+    id: "save-link"
+- tapOn: "Done"
+- extendedWaitUntil:
+    visible:
+      id: "drafts-row"
+    timeout: 10000
+- tapOn:
+    id: "drafts-row"
+
+# Each as its source allows: the Reels from what was added, the other two couldn't be read.
+- extendedWaitUntil:
+    visible: "Honey garlic chicken, Ready to review, Instagram"
+    timeout: 15000
+- extendedWaitUntil:
+    visible: "Miso-glazed salmon, Ready to review, Instagram"
+    timeout: 15000
+- extendedWaitUntil:
+    visible: "Instagram Reel, Recipe not in caption, Instagram"
+    timeout: 15000
+- extendedWaitUntil:
+    visible: "TikTok video, Couldn't read this TikTok, TikTok"
+    timeout: 15000
+- extendedWaitUntil:
+    visible: "paywall.example.com, Couldn't read this page"
+    timeout: 15000
+- assertVisible: "Couldn't read this TikTok. TikTok didn't share this video's caption. Paste the caption or add a screenshot of it, and the app reads the recipe from that."
+
+# The TikTok: a screenshot added on the Draft builds it.
+- tapOn: "TikTok video, Couldn't read this TikTok, TikTok"
+- extendedWaitUntil:
+    visible:
+      id: "could-not-read"
+    timeout: 10000
+- assertVisible: "TikTok, TikTok video, Watch on TikTok"
+- runFlow: subflows/pick-newest-photo.yaml
+- tapOn:
+    id: "build-from-caption"
+- extendedWaitUntil:
+    visible: "Miso-glazed salmon"
+    timeout: 15000
+- assertNotVisible:
+    id: "could-not-read"
+- tapOn: "Back"
+
+# The page: a caption typed on the Draft builds it, and it's reviewed into the library.
+- tapOn: "paywall.example.com, Couldn't read this page"
+- extendedWaitUntil:
+    visible:
+      id: "could-not-read"
+    timeout: 10000
+- tapOn:
+    id: "paste-caption"
+- inputText: "Garlic noodles: 200g noodles, 4 cloves garlic, 2 tbsp butter, 1 tbsp soy sauce. Fry the garlic in the butter, then toss in the noodles and soy sauce."
+- hideKeyboard
+- tapOn:
+    id: "build-from-caption"
+- extendedWaitUntil:
+    visible: "Garlic noodles"
+    timeout: 15000
+- scrollUntilVisible:
+    element: "Mark reviewed"
+    direction: DOWN
+- tapOn: "Mark reviewed"
+- extendedWaitUntil:
+    notVisible: "Review Draft"
+    timeout: 10000
+- assertVisible: ".*200g noodles.*"
+- assertVisible: "paywall.example.com, Garlic noodles, Open the page"
+- tapOn: "Back"
+
+# The Reel with a screenshot: the screenshot is its picture, before and after review.
+- extendedWaitUntil:
+    visible: "Miso-glazed salmon, Ready to review, Instagram"
+    timeout: 10000
+- tapOn: "Miso-glazed salmon, Ready to review, Instagram"
+- extendedWaitUntil:
+    visible:
+      id: "source-video-thumbnail"
+    timeout: 15000
+- assertVisible: "Instagram, Instagram Reel, Watch on Instagram"
+- scrollUntilVisible:
+    element: "Mark reviewed"
+    direction: DOWN
+- tapOn: "Mark reviewed"
+- extendedWaitUntil:
+    notVisible: "Review Draft"
+    timeout: 10000
+- assertVisible: ".*2 tbsp white miso.*"
+- extendedWaitUntil:
+    visible:
+      id: "source-video-thumbnail"
+    timeout: 15000
+- tapOn: "Back"
+
+# The Reel with nothing added: a plain Instagram card, to fill in by hand.
+- tapOn: "Instagram Reel, Recipe not in caption, Instagram"
+- extendedWaitUntil:
+    visible:
+      id: "not-in-caption"
+    timeout: 10000
+- assertVisible:
+    id: "source-video-placeholder"
+- assertVisible: "Instagram, Instagram Reel, Watch on Instagram"
+# A caption or screenshot can still be added to it, from the banner.
+- tapOn: "Add caption or screenshot"
+- assertVisible:
+    id: "add-screenshot"
+- assertVisible: "Paste caption"
