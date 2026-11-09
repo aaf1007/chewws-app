@@ -136,6 +136,15 @@ export type CaptionInput = { caption?: string | null; screenshot?: ArrayBuffer |
  */
 export type Tag = { id: TagId; name: string };
 
+/**
+ * One of the user's Tags with the Recipes it's on (their own; a Tag is never on a Draft), by
+ * title. A Tag on none has none: it stays the user's until they delete it (decisions 06).
+ */
+export type TagWithRecipes = Tag & { recipes: { id: RecipeId; title: string }[] };
+
+/** What deleting a Tag did: `gone` when it wasn't there to delete (already deleted, or not theirs). */
+export type DeleteTagResult = { status: 'deleted' } | { status: 'gone' };
+
 type RecipeFields = {
   id: RecipeId;
   ownerId: UserId;

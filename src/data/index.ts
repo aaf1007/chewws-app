@@ -58,6 +58,7 @@ export {
   type CopyRecipeResult,
   type CreateCookPlanResult,
   type DeleteCookLogResult,
+  type DeleteTagResult,
   type DismissCookPlanPromptResult,
   type DraftBuild,
   type DraftBuildFailure,
@@ -118,5 +119,6 @@ export {
   type StopSharingShoppingListResult,
   type Tag,
   type TagId,
+  type TagWithRecipes,
   type UserId,
 } from './types';

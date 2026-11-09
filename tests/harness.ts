@@ -734,6 +734,27 @@ export const holdCookPlanRecipeAdd = (user: Someone, planId: string, recipeId: s
 export const holdCookPlanLeave = (user: Someone, planId: string) =>
   holdCallAs(user, 'select public.leave_cook_plan($1)', [planId]);
 
+/** For race tests only: `user` deleting their Tag on another phone, as `deleteTag` does, not committed yet. */
+export const holdTagDelete = (user: Someone, tagId: string) =>
+  holdCallAs(user, 'delete from public.tags where id = $1', [tagId]);
+
+/** For race tests only: `user` putting a Tag on their Recipe by name on another phone (add_tag), not committed yet. */
+export const holdTagAdd = (user: Someone, recipeId: string, name: string) =>
+  holdCallAs(user, 'select public.add_tag($1, $2)', [recipeId, name]);
+
+/**
+ * For race tests only: a second session holding the Recipe's row (`for update`, as deleting it
+ * would) until `release()`. Putting a Tag on that Recipe stops at its foreign-key check of the
+ * Recipe, which `recipe_tags` makes before checking the Tag: after it has found the Tag's id.
+ */
+export async function holdRecipeRow(recipeId: string): Promise<HeldLine> {
+  const { waitForWaiting, release } = await holdInTransaction(
+    'select 1 from public.recipes where id = $1 for update',
+    [recipeId],
+  );
+  return { waitForWaiting, release };
+}
+
 /**
  * `user` and each of `others` are Friends, as if each had asked and been accepted; quicker than
  * asking each. For tests that need many Friends (a Cook Plan's 8 members).
