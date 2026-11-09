@@ -359,6 +359,16 @@ Defaults chosen where the tickets leave things open. Override any by editing thi
   - **Live and offline:** the statement triggers from 13 and 15 announce `changed` on every list the edit wrote. A queued change to a line the edit deleted answers `gone` and is dropped, as for any line removed meanwhile.
   - **Known limit:** a Recipe added when its owner had every Ingredient left nothing on the list, so an edit that adds one they don't have doesn't put it there.
 
+## 22 Delete a Tag
+
+- **Where** (user decision 2 below): a "Tags" row in the Library, under Drafts and above the filter tiles, always shown (its detail names the Tags, or "None yet"), so a Tag on no Recipe can still be found. It opens the Tags screen: each Tag by name with "N Recipes", a Tag on none at "0 Recipes".
+- **As built** (ticket 22):
+  - `listTagsWithRecipes()` reads the user's Tags with the Recipes each is on (`tags` embedding `recipe_tags(recipe:recipes(id, title))`), one query; the count is how many. Only the user's own Recipes: a Tag and the Recipes it's on are always the same user's (06's insert policy), and RLS on `recipe_tags` and `recipes` is owner-only. A Tag is never on a Draft (06), so no Draft is counted or left out.
+  - `deleteTag(tagId)` (06's action, a delete of the `tags` row; the cascade takes it off its Recipes) now answers `{ status: 'deleted' }`, or `{ status: 'gone' }` when it deleted nothing (already deleted, or someone else's), read from the deleted rows.
+  - The confirmation names the first three Recipes the Tag comes off, by title, then "and N more", or says it's on none. A Tag already gone says "“Italian” was already deleted." and the list is read again.
+  - **A delete during an add:** `private.attach_tag` (06) found the Tag's id and then inserted the `recipe_tags` row; a delete committed in between made the insert fail on the foreign key (or the insert policy). It now tries again when the Tag it found has gone, making a fresh Tag spelled as just typed. Once its row is in, the foreign key's lock holds the Tag until the add commits, so a later delete waits and takes the Tag off that Recipe too.
+  - **No Tag filter:** the Library has none; Recipes are found by Tag through search (06), which stops finding them by a deleted Tag's name.
+
 ## User decisions for 21, 22 and the Cook Plan list (2026-11-08)
 
 1. **Issue 21:** after an edit, the list follows the Recipe, as the issue's "Proposed behaviour" says: on the owner's Shopping List (shared with Friends or not) and in every active Cook Plan it's in (§15's flag). Cooked plans stay as they were.
