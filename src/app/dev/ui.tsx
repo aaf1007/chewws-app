@@ -37,6 +37,7 @@ import {
   SyncNotice,
   TagChip,
   TagChips,
+  TagRow,
   Text,
   TextField,
   colors,
@@ -204,6 +205,14 @@ export default function UiGallery() {
           />
         ))}
       </TagChips>
+
+      <SectionHeader title="Tag rows" />
+      <View>
+        <TagRow name="Italian" detail="2 Recipes" onDelete={noop} />
+        <TagRow name="Crème de la crème" detail="1 Recipe" onDelete={noop} />
+        <TagRow name="A Tag with a long name of forty letters" detail="0 Recipes" onDelete={noop} />
+        <TagRow name="No delete" />
+      </View>
 
       <SectionHeader title="Nav row" />
       <NavRow icon="document-text-outline" label="Drafts (2)" detail="1 ready to review" onPress={noop} />

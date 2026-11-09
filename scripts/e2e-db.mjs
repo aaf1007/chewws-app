@@ -69,6 +69,10 @@
 //     logged, not ranked.
 //   node scripts/e2e-db.mjs sam-unfriends-dev
 //     sam unfriends the dev user (unfriend, as sam).
+//   node scripts/e2e-db.mjs dev-tagged-recipes
+//     The dev user writes Dal, Garlic bread, Ramen, Shakshuka and Toast, Tags all five Weeknight and
+//     Garlic bread Italian, and puts Leftovers on Toast and takes it off again, so it's on no Recipe
+//     (ticket 22), all as the dev user, as their phone would.
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -423,6 +427,23 @@ const commands = {
   async 'sam-unfriends-dev'() {
     await asUser(SAM, 'select public.unfriend($1)', [DEV_USER]);
     console.log('sam unfriended the dev user');
+  },
+  async 'dev-tagged-recipes'() {
+    const ids = {};
+    for (const title of ['Dal', 'Garlic bread', 'Ramen', 'Shakshuka', 'Toast']) {
+      const [{ id }] = await asUser(DEV_USER, 'select public.create_recipe($1, $2, $3) as id', [title, ['Cook it.'], '[]']);
+      ids[title] = id;
+    }
+    const tag = async (title, name) => {
+      const [{ added }] = await asUser(DEV_USER, 'select public.add_tag($1, $2) as added', [ids[title], name]);
+      if (!added) throw new Error(`Tagging the dev user's ${title} ${name}: ${JSON.stringify(added)}`);
+      return added.id;
+    };
+    for (const title of Object.keys(ids)) await tag(title, 'Weeknight');
+    await tag('Garlic bread', 'Italian');
+    const leftovers = await tag('Toast', 'Leftovers');
+    await asUser(DEV_USER, 'delete from public.recipe_tags where recipe_id = $1 and tag_id = $2', [ids.Toast, leftovers]);
+    console.log('the dev user has five Recipes Tagged Weeknight, Garlic bread Italian too, and Leftovers on none');
   },
   async 'alex-accepts'() {
     const [{ answer }] = await asUser(ALEX, 'select public.respond_to_friend_request($1, true) as answer', [DEV_USER]);

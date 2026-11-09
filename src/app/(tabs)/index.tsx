@@ -4,7 +4,7 @@ import { FlatList, View } from 'react-native';
 
 import { messageOf } from '@/auth/errors';
 import { cookedDetail } from '@/components/cook-log-copy';
-import type { DraftSummary, RecipeSummary } from '@/data';
+import type { DraftSummary, RecipeSummary, Tag } from '@/data';
 import { data } from '@/data/app';
 import {
   EmptyState,
@@ -51,6 +51,9 @@ function draftsDetail(drafts: DraftSummary[]): string {
     .filter(Boolean)
     .join(' · ');
 }
+
+/** "Italian, quick, Weeknight" for the Tags row, or that there are none yet. */
+const tagsDetail = (tags: Tag[]) => (tags.length === 0 ? 'None yet' : tags.map((t) => t.name).join(', '));
 
 /**
  * The Recipes a filter shows, searched when the user has typed something: Want to Cook; Saved, the
@@ -150,6 +153,22 @@ export default function Library() {
     }, [filter, searched]),
   );
 
+  // The Tags row's Tags, read when the Library comes into focus (Tags change on other screens), not
+  // on each search or filter. A failed read leaves the row without its detail; it still opens.
+  const [tags, setTags] = useState<Tag[] | null>(null);
+  useFocusEffect(
+    useCallback(() => {
+      let live = true;
+      data
+        .listTags()
+        .then((read) => live && setTags(read))
+        .catch(() => undefined);
+      return () => {
+        live = false;
+      };
+    }, []),
+  );
+
   const listTitle =
     searched.trim() !== '' ? 'Results' : filter === 'wantToCook' ? 'Want to Cook' : filter === 'cooked' ? 'Cooked' : 'Recipes';
 
@@ -165,6 +184,15 @@ export default function Library() {
           testID="drafts-row"
         />
       ) : null}
+      {/* Always there, so a Tag on no Recipe can still be found and deleted (issue 22). */}
+      <NavRow
+        icon="pricetags-outline"
+        label="Tags"
+        detail={tags ? tagsDetail(tags) : undefined}
+        accessibilityLabel={tags ? `Tags, ${tags.length}` : 'Tags'}
+        onPress={() => router.push('/tags')}
+        testID="tags-row"
+      />
       <FilterTiles options={FILTERS} value={filter} onChange={setFilter} />
       {state.status === 'error' ? <Text tone="danger">{state.message}</Text> : null}
       {state.status === 'loaded' && state.recipes.length === 0 ? emptyStateOf(filter, searched, state.allCooked) : null}

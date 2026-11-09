@@ -98,6 +98,7 @@ import {
   type CopyRecipeResult,
   type CreateCookPlanResult,
   type DeleteCookLogResult,
+  type DeleteTagResult,
   type DismissCookPlanPromptResult,
   type DraftBuild,
   type DraftBuildFailure,
@@ -152,6 +153,7 @@ import {
   type StopSharingShoppingListResult,
   type Tag,
   type TagId,
+  type TagWithRecipes,
   type UserId,
 } from './types';
 
@@ -2326,10 +2328,36 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     return data.map(toTag).sort(byTagName);
   }
 
-  /** Deletes one of the user's Tags, taking it off every Recipe it was on. Gone already is fine. */
-  async function deleteTag(tagId: TagId): Promise<void> {
-    const { error } = await client.from('tags').delete().eq('id', tagId);
+  /**
+   * The signed-in user's Tags, by name, each with the Recipes it's on, by title: a Tag on none has
+   * none and is still listed. One read; the Recipes are only ever the user's own (RLS on
+   * `recipe_tags` and `recipes`), and never Drafts, which get their Tags on review.
+   */
+  async function listTagsWithRecipes(): Promise<TagWithRecipes[]> {
+    const me = await currentUserId();
+    const { data, error } = await client
+      .from('tags')
+      .select('id, name, recipe_tags(recipe:recipes(id, title))')
+      .eq('owner_id', me);
     if (error) fail(error);
+    return data
+      .map((row) => ({
+        ...toTag(row),
+        recipes: row.recipe_tags
+          .map(({ recipe }) => ({ id: parseRecipeId(recipe.id), title: recipe.title }))
+          .sort((a, b) => compareText(a.title.toLowerCase(), b.title.toLowerCase()) || compareText(a.id, b.id)),
+      }))
+      .sort(byTagName);
+  }
+
+  /**
+   * Deletes one of the user's Tags, taking it off every Recipe it was on. `gone` when there was
+   * nothing to delete: deleted already (on another phone, or a second tap), or not theirs.
+   */
+  async function deleteTag(tagId: TagId): Promise<DeleteTagResult> {
+    const { data, error } = await client.from('tags').delete().eq('id', tagId).select('id');
+    if (error) fail(error);
+    return { status: data.length > 0 ? 'deleted' : 'gone' };
   }
 
   /** Kicks a Draft's build. A kick that fails changes nothing: `resumeDraftBuilds` kicks again. */
@@ -4077,6 +4105,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     addTag,
     removeTag,
     listTags,
+    listTagsWithRecipes,
     deleteTag,
     newDraftId,
     saveFromLink,

@@ -31,6 +31,7 @@ export { SourceVideoCard } from './source-video-card';
 export { StepEditor } from './step-editor';
 export { SyncNotice, type SyncNoticeStatus } from './sync-notice';
 export { SuggestedTagChip, TagChip, TagChips } from './tag-chips';
+export { TagRow } from './tag-row';
 export { StepNumber, StepRow } from './step-row';
 export { tabIcon, tabScreenOptions } from './tab-bar';
 export { Text, type TextProps } from './text';

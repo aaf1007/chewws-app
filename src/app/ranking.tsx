@@ -16,17 +16,17 @@ export default function RankingScreen() {
 
   if (state.status === 'error') {
     return (
-      <Screen title="Your Ranking">
+      <Screen title="Your Ranking" scroll>
         <EmptyState icon="alert-circle-outline" title="Couldn’t load your Ranking" message={state.message} />
       </Screen>
     );
   }
-  if (state.status === 'loading') return <Screen title="Your Ranking" />;
+  if (state.status === 'loading') return <Screen title="Your Ranking" scroll />;
 
   const ranking = state.value;
   if (BANDS.every((band) => ranking[band.value].length === 0)) {
     return (
-      <Screen title="Your Ranking">
+      <Screen title="Your Ranking" scroll>
         <EmptyState
           icon="podium-outline"
           title="Nothing ranked yet"

@@ -10,18 +10,21 @@ export function NavRow({
   label,
   detail,
   onPress,
+  accessibilityLabel,
   testID,
 }: {
   icon: IconName;
   label: string;
   detail?: string;
   onPress: () => void;
+  /** What VoiceOver reads instead of the label and detail, when the detail is long ("Tags, 4"). */
+  accessibilityLabel?: string;
   testID?: string;
 }) {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={[label, detail].filter(Boolean).join(', ')}
+      accessibilityLabel={accessibilityLabel ?? [label, detail].filter(Boolean).join(', ')}
       onPress={onPress}
       testID={testID}
       style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
