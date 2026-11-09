@@ -50,6 +50,10 @@
 //     checked off by the dev user, garlic and egg claimed by them, and both in the dev user's Pantry.
 //   node scripts/e2e-db.mjs sam-removes-shakshuka
 //     sam takes his shakshuka out of that plan (remove_recipe_from_cook_plan, as sam).
+//   node scripts/e2e-db.mjs dev-cooked-recipes
+//     The dev user writes Shakshuka, Dal, Ramen and Toast and logs each cooked yesterday, and ranks
+//     Shakshuka then Dal in Liked (ticket 17), all as the dev user, as their phone would. Ramen and
+//     Toast are Cooked and not ranked yet.
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -323,6 +327,28 @@ const commands = {
     const [{ answer }] = await asUser(SAM, 'select public.remove_recipe_from_cook_plan($1, $2) as answer', [planId, recipe.id]);
     if (answer.status !== 'removed') throw new Error(`sam's removal: ${JSON.stringify(answer)}`);
     console.log('sam took his shakshuka out of the plan');
+  },
+  async 'dev-cooked-recipes'() {
+    const ids = {};
+    for (const title of ['Shakshuka', 'Dal', 'Ramen', 'Toast']) {
+      const [{ id }] = await asUser(DEV_USER, 'select public.create_recipe($1, $2, $3) as id', [title, ['Cook it.'], '[]']);
+      const [{ logged }] = await asUser(
+        DEV_USER,
+        "select public.add_cook_log(gen_random_uuid(), $1, (now() at time zone 'utc')::date - 1) as logged",
+        [id],
+      );
+      if (logged.status !== 'added') throw new Error(`the dev user's ${title}: ${JSON.stringify(logged)}`);
+      ids[title] = id;
+    }
+    for (const [title, position, seen] of [['Shakshuka', 1, []], ['Dal', 2, ['Shakshuka']]]) {
+      const [{ placed }] = await asUser(
+        DEV_USER,
+        "select public.place_in_ranking($1, 'liked', $2, $3::uuid[]) as placed",
+        [ids[title], position, seen.map((t) => ids[t])],
+      );
+      if (placed.status !== 'placed') throw new Error(`ranking ${title}: ${JSON.stringify(placed)}`);
+    }
+    console.log('the dev user has four Cooked Recipes, Shakshuka and Dal ranked in Liked');
   },
   async 'alex-accepts'() {
     const [{ answer }] = await asUser(ALEX, 'select public.respond_to_friend_request($1, true) as answer', [DEV_USER]);

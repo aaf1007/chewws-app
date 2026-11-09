@@ -1,0 +1,149 @@
+# Ticket 17: Ranking. The dev user has four Cooked Recipes, Shakshuka and Dal already ranked in
+# Liked (scripts/dev-cooked-recipes.js). They rank Ramen by answering comparisons, rank Toast with
+# Skip, view their Ranking with Scores, re-rank Dal into Fine, and delete Toast's only Cook Log: the
+# warning says it leaves the Ranking, and it does.
+# Run with `npm run e2e -- .maestro/17-ranking.yaml` (dev-cooked-recipes.js asks
+# scripts/net-control.mjs, which scripts/e2e.sh runs). One phone, no network: that a Friend reads
+# the Ranking, and a stranger doesn't, is proved in tests/ranking.test.ts and
+# tests/ranking.access.test.ts until ticket 19's Friend profile.
+appId: com.ant1007.recipeapp
+---
+- runScript: scripts/dev-cooked-recipes.js
+- runFlow: subflows/sign-in-dev.yaml
+
+# Ramen: Liked, then better than Dal and worse than Shakshuka, so second of three.
+- extendedWaitUntil:
+    visible: "You’ve cooked them all"
+    timeout: 10000
+- tapOn: "Cooked"
+- tapOn: "Ramen, .*"
+- scrollUntilVisible:
+    element:
+      id: "rank-it"
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    id: "rank-it"
+- extendedWaitUntil:
+    visible: "How was it?"
+    timeout: 10000
+- assertVisible: "Didn’t like"
+- tapOn:
+    id: "band-liked"
+- extendedWaitUntil:
+    visible: "Better or worse than Dal?"
+    timeout: 10000
+- tapOn:
+    id: "answer-better"
+- extendedWaitUntil:
+    visible: "Better or worse than Shakshuka?"
+    timeout: 10000
+- tapOn:
+    id: "answer-worse"
+- extendedWaitUntil:
+    visible: "#2 in Liked"
+    timeout: 10000
+- assertVisible: "Score 8.4"
+- tapOn:
+    id: "ranking-done"
+- scrollUntilVisible:
+    element:
+      id: "recipe-ranking"
+    direction: DOWN
+    timeout: 30000
+- assertVisible: "#2 in Liked"
+
+# Toast: Liked, Skip, so the middle of four: second.
+- tapOn: "Back"
+- tapOn: "Toast, .*"
+- scrollUntilVisible:
+    element:
+      id: "rank-it"
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    id: "rank-it"
+- tapOn:
+    id: "band-liked"
+- extendedWaitUntil:
+    visible:
+      id: "comparison-card"
+    timeout: 10000
+- tapOn:
+    id: "skip-comparisons"
+- extendedWaitUntil:
+    visible: "#2 in Liked"
+    timeout: 10000
+- assertVisible: "Score 8.7"
+- tapOn:
+    id: "ranking-done"
+
+# The whole Ranking, in order, with Scores.
+- tapOn: "Back"
+- tapOn:
+    id: "tab-profile"
+- tapOn:
+    id: "ranking-row"
+- extendedWaitUntil:
+    visible: "Shakshuka, #1, Score 9.3"
+    timeout: 10000
+- assertVisible: "Toast, #2, Score 8.7"
+- assertVisible: "Ramen, #3, Score 8.0"
+- assertVisible: "Dal, #4, Score 7.4"
+- assertVisible: "Liked · 6.7–10"
+- assertVisible: "Fine · 3.4–6.6"
+
+# Re-rank Dal into Fine: alone there, 5.0; Liked closes up.
+- tapOn: "Dal, #4, Score 7.4"
+- scrollUntilVisible:
+    element: "Re-rank"
+    direction: DOWN
+    timeout: 30000
+- tapOn: "Re-rank"
+- tapOn:
+    id: "band-fine"
+- extendedWaitUntil:
+    visible: "#1 in Fine"
+    timeout: 10000
+- assertVisible: "Score 5.0"
+- tapOn:
+    id: "ranking-done"
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "Dal, #1, Score 5.0"
+    timeout: 10000
+- assertVisible: "Shakshuka, #1, Score 9.2"
+- assertVisible: "Toast, #2, Score 8.4"
+- assertVisible: "Ramen, #3, Score 7.5"
+
+# Delete Toast's only Cook Log: warned, and Toast leaves the Ranking.
+- tapOn: "Toast, #2, Score 8.4"
+- scrollUntilVisible:
+    element:
+      id: "cook-log-1"
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    id: "cook-log-1"
+- extendedWaitUntil:
+    visible: "Edit Cook Log"
+    timeout: 10000
+- scrollUntilVisible:
+    element: "Delete Cook Log"
+    direction: DOWN
+- tapOn: "Delete Cook Log"
+- extendedWaitUntil:
+    visible: "It’s this Recipe’s only one, so the Recipe goes back to Saved and leaves your Ranking."
+    timeout: 10000
+- tapOn: "Delete"
+- extendedWaitUntil:
+    visible: "Not cooked yet. Add a Cook Log each time you cook it."
+    timeout: 15000
+- assertNotVisible:
+    id: "rank-it"
+- tapOn: "Back"
+- extendedWaitUntil:
+    visible: "Shakshuka, #1, Score 8.9"
+    timeout: 10000
+- assertVisible: "Ramen, #2, Score 7.8"
+- assertNotVisible: "Toast, .*"

@@ -54,6 +54,8 @@ Also: `spacing` (`xxs` 2 to `xxl` 32), `radii` (`sm`, `md` 10, `lg`, `sheet` 24,
 | `DayPicker`      | Which day something is planned for (a Cook Plan's): `ListSwitcher` pills for "No day", "Today", "Tomorrow" and the next two weeks ("Sat 2 Nov"); a chosen day outside them gets its own pill. `range="past"` for a day something happened (a Cook Log's): "Today", "Yesterday" and the days before, and no "No day". `formatDay` writes a day the same way |
 | `PhotoStrip`     | A sideways row of square photos (a Cook Log's), `sm` on a card or `md` in a form; editable, each has a round dark × ("Remove photo 2") and an outlined accent "Add photo" tile follows while there's room |
 | `CookLogCard`    | One time a Recipe was cooked, over a hairline: the day in bold, muted "with @sam, @jo", the notes and a small `PhotoStrip`, with a chevron when it opens |
+| `BandPicker`     | How a Recipe was, the first step of ranking it: three bordered rows, each an accent icon, the band in bold ("Liked"), its Score range muted ("6.7–10") and a chevron |
+| `ComparisonCard` | One ranking comparison: a bordered card, muted overline "Better or worse than" over the other Recipe's title, an optional muted step ("Comparison 2"), and "Better" (filled) and "Worse" (outlined) side by side |
 | `CompanionPicker` | Who a Recipe was cooked with: a wrapping row of "@sam" pills, accent-filled and ticked while chosen, outlined with a + while not (the `SuggestedTagChip` look) |
 | `SyncNotice`     | Gray rounded notice that list changes are waiting to sync: a slashed cloud while offline, arrows while sending, a clock while waiting to retry after a server error |
 | `NavRow`         | A row that opens another screen: accent icon, bold label ("Drafts (2)"), muted detail, chevron |
