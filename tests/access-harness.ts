@@ -10,6 +10,7 @@ import type { Database } from '../src/data/database.types';
 import type { Extract } from '../supabase/functions/_shared/claude-extractor';
 import { buildDraft, type BuildOutcome, type Rpc } from '../supabase/functions/_shared/draft-builder';
 import { fixtureAdapters, fixtureExtract } from '../supabase/functions/_shared/draft-fixtures';
+import { notify, type NotifierRpc, type NotifyRequest } from '../supabase/functions/_shared/notifier';
 import { recordingPushSender, type PushMessage, type PushSender } from '../supabase/functions/_shared/push-sender';
 import { screenshotLoader } from '../supabase/functions/_shared/screenshot';
 import { refreshSourceVideo } from '../supabase/functions/_shared/source-refresher';
@@ -21,14 +22,17 @@ const nodeAuth = { persistSession: false, autoRefreshToken: false, detectSession
 
 const admin = createClient<Database>(url, serviceRoleKey, { auth: nodeAuth });
 
-/** The Draft builder's database calls, as the build-draft function makes them: as the service role. */
-const serviceRpc: Rpc = async (fn, args) => {
+/** A database call as the Edge Functions make them: as the service role. */
+async function asServiceRole(fn: string, args: Record<string, unknown>): Promise<unknown> {
   // Untyped, as the builder's `Rpc` is: it names its functions and checks what they return itself.
   const service = createClient(url, serviceRoleKey, { auth: nodeAuth });
   const { data, error } = await service.rpc(fn, args);
   if (error) throw error;
   return data;
-};
+}
+
+/** The Draft builder's database calls, as the build-draft function makes them. */
+const serviceRpc: Rpc = asServiceRole;
 
 /**
  * The fake boundary for Draft builds (spec, Testing Decisions): the source adapters (TikTok,
@@ -48,6 +52,8 @@ export type DraftFakes = {
   unregisteredPushTokens?: string[];
   /** The push service can't be reached: every push fails to send. */
   pushFails?: boolean;
+  /** This many of the app's notify kicks are lost on the way (no signal), sending nothing. */
+  loseNotifyKicks?: number;
 };
 
 /** The Draft builds a user's app started, run in-process with the fakes instead of build-draft. */
@@ -131,11 +137,45 @@ export function inProcessDraftBuilds(fakes: DraftFakes = {}) {
   return { drafts, startDraftBuild };
 }
 
+/** The pushes a user's actions sent other people (a "Friend request"), run in-process instead of notify. */
+export type Notifications = {
+  /** Every push sent, in order, through the recording push sender (none really goes). */
+  pushesSent(): PushMessage[];
+};
+
+/**
+ * What the notify function does, in-process with the recording push sender: it checks who is
+ * asking from their session (`client`'s), and claims and sends the push as the service role.
+ */
+export function inProcessNotifications(client: SupabaseClient<Database>, fakes: DraftFakes = {}) {
+  const push = recordingPushSender({ unregistered: fakes.unregisteredPushTokens });
+  const sendPush: PushSender = fakes.pushFails
+    ? async () => {
+        throw new TypeError('fetch failed');
+      }
+    : push.send;
+  const rpc: NotifierRpc = asServiceRole;
+  let kicksToLose = fakes.loseNotifyKicks ?? 0;
+  const sendNotification = async (request: NotifyRequest) => {
+    if (kicksToLose > 0) {
+      kicksToLose -= 1;
+      throw new TypeError('Network request failed');
+    }
+    const { data, error } = await client.auth.getUser();
+    if (error) throw error;
+    await notify(data.user.id, request, { rpc, sendPush });
+  };
+  const notifications: Notifications = { pushesSent: push.sent };
+  return { notifications, sendNotification };
+}
+
 export type Attacker = {
   userId: UserId;
   data: DataLayer;
   /** The Draft builds this user's saves started, run in-process. */
   drafts: DraftBuilds;
+  /** The pushes this user's actions sent others, run in-process. */
+  notifications: Notifications;
   /** The user's own signed-in client (anon key + their session). */
   client: SupabaseClient<Database>;
 };
@@ -183,11 +223,13 @@ export async function signInAttacker(label = 'user', fakes: DraftFakes = {}): Pr
   const sessionStorage = createSessionStorage(memoryAuthStorage());
   const client = createTestClient(undefined, sessionStorage);
   const { drafts, startDraftBuild } = inProcessDraftBuilds(fakes);
+  const { notifications, sendNotification } = inProcessNotifications(client, fakes);
   const data = createDataLayer(client, {
     sessionStorage,
     startDraftBuild,
     refreshSourceVideo: inProcessSourceRefresh(client, fakes),
+    sendNotification,
   });
   const userId = await data.signInWithPassword(account);
-  return { userId, data, drafts, client };
+  return { userId, data, drafts, notifications, client };
 }

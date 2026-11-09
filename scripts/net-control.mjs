@@ -4,7 +4,10 @@
 // saved access token runs out); POST /add-photo puts .maestro/assets/caption-screenshot.jpg in the
 // booted simulator's photo library (for a flow that picks a screenshot); POST /push-draft-ready and
 // /fill-daily-limit run scripts/e2e-db.mjs with that word (a "Draft ready" push for the dev user's
-// newest Draft; the dev user at the daily limit); nothing else. Listens on 127.0.0.1 only.
+// newest Draft; the dev user at the daily limit), and so do /clear-dev-username,
+// /friend-request-from-sam and /alex-accepts (ticket 11: the dev user with no username yet; the
+// seeded sam asking the dev user to be Friends, with the push; the seeded alex_cooks accepting the
+// dev user's request); nothing else. Listens on 127.0.0.1 only.
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +21,9 @@ const commands = {
   '/add-photo': ['xcrun', ['simctl', 'addmedia', 'booted', script('../.maestro/assets/caption-screenshot.jpg')]],
   '/push-draft-ready': [process.execPath, [script('./e2e-db.mjs'), 'push-draft-ready']],
   '/fill-daily-limit': [process.execPath, [script('./e2e-db.mjs'), 'fill-daily-limit']],
+  '/clear-dev-username': [process.execPath, [script('./e2e-db.mjs'), 'clear-dev-username']],
+  '/friend-request-from-sam': [process.execPath, [script('./e2e-db.mjs'), 'friend-request-from-sam']],
+  '/alex-accepts': [process.execPath, [script('./e2e-db.mjs'), 'alex-accepts']],
 };
 
 createServer((req, res) => {

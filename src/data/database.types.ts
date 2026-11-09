@@ -34,6 +34,45 @@ export type Database = {
   }
   public: {
     Tables: {
+      friendships: {
+        Row: {
+          addressee_id: string
+          created_at: string
+          requester_id: string
+          responded_at: string | null
+          status: Database["public"]["Enums"]["friendship_status"]
+        }
+        Insert: {
+          addressee_id: string
+          created_at?: string
+          requester_id: string
+          responded_at?: string | null
+          status?: Database["public"]["Enums"]["friendship_status"]
+        }
+        Update: {
+          addressee_id?: string
+          created_at?: string
+          requester_id?: string
+          responded_at?: string | null
+          status?: Database["public"]["Enums"]["friendship_status"]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "friendships_addressee_id_fkey"
+            columns: ["addressee_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "friendships_requester_id_fkey"
+            columns: ["requester_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ingredients: {
         Row: {
           created_at: string
@@ -519,11 +558,16 @@ export type Database = {
       add_staple: { Args: { ingredient_name: string }; Returns: string }
       add_tag: { Args: { name: string; recipe_id: string }; Returns: Json }
       add_to_pantry: { Args: { ingredient_name: string }; Returns: string }
+      cancel_friend_request: { Args: { user_id: string }; Returns: undefined }
       check_off: {
         Args: { changed_at?: string; item_id: string }
         Returns: string
       }
       claim_draft_build: { Args: { recipe_id: string }; Returns: Json }
+      claim_friend_request_push: {
+        Args: { addressee: string; requester: string }
+        Returns: Json
+      }
       claim_source_refresh: { Args: { recipe_id: string }; Returns: Json }
       create_recipe: {
         Args: { lines: Json; steps: string[]; title: string }
@@ -547,12 +591,40 @@ export type Database = {
       }
       forget_push_token: { Args: { token: string }; Returns: undefined }
       forget_push_tokens: { Args: { tokens: string[] }; Returns: undefined }
+      get_profile: {
+        Args: { user_id: string }
+        Returns: {
+          id: string
+          username: string
+        }[]
+      }
       has_ingredient: { Args: { ingredient_id: string }; Returns: boolean }
       ingredients_i_have: { Args: never; Returns: string[] }
+      list_friend_requests: {
+        Args: never
+        Returns: {
+          direction: string
+          id: string
+          sent_at: string
+          username: string
+        }[]
+      }
+      list_friends: {
+        Args: never
+        Returns: {
+          id: string
+          since: string
+          username: string
+        }[]
+      }
       register_push_token: { Args: { token: string }; Returns: undefined }
       remove_recipe_from_shopping_list: {
         Args: { recipe_id: string }
         Returns: undefined
+      }
+      respond_to_friend_request: {
+        Args: { accept: boolean; requester_id: string }
+        Returns: Json
       }
       retry_draft: { Args: { recipe_id: string }; Returns: string }
       review_draft: {
@@ -602,6 +674,16 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      search_users: {
+        Args: { query: string }
+        Returns: {
+          id: string
+          relationship: string
+          username: string
+        }[]
+      }
+      send_friend_request: { Args: { user_id: string }; Returns: Json }
+      set_username: { Args: { name: string }; Returns: Json }
       set_want_to_cook: {
         Args: { recipe_id: string; want_to_cook: boolean }
         Returns: string
@@ -614,6 +696,7 @@ export type Database = {
         Args: { changed_at?: string; item_id: string }
         Returns: string
       }
+      unfriend: { Args: { user_id: string }; Returns: undefined }
     }
     Enums: {
       draft_build_failure:
@@ -625,6 +708,7 @@ export type Database = {
         | "no_caption"
         | "source_refused"
       draft_build_status: "building" | "built" | "failed"
+      friendship_status: "pending" | "accepted" | "declined"
       recipe_status: "draft" | "reviewed"
       source_platform: "tiktok" | "youtube" | "instagram" | "web"
     }
@@ -767,6 +851,7 @@ export const Constants = {
         "source_refused",
       ],
       draft_build_status: ["building", "built", "failed"],
+      friendship_status: ["pending", "accepted", "declined"],
       recipe_status: ["draft", "reviewed"],
       source_platform: ["tiktok", "youtube", "instagram", "web"],
     },
