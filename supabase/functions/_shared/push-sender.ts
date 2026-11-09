@@ -1,5 +1,5 @@
 // The push sender (decisions 07): the one place the server sends a push notification. The Draft
-// builder and the notifier (friend requests, decisions 11) call a `PushSender`; the build-draft and
+// builder and the notifier (friend requests and Cook Plan invites, decisions 11 and 14) call a `PushSender`; the build-draft and
 // notify functions wire Expo's push service, and tests and DRAFT_FIXTURES wire the recording fake,
 // so neither reaches the network. Runtime-neutral: the caller passes `fetch`, and the one URL it is
 // ever called with is Expo's (a fixed host, not a link from a user, so it doesn't go through
@@ -38,6 +38,25 @@ export function friendRequestMessages(fromUserId: string, username: string, toke
     title: 'Friend request',
     body: `@${username} wants to be Friends`,
     data: { kind: 'friendRequest', fromUserId },
+  }));
+}
+
+/**
+ * The "Cook Plan invite" notification from @`username` (decisions 14), to each of the invitee's
+ * phones: "@alex invited you to cook", then the plan's Recipe titles, if it has any yet.
+ */
+export function cookPlanInviteMessages(
+  cookPlanId: string,
+  username: string,
+  recipeTitles: readonly string[],
+  tokens: readonly string[],
+): PushMessage[] {
+  const what = recipeTitles.length > 0 ? `: ${recipeTitles.join(', ')}` : '';
+  return tokens.map((to) => ({
+    to,
+    title: 'Cook Plan invite',
+    body: `@${username} invited you to cook${what}`,
+    data: { kind: 'cookPlanInvite', cookPlanId },
   }));
 }
 

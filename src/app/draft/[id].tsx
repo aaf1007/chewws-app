@@ -105,7 +105,7 @@ export default function ReviewDraft() {
   }
 
   const recipe = state.value;
-  if (recipe.status === 'reviewed') {
+  if (recipe.status !== 'draft') {
     return <Redirect href={{ pathname: '/recipe/[id]', params: { id: recipe.id } }} />;
   }
   const { build } = recipe;
