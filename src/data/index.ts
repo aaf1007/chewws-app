@@ -7,6 +7,7 @@ export {
 export { memoryStorage, type KeyValueStorage } from './change-queue';
 export { createDataLayer, type DataLayer, type DataLayerOptions } from './data-layer';
 export { normaliseIngredientName } from './ingredient-matcher';
+export { friendsListName } from './list-names';
 export { searchWords, type SearchWord } from './search-words';
 export { checkTagName, normaliseTagName, tagKey, tidyTagNames, type TagNameCheck } from './tag-name';
 export { validateRecipeInput, type RecipeInputError } from './recipe-input';
@@ -36,6 +37,8 @@ export {
   type IdTokenProvider,
   type Ingredient,
   type IngredientId,
+  type LeaveSharedShoppingListResult,
+  type ListPerson,
   type ListSync,
   type NotSavedListChange,
   type OtherProfile,
@@ -51,14 +54,18 @@ export {
   type SaveFromLinkResult,
   type SessionState,
   type SetUsernameResult,
+  type ShareShoppingListResult,
+  type SharedShoppingList,
   type ShoppingList,
   type ShoppingListId,
   type ShoppingListItem,
   type ShoppingListItemId,
   type ShoppingListRecipeAmounts,
+  type ShoppingListShare,
   type ShoppingListView,
   type SourcePlatform,
   type SourceVideo,
+  type StopSharingShoppingListResult,
   type Tag,
   type TagId,
   type UserId,

@@ -244,16 +244,38 @@ export type ShoppingListItem =
       check: CheckState;
     };
 
+/** Someone who uses a Shopping List: its owner, or a Friend it's shared with (null: no username yet). */
+export type ListPerson = { id: UserId; username: string | null };
+
 /**
- * A user's Shopping List. Items are sorted by name (an Ingredient line's Ingredient, a hand-added
- * item's text); `recipes` lists each Recipe on the list once, by title.
+ * A user's Shopping List, theirs or a Friend's shared with them (decisions 13). Items are sorted by
+ * name (an Ingredient line's Ingredient, a hand-added item's text); `recipes` lists each Recipe on
+ * the list once, by title. `sharedWith`: the Friends it's shared with, by username. Someone who
+ * checked an item off and is neither the owner nor one of them is a former Friend.
  */
 export type ShoppingList = {
   id: ShoppingListId;
   ownerId: UserId;
+  ownerUsername: string | null;
+  sharedWith: ListPerson[];
   items: ShoppingListItem[];
   recipes: { id: RecipeId; title: string }[];
 };
+
+/** A Friend's Shopping List shared with the signed-in user ("Sam's list"). */
+export type SharedShoppingList = { id: ShoppingListId; owner: { id: UserId; username: string } };
+
+/** A Friend the signed-in user's Shopping List is shared with, and since when. */
+export type ShoppingListShare = { friend: { id: UserId; username: string }; sharedAt: string };
+
+/** What `shareShoppingList` did: shared (now or already), or not, as they aren't Friends. */
+export type ShareShoppingListResult = { status: 'shared' | 'notFriends' };
+
+/** What `stopSharingShoppingList` did: stopped, or it wasn't shared with them. */
+export type StopSharingShoppingListResult = { status: 'stopped' | 'notShared' };
+
+/** What `leaveSharedShoppingList` did: left, or it wasn't shared with you. */
+export type LeaveSharedShoppingListResult = { status: 'left' | 'notShared' };
 
 /**
  * Whether list changes made on this phone are waiting to reach the server. `idle`: none are, as far
@@ -278,8 +300,23 @@ export type NotSavedListChange = { kind: 'checkOff' | 'uncheck' | 'addManualItem
 export type ShoppingListView =
   /** Nothing to show yet: never seen on this phone, and being read. */
   | { status: 'loading'; sync: ListSync; notSaved: NotSavedListChange[] }
-  /** The list with the changes made on this phone, sent or not. */
-  | { status: 'loaded'; list: ShoppingList; sync: ListSync; notSaved: NotSavedListChange[] }
+  /**
+   * The list with the changes made on this phone, sent or not. `live`: changes made elsewhere show
+   * as they happen (the phone hears of them over Realtime).
+   */
+  | { status: 'loaded'; list: ShoppingList; live: boolean; sync: ListSync; notSaved: NotSavedListChange[] }
+  /**
+   * A Friend's list the user can't use any more (its owner stopped sharing, or they're no longer
+   * Friends): nothing of it is kept on the phone. `changesNotSaved` of the user's changes to it
+   * never reached it.
+   */
+  | {
+      status: 'noLongerShared';
+      ownerUsername: string | null;
+      changesNotSaved: number;
+      sync: ListSync;
+      notSaved: NotSavedListChange[];
+    }
   /** Couldn't be read, and this phone has never seen it (code `offline` with no signal). */
   | { status: 'failed'; error: DataError; sync: ListSync; notSaved: NotSavedListChange[] };
 

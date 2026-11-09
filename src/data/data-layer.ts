@@ -3,6 +3,7 @@ import {
   isAuthSessionMissingError,
   type AuthError,
   type PostgrestError,
+  type RealtimeChannel,
   type SupabaseClient,
 } from '@supabase/supabase-js';
 
@@ -17,8 +18,15 @@ import {
 } from './change-queue';
 import type { Database, Json } from './database.types';
 import { normaliseIngredientName } from './ingredient-matcher';
-import { toListLines, withItems, withListChanges, type ListChange } from './list-engine';
-import { parseListChange, parseSavedShoppingList } from './list-storage';
+import { toListLines, withItems, withListChanges, type ListChange, type ListRef } from './list-engine';
+import { friendsListName } from './list-names';
+import {
+  encodeListChange,
+  parseListChange,
+  parseSavedSharedLists,
+  parseSavedShoppingList,
+  type LostSharedList,
+} from './list-storage';
 import { validateRecipeInput } from './recipe-input';
 import { searchWords } from './search-words';
 import { MAX_REVIEW_TAGS, checkTagName, normaliseTagName, tagKey, tidyTagNames } from './tag-name';
@@ -46,6 +54,7 @@ import {
   type IdTokenProvider,
   type Ingredient,
   type IngredientId,
+  type LeaveSharedShoppingListResult,
   type ListSync,
   type NotSavedListChange,
   type OtherProfile,
@@ -60,12 +69,16 @@ import {
   type Relationship,
   type SessionState,
   type SetUsernameResult,
+  type ShareShoppingListResult,
+  type SharedShoppingList,
   type ShoppingList,
   type ShoppingListId,
+  type ShoppingListShare,
   type ShoppingListItem,
   type ShoppingListItemId,
   type ShoppingListView,
   type SourceVideo,
+  type StopSharingShoppingListResult,
   type Tag,
   type TagId,
   type UserId,
@@ -282,8 +295,15 @@ function toIngredientName(typed: string): string {
   return name;
 }
 
+// Each amount carries its Recipe's title, as a Friend on a shared list can't read the Recipe itself.
 const SHOPPING_LIST_WITH_ITEMS =
-  'id, owner_id, shopping_list_items(id, hand_added_text, checked_at, checked_by, ingredient:ingredients(id, name), shopping_list_amounts(amount_texts, created_at, recipe:recipes(id, title)))';
+  'id, owner_id, shopping_list_items(id, hand_added_text, checked_at, checked_by, ingredient:ingredients(id, name), shopping_list_amounts(recipe_id, recipe_title, amount_texts, created_at))';
+
+/** A Shopping List the phone keeps: the user's own (`mine`, by its id once known), or a Friend's by id. */
+type WhichList = 'mine' | ShoppingListId;
+
+/** After a list's Realtime channel says it changed, how long to wait for more before reading it. */
+const REREAD_AFTER_CHANGE_MS = 300;
 
 const compareText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -300,9 +320,7 @@ function toCheckState(row: Pick<ShoppingListItemRow, 'checked_at' | 'checked_by'
 function toShoppingListItem(
   row: Pick<ShoppingListItemRow, 'id' | 'hand_added_text' | 'checked_at' | 'checked_by'> & {
     ingredient: Pick<IngredientRow, 'id' | 'name'> | null;
-    shopping_list_amounts: (Pick<ShoppingListAmountRow, 'amount_texts' | 'created_at'> & {
-      recipe: Pick<RecipeRow, 'id' | 'title'>;
-    })[];
+    shopping_list_amounts: Pick<ShoppingListAmountRow, 'recipe_id' | 'recipe_title' | 'amount_texts' | 'created_at'>[];
   },
 ): ShoppingListItem {
   const id = parseShoppingListItemId(row.id);
@@ -313,9 +331,9 @@ function toShoppingListItem(
   }
   if (!ingredient) throw new DataError('invalid_shopping_list_item', `Item ${row.id} has no Ingredient.`);
   const recipes = [...row.shopping_list_amounts]
-    .sort((a, b) => compareText(a.created_at, b.created_at) || compareText(a.recipe.title, b.recipe.title))
+    .sort((a, b) => compareText(a.created_at, b.created_at) || compareText(a.recipe_title, b.recipe_title))
     .map((amount) => ({
-      recipe: { id: parseRecipeId(amount.recipe.id), title: amount.recipe.title },
+      recipe: { id: parseRecipeId(amount.recipe_id), title: amount.recipe_title },
       amountTexts: amount.amount_texts,
     }));
   return { kind: 'ingredient', id, ingredient, recipes, check };
@@ -480,6 +498,11 @@ export type DataLayerOptions = {
    * decides whether the push is due. Tests send in-process, through the recording push sender.
    */
   sendNotification?: (request: NotifyRequest) => Promise<void>;
+  /**
+   * Whether a list a screen watches listens on its Realtime channel for changes made elsewhere
+   * (decisions 13). On by default.
+   */
+  liveUpdates?: boolean;
 };
 
 /**
@@ -489,6 +512,7 @@ export type DataLayerOptions = {
  */
 export function createDataLayer(client: SupabaseClient<Database>, options: DataLayerOptions) {
   const { sessionStorage } = options;
+  const live = options.liveUpdates ?? true;
   const storage = options.storage ?? memoryStorage();
   const now = options.now ?? Date.now;
   const newId = options.newId ?? (() => crypto.randomUUID());
@@ -1489,22 +1513,15 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   }
 
   /**
-   * The user's Shopping List as the server has it; `unreachable` with no signal; `serverFailed`
-   * when the server answers with an error of its own (5xx): it was reached, so the phone isn't
-   * offline.
+   * A read made as `me` (`asSignedIn`): what the server answered; `unreachable` with no signal;
+   * `serverFailed` when the server answers with an error of its own (5xx): it was reached, so the
+   * phone isn't offline.
    */
-  async function fetchShoppingList(
+  async function readAs<D>(
     me: UserId,
-  ): Promise<{ status: 'reached'; list: ShoppingList } | { status: 'unreachable' } | { status: 'serverFailed'; error: DataError }> {
-    const answer = await asSignedIn(me, (token) =>
-      client
-        .from('shopping_lists')
-        .select(SHOPPING_LIST_WITH_ITEMS)
-        .eq('owner_id', me)
-        .maybeSingle()
-        .retry(false)
-        .setHeader('Authorization', bearer(token)),
-    );
+    request: (accessToken: string) => PromiseLike<{ data: D | null; error: PostgrestError | null; status: number }>,
+  ): Promise<{ status: 'reached'; data: D | null } | { status: 'unreachable' } | { status: 'serverFailed'; error: DataError }> {
+    const answer = await asSignedIn(me, request);
     if (answer === 'unreachable') return { status: 'unreachable' };
     if (answer === 'ended') throw notSignedIn();
     const { data, error, status } = answer;
@@ -1512,12 +1529,64 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     if (failed) return failed;
     if (notReached(status)) return { status: 'unreachable' };
     if (error) fail(error);
-    if (!data) throw new DataError('shopping_list_missing', `No Shopping List for user ${me}.`);
+    return { status: 'reached', data };
+  }
+
+  /**
+   * A Shopping List as the server has it, by its id, or the user's own (`mine`, the first time,
+   * before the phone knows its id); `notShared` when it's a Friend's list the user can't use any
+   * more; `unreachable` with no signal; `serverFailed` on a server error.
+   */
+  async function fetchShoppingList(
+    me: UserId,
+    which: WhichList,
+  ): Promise<
+    | { status: 'reached'; list: ShoppingList }
+    | { status: 'notShared' }
+    | { status: 'unreachable' }
+    | { status: 'serverFailed'; error: DataError }
+  > {
+    const read = await readAs(me, (token) => {
+      const lists = client.from('shopping_lists').select(SHOPPING_LIST_WITH_ITEMS);
+      return (which === 'mine' ? lists.eq('owner_id', me) : lists.eq('id', which))
+        .maybeSingle()
+        .retry(false)
+        .setHeader('Authorization', bearer(token));
+    });
+    if (read.status !== 'reached') return read;
+    const row = read.data;
+    if (!row) {
+      if (which === 'mine') throw new DataError('shopping_list_missing', `No Shopping List for user ${me}.`);
+      return { status: 'notShared' };
+    }
+    const whoUses = await readAs(me, (token) =>
+      client
+        .from('shopping_list_people')
+        .select('user_id, username, is_owner')
+        .eq('list_id', row.id)
+        .order('username')
+        .retry(false)
+        .setHeader('Authorization', bearer(token)),
+    );
+    if (whoUses.status !== 'reached') return whoUses;
+    const people = (whoUses.data ?? []).flatMap((p) =>
+      p.user_id === null ? [] : [{ id: parseUserId(p.user_id), username: p.username, isOwner: p.is_owner === true }],
+    );
+    const owner = people.find((p) => p.isOwner);
+    if (!owner) {
+      if (which === 'mine') throw new DataError('shopping_list_missing', `No Shopping List for user ${me}.`);
+      return { status: 'notShared' }; // Unshared between the two reads.
+    }
     return {
       status: 'reached',
       list: withItems(
-        { id: parseShoppingListId(data.id), ownerId: parseUserId(data.owner_id) },
-        data.shopping_list_items.map(toShoppingListItem),
+        {
+          id: parseShoppingListId(row.id),
+          ownerId: parseUserId(row.owner_id),
+          ownerUsername: owner.username,
+          sharedWith: people.filter((p) => !p.isOwner).map(({ id, username }) => ({ id, username })),
+        },
+        row.shopping_list_items.map(toShoppingListItem),
       ),
     };
   }
@@ -1525,17 +1594,23 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
   const needsConnection = (what: string) =>
     new DataError('offline', `You're offline. ${what} needs a connection.`);
 
+  const notShared = (ownerUsername: string | null) =>
+    new DataError('shopping_list_not_shared', `${friendsListName(ownerUsername)} isn't shared with you any more.`);
+
   /**
-   * Sends one queued Shopping List change, stamped with when it was made. Only the user who made it
-   * sends it, with their own session, checked before every request (`asSignedIn`): signed out, or
-   * someone else signed in, or a session that can't refresh with no signal, it waits. Once its
-   * queue is `discarded` (their session ended on this phone, and the change with it, even if
-   * they've signed in again since), nothing is sent.
+   * Sends one queued list change, stamped with when it was made. Only the user who made it sends
+   * it, with their own session, checked before every request (`asSignedIn`): signed out, or someone
+   * else signed in, or a session that can't refresh with no signal, it waits. Once its queue is
+   * `discarded` (their session ended on this phone, and the change with it, even if they've signed
+   * in again since), nothing is sent. The server takes it only for a list the user can use when it
+   * arrives: a change to a Friend's list that isn't shared with them any more comes back gone, and
+   * is dropped. `isOwnList` says whether its list is the user's own.
    */
   async function sendListChange(
     me: UserId,
     { madeAt, change }: QueuedChange<ListChange>,
     discarded: () => boolean,
+    isOwnList: (id: ShoppingListId) => boolean,
   ): Promise<Delivery> {
     if (change.kind === 'addManualItem') {
       const answer = await asSignedIn(
@@ -1543,7 +1618,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
         (token) =>
           client
             .rpc('add_manual_item', {
-              list_id: change.listId,
+              list_id: change.list.id,
               item_text: change.text,
               ingredient_name: normaliseIngredientName(change.text),
               item_id: change.itemId,
@@ -1563,6 +1638,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       // Removed since it was first sent (that answer lost): it stays removed.
       if (added === 'gone') return { status: 'dropped' };
       if (added === 'taken') return { status: 'refused', error: idTaken() };
+      // A Friend's list not shared with the user any more: gone, like its items.
+      if (!isOwnList(change.list.id)) return { status: 'dropped' };
       return {
         status: 'refused',
         error: new DataError('shopping_list_missing', "That Shopping List isn't one you can change."),
@@ -1588,77 +1665,176 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     if (result === 'applied') return { status: 'sent' };
     // A phone changed the item after this change was made: that change stands.
     if (result === 'superseded') return { status: 'superseded' };
-    // Gone (removed meanwhile, maybe from another phone): the change has nothing to change.
+    // Gone (removed meanwhile, maybe from another phone, or its list isn't shared any more): the
+    // change has nothing to change.
     return { status: 'dropped' };
   }
 
   /**
-   * One user's Shopping List on this phone: the changes waiting to be sent, the last list read
-   * from the server (kept in storage, so it shows with no signal after a restart), and the screens
-   * watching it.
+   * One list on this phone, for one user: the last copy read from the server (kept in storage, so
+   * it shows with no signal after a restart) and whether it's out of date.
    */
-  function openShoppingList(me: UserId) {
-    const listKey = `recipeapp.shoppingList.${me}`;
-    const watchers = new Set<(view: ShoppingListView) => void>();
-    let lastSeen: ShoppingList | null = null;
-    let lastError: DataError | null = null;
-    let savingList: Promise<void> = Promise.resolve();
-    let discarded = false;
-    // A change the server skipped for a later one: the list last seen is out of date.
-    let superseded = false;
+  type ListCache = {
+    which: WhichList;
+    key: string;
+    lastSeen: ShoppingList | null;
+    lastError: DataError | null;
+    /** A change the server skipped for a later one: the list last seen is out of date. */
+    superseded: boolean;
+    /** Changes to it the server said were gone since it was last read. */
+    droppedSinceRead: number;
+    /** While a screen watches it: its Realtime channel, and whether it has joined. */
+    channel: RealtimeChannel | null;
+    live: boolean;
+    rereadTimer: ReturnType<typeof setTimeout> | undefined;
+  };
 
-    function keep(list: ShoppingList) {
+  /**
+   * One user's lists on this phone: the changes waiting to be sent, one queue across all their
+   * lists in the order made (decisions 13); their own Shopping List and each Friend's shared with
+   * them, each with its own copy; which Friends' lists are shared with them (for the switcher); and
+   * the screens watching each.
+   */
+  function openShoppingLists(me: UserId) {
+    // The user's own list is kept where it was before lists were shared; a Friend's beside it.
+    const ownKey = `recipeapp.shoppingList.${me}`;
+    const sharedKey = (id: ShoppingListId) => `recipeapp.shoppingList.${me}.${id}`;
+    const indexKey = `recipeapp.sharedShoppingLists.${me}`;
+    const watchers = new Map<WhichList, Set<(view: ShoppingListView) => void>>();
+    let saving: Promise<void> = Promise.resolve();
+    let discarded = false;
+
+    const newCache = (which: WhichList, key: string): ListCache => ({
+      which,
+      key,
+      lastSeen: null,
+      lastError: null,
+      superseded: false,
+      droppedSinceRead: 0,
+      channel: null,
+      live: false,
+      rereadTimer: undefined,
+    });
+    const own = newCache('mine', ownKey);
+    const shared = new Map<ShoppingListId, ListCache>();
+    let sharedLists: SharedShoppingList[] = [];
+    let lost: LostSharedList[] = [];
+    /** The user's own list's id, once the phone has seen it. */
+    let ownListId: ShoppingListId | null = null;
+
+    const write = (op: () => Promise<void>) => {
+      saving = saving.then(op).catch(() => {});
+      return saving;
+    };
+    const saveIndex = () => {
+      if (discarded) return saving;
+      const snapshot = JSON.stringify({ lists: sharedLists, lost });
+      return write(() => storage.setItem(indexKey, snapshot));
+    };
+
+    function sharedCache(id: ShoppingListId): ListCache {
+      let cache = shared.get(id);
+      if (!cache) {
+        cache = newCache(id, sharedKey(id));
+        shared.set(id, cache);
+      }
+      return cache;
+    }
+    const cacheFor = (which: WhichList): ListCache => (which === 'mine' || which === ownListId ? own : sharedCache(which));
+    /** The copy a change's list is kept in, if the phone has one. */
+    const cacheOfList = (id: ShoppingListId): ListCache | undefined => (id === ownListId ? own : shared.get(id));
+    const isOwnList = (id: ShoppingListId) => id === ownListId;
+
+    function keep(cache: ListCache, list: ShoppingList) {
       if (discarded) return; // A read or change that finishes after its user signed out.
-      lastSeen = list;
-      lastError = null;
+      // A read of a Friend's list that finishes after the phone found it unshared keeps nothing.
+      if (cache !== own && shared.get(list.id) !== cache) return;
+      cache.lastSeen = list;
+      cache.lastError = null;
       const snapshot = JSON.stringify(list);
-      savingList = savingList.then(() => storage.setItem(listKey, snapshot)).catch(() => {});
+      void write(() => storage.setItem(cache.key, snapshot));
+      if (cache === own) ownListId = list.id;
+      else if (!sharedLists.some((l) => l.id === list.id) && list.ownerUsername !== null) {
+        sharedLists = [...sharedLists, { id: list.id, owner: { id: list.ownerId, username: list.ownerUsername } }];
+        void saveIndex();
+      }
+      goLive(cache);
     }
 
-    // The list saved on the phone, read first: a hand-add an older version queued without its list
-    // is for this one.
-    const savedList = storage
-      .getItem(listKey)
+    // What the phone saved: the user's own list first (an older version's changes that name no
+    // list are for it), then the Friends' lists shared with them and their copies.
+    const savedOwn = storage
+      .getItem(ownKey)
       .catch(() => null)
       .then(parseSavedShoppingList);
-    let savedListId: ShoppingListId | null = null;
+    const savedShared = storage
+      .getItem(indexKey)
+      .catch(() => null)
+      .then(parseSavedSharedLists)
+      .then(async (index) => {
+        sharedLists = index.lists;
+        lost = index.lost;
+        for (const { id } of index.lists) {
+          const cache = sharedCache(id);
+          const saved = parseSavedShoppingList(await storage.getItem(cache.key).catch(() => null));
+          if (saved?.id === id) cache.lastSeen ??= saved;
+        }
+      });
 
     const queue = createChangeQueue<ListChange>({
       storage,
       key: `recipeapp.listChanges.${me}`,
-      parseChange: (raw) => parseListChange(raw, savedListId),
-      parseAfter: savedList.then((list) => {
-        savedListId = list?.ownerId === me ? list.id : null;
+      parseChange: (raw) => parseListChange(raw, ownListId),
+      encodeChange: encodeListChange,
+      parseAfter: savedOwn.then((list) => {
+        ownListId ??= list?.ownerId === me ? list.id : null;
       }),
-      send: (change, discarded) => sendListChange(me, change, discarded),
+      send: (change, discarded) => sendListChange(me, change, discarded, isOwnList),
       // Named as the list shows it now: once given up, the item may go before the user is told.
       nameOf({ change }) {
         if (change.kind === 'addManualItem') return change.text;
-        const item = shown()?.items.find((i) => i.id === change.itemId);
+        const cache = cacheOfList(change.list.id);
+        const item = (cache && shown(cache))?.items.find((i) => i.id === change.itemId);
         return item ? nameOf(item) : 'an item';
       },
       onDelivered({ madeAt, change }, delivery) {
-        if (!lastSeen) return;
-        if (delivery.status === 'sent') keep(withListChanges(lastSeen, [{ madeAt, change }], me));
-        if (delivery.status === 'dropped') {
-          keep(withItems(lastSeen, lastSeen.items.filter((item) => item.id !== change.itemId)));
+        const cache = cacheOfList(change.list.id);
+        if (delivery.status === 'dropped' && !isOwnList(change.list.id)) {
+          const gone = lost.find((l) => l.id === change.list.id);
+          if (gone) {
+            gone.changesNotSaved += 1;
+            void saveIndex();
+          } else if (cache) cache.droppedSinceRead += 1;
         }
-        if (delivery.status === 'superseded') superseded = true;
+        if (!cache?.lastSeen) return;
+        if (delivery.status === 'sent') keep(cache, withListChanges(cache.lastSeen, [{ madeAt, change }], me));
+        if (delivery.status === 'dropped') {
+          keep(cache, withItems(cache.lastSeen, cache.lastSeen.items.filter((item) => item.id !== change.itemId)));
+        }
+        if (delivery.status === 'superseded') cache.superseded = true;
       },
-      // Read the list again for whoever's watching it, to find out the phone is back online, or to
-      // show the later change that beat one of this phone's.
-      afterSync: (wasOffline) =>
-        watchers.size > 0 || wasOffline || superseded ? refresh() : Promise.resolve('reached'),
+      // Read lists again for whoever's watching them, to find out the phone is back online, to show
+      // the later change that beat one of this phone's, or to find out whether a Friend's list whose
+      // changes came back gone is still shared.
+      async afterSync(wasOffline) {
+        const due = [
+          ...(watching('mine') || wasOffline || own.superseded ? [own] : []),
+          ...[...shared.values()].filter((c) => watching(c.which) || c.superseded || c.droppedSinceRead > 0),
+        ];
+        const reached = await Promise.all(due.map(refresh));
+        return reached.includes('unreachable') ? 'unreachable' : 'reached';
+      },
       now,
       newId,
     });
 
     const ready: Promise<unknown> = Promise.all([
       queue.ready,
-      savedList.then((list) => {
+      savedOwn.then((list) => {
         // A list read from the server meanwhile is newer than the saved one.
-        lastSeen ??= list;
+        own.lastSeen ??= list;
       }),
+      savedShared,
     ]);
 
     function sync(): ListSync {
@@ -1669,125 +1845,295 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
         : { status: state.status, waiting };
     }
 
-    /** The list as the phone shows it: the last one seen, with the changes not yet sent on top. */
-    function shown(): ShoppingList | null {
-      return lastSeen && withListChanges(lastSeen, queue.state().queue, me);
+    /** A list as the phone shows it: the last copy seen, with the changes to it not yet sent on top. */
+    function shown(cache: ListCache): ShoppingList | null {
+      return cache.lastSeen && withListChanges(cache.lastSeen, queue.state().queue, me);
     }
 
-    /** The changes given up, named as the list showed their items when they were. */
-    function notSaved(): NotSavedListChange[] {
-      return queue.state().gaveUp.map(({ change, name }) => ({ kind: change.kind, itemName: name }));
+    /** Whether a change given up was to this list. The user's own, unseen, has those to no Friend's. */
+    const isFor = (which: WhichList, id: ShoppingListId) =>
+      which === 'mine' ? id === ownListId || (ownListId === null && !shared.has(id)) : id === which;
+
+    /** The changes to a list given up, named as the list showed their items when they were. */
+    function notSaved(which: WhichList): NotSavedListChange[] {
+      return queue
+        .state()
+        .gaveUp.filter(({ change }) => isFor(which, change.list.id))
+        .map(({ change, name }) => ({ kind: change.kind, itemName: name }));
     }
 
-    function view(): ShoppingListView {
-      const list = shown();
-      if (list) return { status: 'loaded', list, sync: sync(), notSaved: notSaved() };
-      if (lastError) return { status: 'failed', error: lastError, sync: sync(), notSaved: notSaved() };
-      return { status: 'loading', sync: sync(), notSaved: notSaved() };
-    }
-
-    function emit() {
-      const current = view();
-      for (const watcher of watchers) watcher(current);
-    }
-
-    async function refresh(): Promise<'reached' | 'unreachable'> {
-      try {
-        const fetched = await fetchShoppingList(me);
-        if (fetched.status === 'unreachable') {
-          lastError ??= needsConnection('Loading your Shopping List the first time');
-          return 'unreachable';
-        }
-        if (fetched.status === 'serverFailed') lastError ??= fetched.error;
-        else {
-          superseded = false;
-          keep(fetched.list);
-        }
-      } catch (e) {
-        lastError = e instanceof DataError ? e : new DataError('unknown', String(e), { cause: e });
+    function view(which: WhichList): ShoppingListView {
+      const base = { sync: sync(), notSaved: notSaved(which) };
+      const gone = which === 'mine' ? undefined : lost.find((l) => l.id === which);
+      if (gone) {
+        return { status: 'noLongerShared', ownerUsername: gone.ownerUsername, changesNotSaved: gone.changesNotSaved, ...base };
       }
-      emit();
-      return 'reached';
+      const cache = cacheFor(which);
+      const list = shown(cache);
+      if (list) return { status: 'loaded', list, live: cache.live, ...base };
+      if (cache.lastError) return { status: 'failed', error: cache.lastError, ...base };
+      return { status: 'loading', ...base };
+    }
+
+    const watching = (which: WhichList) => (watchers.get(which)?.size ?? 0) > 0;
+
+    function emit(which?: WhichList) {
+      for (const [w, set] of watchers) {
+        if (which !== undefined && w !== which) continue;
+        const current = view(w);
+        for (const watcher of set) watcher(current);
+      }
     }
 
     /**
-     * Its user's session ended on this phone: the changes waiting are thrown away, and the list
-     * last seen forgotten, both gone from storage too. Nothing is kept again.
+     * While a screen watches a list, its Realtime channel tells the phone when anyone changes it,
+     * and the phone reads it again, 300 ms after the last word. Joining reads it too, for what
+     * changed before. The message says nothing about the change (decisions 13).
+     */
+    function goLive(cache: ListCache) {
+      const id = cache.lastSeen?.id;
+      if (!live || discarded || cache.channel || !id || !watching(cache.which)) return;
+      const reread = () => {
+        clearTimeout(cache.rereadTimer);
+        cache.rereadTimer = setTimeout(() => void refresh(cache), REREAD_AFTER_CHANGE_MS);
+      };
+      const channel = client.channel(`shopping_list:${id}`, { config: { private: true } });
+      cache.channel = channel;
+      channel.on('broadcast', { event: 'changed' }, reread).subscribe((status) => {
+        if (cache.channel !== channel) return;
+        cache.live = status === 'SUBSCRIBED';
+        if (cache.live) reread();
+        emit(cache.which);
+      });
+    }
+
+    function stopLive(cache: ListCache) {
+      clearTimeout(cache.rereadTimer);
+      const { channel } = cache;
+      cache.channel = null;
+      cache.live = false;
+      if (channel) void client.removeChannel(channel);
+    }
+
+    function watch(which: WhichList, watcher: (view: ShoppingListView) => void) {
+      let set = watchers.get(which);
+      if (!set) {
+        set = new Set();
+        watchers.set(which, set);
+      }
+      set.add(watcher);
+      goLive(cacheFor(which));
+    }
+
+    function unwatch(which: WhichList, watcher: (view: ShoppingListView) => void) {
+      watchers.get(which)?.delete(watcher);
+      if (!watching(which)) stopLive(cacheFor(which));
+    }
+
+    /**
+     * A Friend's list the user can't use any more: its copy goes from the phone at once, with the
+     * changes to it still waiting, and the list says so until the user has seen it, with how many
+     * of their changes never reached it (`told`: a read of the list found it gone, so they should
+     * hear; otherwise only if changes were lost).
+     */
+    async function lose(id: ShoppingListId, told: boolean) {
+      const cache = shared.get(id);
+      const known = sharedLists.find((l) => l.id === id);
+      const ownerUsername = cache?.lastSeen?.ownerUsername ?? known?.owner.username ?? null;
+      const waiting = queue.state().queue.filter(({ change }) => change.list.id === id).length;
+      const changesNotSaved = (cache?.droppedSinceRead ?? 0) + waiting;
+      if (cache) {
+        stopLive(cache);
+        cache.lastSeen = null;
+        shared.delete(id);
+        void write(() => storage.removeItem(cache.key));
+      }
+      sharedLists = sharedLists.filter((l) => l.id !== id);
+      if ((told || changesNotSaved > 0) && !lost.some((l) => l.id === id)) {
+        lost = [...lost, { id, ownerUsername, changesNotSaved }];
+      }
+      await saveIndex();
+      await queue.withdraw(({ change }) => change.list.id === id);
+      emit(id);
+    }
+
+    async function refresh(cache: ListCache): Promise<'reached' | 'unreachable'> {
+      try {
+        const fetched = await fetchShoppingList(me, cache.lastSeen?.id ?? cache.which);
+        if (fetched.status === 'unreachable') {
+          cache.lastError ??= needsConnection('Loading your Shopping List the first time');
+          return 'unreachable';
+        }
+        if (fetched.status === 'serverFailed') cache.lastError ??= fetched.error;
+        else if (fetched.status === 'notShared') {
+          if (cache.which !== 'mine' && shared.get(cache.which) === cache) await lose(cache.which, true);
+          return 'reached';
+        } else {
+          cache.superseded = false;
+          cache.droppedSinceRead = 0;
+          keep(cache, fetched.list);
+        }
+      } catch (e) {
+        cache.lastError = e instanceof DataError ? e : new DataError('unknown', String(e), { cause: e });
+      }
+      emit(cache.which);
+      return 'reached';
+    }
+
+    /** The lists shared with the user, as the server says now: any no longer there is lost. */
+    async function setSharedLists(lists: SharedShoppingList[]) {
+      if (discarded) return;
+      const now = new Set(lists.map((l) => l.id));
+      for (const { id } of sharedLists) if (!now.has(id)) await lose(id, watching(id));
+      sharedLists = lists;
+      lost = lost.filter((l) => !now.has(l.id));
+      await saveIndex();
+    }
+
+    /** The user has seen that a Friend's list isn't shared with them any more. */
+    async function dismissLost(id: ShoppingListId) {
+      lost = lost.filter((l) => l.id !== id);
+      await saveIndex();
+      emit(id);
+    }
+
+    /**
+     * Its user's session ended on this phone: the changes waiting are thrown away, and every list
+     * last seen forgotten, all gone from storage too. Nothing is kept again.
      */
     async function discard() {
       await ready;
       discarded = true;
       await queue.discard(notSignedIn());
-      lastSeen = null;
-      savingList = savingList.then(() => storage.removeItem(listKey)).catch(() => {});
-      await savingList;
+      const keys = [ownKey, indexKey, ...[...shared.values()].map((c) => c.key)];
+      for (const cache of [own, ...shared.values()]) {
+        stopLive(cache);
+        cache.lastSeen = null;
+      }
+      shared.clear();
+      sharedLists = [];
+      lost = [];
+      await write(async () => {
+        for (const key of keys) await storage.removeItem(key);
+      });
+    }
+
+    /** The list holding an item, among those the phone has seen. */
+    function listHolding(itemId: ShoppingListItemId): ListRef | null {
+      for (const cache of [own, ...shared.values()]) {
+        const list = shown(cache);
+        if (list?.items.some((item) => item.id === itemId)) return { kind: 'shoppingList', id: list.id };
+      }
+      return null;
     }
 
     function forget(itemId: ShoppingListItemId) {
-      if (lastSeen) keep(withItems(lastSeen, lastSeen.items.filter((item) => item.id !== itemId)));
+      for (const cache of [own, ...shared.values()]) {
+        if (cache.lastSeen?.items.some((item) => item.id === itemId)) {
+          keep(cache, withItems(cache.lastSeen, cache.lastSeen.items.filter((item) => item.id !== itemId)));
+        }
+      }
       emit();
     }
 
-    /** After a change made online, outside the queue: show the list as it is now. */
+    /** After a change made online, outside the queue: show the user's own list as it is now. */
     function refreshWatched() {
-      if (watchers.size > 0) void refresh();
+      if (watching('mine')) void refresh(own);
     }
 
-    queue.subscribe(emit);
-    return { queue, watchers, ready, keep, shown, view, emit, sync, refresh, refreshWatched, forget, discard };
+    queue.subscribe(() => emit());
+    return {
+      queue,
+      ready,
+      own,
+      cacheFor,
+      isOwnList,
+      isLost: (id: ShoppingListId) => lost.find((l) => l.id === id) ?? null,
+      sharedLists: () => sharedLists,
+      keep,
+      shown,
+      view,
+      emit,
+      sync,
+      watch,
+      unwatch,
+      lose,
+      setSharedLists,
+      dismissLost,
+      listHolding,
+      forget,
+      refreshWatched,
+      discard,
+    };
   }
 
-  const shoppingLists = new Map<UserId, ReturnType<typeof openShoppingList>>();
+  const shoppingLists = new Map<UserId, ReturnType<typeof openShoppingLists>>();
   function shoppingListOf(me: UserId) {
-    let list = shoppingLists.get(me);
-    if (!list) {
-      list = openShoppingList(me);
-      shoppingLists.set(me, list);
+    let lists = shoppingLists.get(me);
+    if (!lists) {
+      lists = openShoppingLists(me);
+      shoppingLists.set(me, lists);
     }
-    return list;
+    return lists;
   }
 
   /**
-   * The signed-in user's Shopping List, with the changes made on this phone that haven't reached
-   * the server yet. With no signal, it's the last list this phone saw, with those changes; never
-   * seen, it fails with code `offline`.
+   * The signed-in user's Shopping List, or with `listId` a Friend's shared with them, with the
+   * changes made on this phone that haven't reached the server yet. With no signal, it's the last
+   * copy this phone saw, with those changes; never seen, it fails with code `offline`. A Friend's
+   * list that isn't shared with them any more fails with code `shopping_list_not_shared`, and the
+   * phone forgets it.
    */
-  async function getShoppingList(): Promise<ShoppingList> {
-    return loadShoppingList(await requireListOwner());
+  async function getShoppingList(options: { listId?: ShoppingListId } = {}): Promise<ShoppingList> {
+    return loadShoppingList(await requireListOwner(), options.listId ?? 'mine');
   }
 
-  async function loadShoppingList(me: UserId): Promise<ShoppingList> {
+  async function loadShoppingList(me: UserId, which: WhichList): Promise<ShoppingList> {
     const lists = shoppingListOf(me);
     await lists.ready;
-    const fetched = await fetchShoppingList(me);
+    const gone = which === 'mine' ? null : lists.isLost(which);
+    if (gone) throw notShared(gone.ownerUsername);
+    const cache = lists.cacheFor(which);
+    const fetched = await fetchShoppingList(me, which);
     if (fetched.status === 'reached') {
-      lists.keep(fetched.list);
+      lists.keep(cache, fetched.list);
       if (lists.queue.state().status === 'offline') void lists.queue.sync();
       lists.emit();
+    } else if (fetched.status === 'notShared' && which !== 'mine') {
+      const ownerUsername = cache.lastSeen?.ownerUsername ?? null;
+      await lists.lose(which, true);
+      throw notShared(lists.isLost(which)?.ownerUsername ?? ownerUsername);
     } else if (fetched.status === 'unreachable') {
       lists.queue.markUnreachable();
     }
-    const shown = lists.shown();
-    if (!shown) throw fetched.status === 'serverFailed' ? fetched.error : needsConnection('Loading your Shopping List the first time');
+    const shown = lists.shown(cache);
+    if (!shown) {
+      throw fetched.status === 'serverFailed' ? fetched.error : needsConnection('Loading your Shopping List the first time');
+    }
     return shown;
   }
 
   /**
-   * Shows the signed-in user's Shopping List as it changes: at once from what the phone has, again
-   * when it's read from the server, and on every change made here, sent or not. Each view says
-   * whether changes are waiting to sync. Returns a function that stops watching.
+   * Shows the signed-in user's Shopping List, or with `listId` a Friend's shared with them, as it
+   * changes: at once from what the phone has, again when it's read from the server, on every change
+   * made here, sent or not, and, while watched, whenever anyone changes it (Realtime). Each view
+   * says whether changes are waiting to sync. Returns a function that stops watching.
    */
-  function watchShoppingList(watcher: (view: ShoppingListView) => void): () => void {
-    let lists: ReturnType<typeof openShoppingList> | null = null;
+  function watchShoppingList(
+    watcher: (view: ShoppingListView) => void,
+    options: { listId?: ShoppingListId } = {},
+  ): () => void {
+    const which: WhichList = options.listId ?? 'mine';
+    let lists: ReturnType<typeof openShoppingLists> | null = null;
     let stopped = false;
     requireListOwner().then(
       async (me) => {
         if (stopped) return;
         lists = shoppingListOf(me);
-        lists.watchers.add(watcher);
         await lists.ready;
         if (stopped) return;
-        watcher(lists.view());
+        lists.watch(which, watcher);
+        watcher(lists.view(which));
         await lists.queue.sync();
       },
       (e: unknown) => {
@@ -1797,7 +2143,7 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     );
     return () => {
       stopped = true;
-      lists?.watchers.delete(watcher);
+      lists?.unwatch(which, watcher);
     };
   }
 
@@ -1837,7 +2183,8 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
    * Puts the Ingredients one of the user's Recipes needs on their Shopping List, except those they
    * have (Pantry or Staples), as the server sees it when it adds them. Each joins the line for its
    * Ingredient, with this Recipe's amounts kept apart. Adding a Recipe that's already on the list
-   * changes nothing. Returns the Ingredients the Recipe needed that the user didn't have.
+   * changes nothing. Returns the Ingredients the Recipe needed that the user didn't have. Only on
+   * the user's own list: a Friend's comes from their own Recipes and Pantry.
    */
   async function addRecipeToShoppingList(recipeId: RecipeId): Promise<Ingredient[]> {
     const [recipe, had] = await Promise.all([getRecipe(recipeId), listIngredientsIHave()]);
@@ -1864,28 +2211,44 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     new DataError('shopping_list_item_not_found', 'That item is no longer on the Shopping List.');
 
   /**
-   * Queues a Shopping List change and sends it, with every change queued before it. Resolves once
-   * the server has it (or has a later change to the item, made on another phone, which stands), or
-   * at once with no signal: it waits on the phone, shown on the list, and is sent on reconnect.
-   * Fails if the server says its item is gone, or refuses it.
+   * Queues a list change and sends it, with every change queued before it. Resolves once the
+   * server has it (or has a later change to the item, made on another phone, which stands), or at
+   * once with no signal: it waits on the phone, shown on the list, and is sent on reconnect. Fails
+   * if the server says its item (or a Friend's list) is gone, or refuses it.
    */
   async function changeShoppingList(me: UserId, change: ListChange): Promise<void> {
-    const outcome = await shoppingListOf(me).queue.enqueue(change);
-    if (outcome.status === 'dropped') throw itemGone();
+    const lists = shoppingListOf(me);
+    const outcome = await lists.queue.enqueue(change);
+    if (outcome.status === 'dropped') {
+      throw change.kind === 'addManualItem' && !lists.isOwnList(change.list.id)
+        ? new DataError('shopping_list_not_shared', "That list isn't shared with you any more.")
+        : itemGone();
+    }
     if (outcome.status === 'refused') throw outcome.error;
   }
 
+  /** The list a change to an item is for: `listId`, or the list on the phone holding it, or the user's own. */
+  async function listOfItem(me: UserId, itemId: ShoppingListItemId, listId?: ShoppingListId): Promise<ListRef> {
+    if (listId) return { kind: 'shoppingList', id: listId };
+    const lists = shoppingListOf(me);
+    await lists.ready;
+    const holding = lists.listHolding(itemId);
+    if (holding) return holding;
+    const own = lists.shown(lists.own)?.id ?? (await loadShoppingList(me, 'mine')).id;
+    return { kind: 'shoppingList', id: own };
+  }
+
   /**
-   * Adds something typed by hand to the user's Shopping List. If its name is an existing
-   * Ingredient's, it's linked to it, so checking it off puts that Ingredient in the Pantry;
-   * otherwise ("paper towels") checking it off changes no Pantry. Works with no signal (see
-   * `changeShoppingList`), once the phone has seen the list: the add names it, and the server takes
-   * it only for a list its sender can use. The phone makes the item's id, or pass `id` to choose it,
-   * so adding the same item twice adds it once.
+   * Adds something typed by hand to the user's Shopping List, or with `listId` to a Friend's
+   * shared with them. If its name is an existing Ingredient's, it's linked to it, so checking it off
+   * puts that Ingredient in the list owner's Pantry; otherwise ("paper towels") checking it off
+   * changes no Pantry. Works with no signal (see `changeShoppingList`), once the phone has seen the
+   * list: the add names it, and the server takes it only for a list its sender can use. The phone
+   * makes the item's id, or pass `id` to choose it, so adding the same item twice adds it once.
    */
   async function addManualItem(
     text: string,
-    options: { id?: ShoppingListItemId } = {},
+    options: { id?: ShoppingListItemId; listId?: ShoppingListId } = {},
   ): Promise<ShoppingListItemId> {
     const itemText = text.trim();
     if (!itemText) throw new DataError('item_text_required', 'Type what you need to buy.');
@@ -1893,33 +2256,43 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     const me = await requireListOwner();
     const lists = shoppingListOf(me);
     await lists.ready;
+    const which: WhichList = options.listId ?? 'mine';
     // The list it's for: as the phone last saw it, or read the first time.
-    const listId = lists.shown()?.id ?? (await loadShoppingList(me)).id;
-    await changeShoppingList(me, { kind: 'addManualItem', listId, itemId, text: itemText });
+    const listId = lists.shown(lists.cacheFor(which))?.id ?? (await loadShoppingList(me, which)).id;
+    await changeShoppingList(me, { kind: 'addManualItem', list: { kind: 'shoppingList', id: listId }, itemId, text: itemText });
     return itemId;
   }
 
   /**
-   * Checks an item off. Its Ingredient, if it has one, goes into the list owner's Pantry. Checking
-   * off a checked item changes nothing. Works with no signal (see `changeShoppingList`); if the
-   * item changed after this check was made, the later change stands.
+   * Checks an item off, on the user's list or a Friend's shared with them (`listId`, or whichever
+   * list on the phone holds it). Its Ingredient, if it has one, goes into the list owner's Pantry.
+   * Checking off a checked item changes nothing. Works with no signal (see `changeShoppingList`);
+   * if the item changed after this check was made, the later change stands.
    */
-  async function checkOff(itemId: ShoppingListItemId): Promise<void> {
-    await changeShoppingList(await requireListOwner(), { kind: 'checkOff', itemId });
+  async function checkOff(itemId: ShoppingListItemId, options: { listId?: ShoppingListId } = {}): Promise<void> {
+    const me = await requireListOwner();
+    await changeShoppingList(me, { kind: 'checkOff', list: await listOfItem(me, itemId, options.listId), itemId });
   }
 
   /** Unchecks an item. The Pantry is left as it is. Works with no signal, like `checkOff`. */
-  async function uncheck(itemId: ShoppingListItemId): Promise<void> {
-    await changeShoppingList(await requireListOwner(), { kind: 'uncheck', itemId });
+  async function uncheck(itemId: ShoppingListItemId, options: { listId?: ShoppingListId } = {}): Promise<void> {
+    const me = await requireListOwner();
+    await changeShoppingList(me, { kind: 'uncheck', list: await listOfItem(me, itemId, options.listId), itemId });
   }
 
   /**
-   * Takes one item off the Shopping List. Already gone is fine. Needs a connection: the changes
-   * waiting on the phone are sent first, so an item added with no signal is there to remove. A
-   * change waiting for its next try after a server error doesn't hold it up: the item is removed,
-   * and the changes to it still waiting are dropped (one adding it would put it back).
+   * Takes one item off the Shopping List, or with `listId` (or when the phone holds it on one) a
+   * Friend's shared with the user: only items added by hand there; the lines from their Recipes are
+   * theirs to remove. Already gone from a list the user can still use is fine; a Friend's list that
+   * isn't shared with them any more fails with `shopping_list_not_shared`. Needs a connection: the
+   * changes waiting on the phone are sent first, so an item added with no signal is there to
+   * remove. A change waiting for its next try after a server error doesn't hold it up: the item is
+   * removed, and the changes to it still waiting are dropped (one adding it would put it back).
    */
-  async function removeFromShoppingList(itemId: ShoppingListItemId): Promise<void> {
+  async function removeFromShoppingList(
+    itemId: ShoppingListItemId,
+    options: { listId?: ShoppingListId } = {},
+  ): Promise<void> {
     const me = await requireListOwner();
     const lists = shoppingListOf(me);
     await lists.ready;
@@ -1927,10 +2300,10 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     if (before.status === 'offline' || before.queue.length > 0) await lists.queue.sync();
     if (lists.queue.state().status === 'offline') throw needsConnection('Removing');
     const answer = await asSignedIn(me, (token) =>
-      client.from('shopping_list_items').delete().eq('id', itemId).setHeader('Authorization', bearer(token)),
+      client.from('shopping_list_items').delete().eq('id', itemId).select('id').setHeader('Authorization', bearer(token)),
     );
     if (answer === 'ended') throw notSignedIn();
-    const { error, status } = answer === 'unreachable' ? { error: null, status: 0 } : answer;
+    const { data, error, status } = answer === 'unreachable' ? { data: null, error: null, status: 0 } : answer;
     if (serverFailed(status)) {
       throw new DataError('server_error', "Couldn't remove it: the server had a problem. Try again in a moment.");
     }
@@ -1939,6 +2312,28 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
       throw needsConnection('Removing');
     }
     if (error) fail(error);
+    if (data?.length === 0) {
+      // Nothing removed: a line the user may see but not remove, gone already, or on a Friend's
+      // list they can't use any more. Never an answer of success unless it's gone from a list
+      // they can still use.
+      const still = await readAs(me, (token) =>
+        client.from('shopping_list_items').select('id').eq('id', itemId).retry(false).setHeader('Authorization', bearer(token)),
+      );
+      if (still.status === 'unreachable') {
+        lists.queue.markUnreachable();
+        throw needsConnection('Removing');
+      }
+      if (still.status === 'serverFailed') {
+        throw new DataError('server_error', "Couldn't remove it: the server had a problem. Try again in a moment.");
+      }
+      if (still.data?.length) {
+        throw new DataError('shopping_list_item_not_yours', "Only the list's owner can remove the lines from their Recipes.");
+      }
+      const list = options.listId ?? lists.listHolding(itemId)?.id;
+      // Reading a Friend's list that isn't shared any more forgets it, and fails with
+      // `shopping_list_not_shared`; one that is, has the item gone already.
+      if (list !== undefined && !lists.isOwnList(list)) await loadShoppingList(me, list);
+    }
     await lists.queue.withdraw(({ change }) => change.itemId === itemId);
     lists.forget(itemId);
     // The change that was waiting may have been one of them: what's left is due now, or not.
@@ -1955,12 +2350,89 @@ export function createDataLayer(client: SupabaseClient<Database>, options: DataL
     shoppingListOf(await currentUserId()).refreshWatched();
   }
 
+  /**
+   * Shares the signed-in user's Shopping List with a Friend (decisions 13): they see it update
+   * live, and can add, check off and uncheck items, and remove those added by hand. Already shared
+   * is fine. Someone who isn't a Friend can't be shared with (`notFriends`).
+   */
+  async function shareShoppingList(friendId: UserId): Promise<ShareShoppingListResult> {
+    const { data, error } = await client.rpc('share_shopping_list', { friend_id: friendId });
+    if (error) fail(error);
+    const status = statusOf('share_shopping_list', data, ['shared', 'notFriends']);
+    shoppingListOf(await currentUserId()).refreshWatched();
+    return { status };
+  }
+
+  /** Stops sharing the signed-in user's Shopping List with a Friend; `notShared` if it wasn't. */
+  async function stopSharingShoppingList(friendId: UserId): Promise<StopSharingShoppingListResult> {
+    const { data, error } = await client.rpc('stop_sharing_shopping_list', { friend_id: friendId });
+    if (error) fail(error);
+    const status = statusOf('stop_sharing_shopping_list', data, ['stopped', 'notShared']);
+    shoppingListOf(await currentUserId()).refreshWatched();
+    return { status };
+  }
+
+  /** The Friends the signed-in user's Shopping List is shared with, by username. */
+  async function listShoppingListShares(): Promise<ShoppingListShare[]> {
+    const { data, error } = await client.rpc('list_shopping_list_shares');
+    if (error) fail(error);
+    return data.map((row) => ({ friend: { id: parseUserId(row.friend_id), username: row.username }, sharedAt: row.shared_at }));
+  }
+
+  /**
+   * Friends' Shopping Lists shared with the signed-in user, by the owner's username, for the
+   * switcher. With no signal, those the phone last saw. A list no longer shared goes from the phone.
+   */
+  async function listSharedShoppingLists(): Promise<SharedShoppingList[]> {
+    const me = await requireListOwner();
+    const lists = shoppingListOf(me);
+    await lists.ready;
+    const read = await readAs(me, (token) =>
+      client.rpc('list_shared_shopping_lists').retry(false).setHeader('Authorization', bearer(token)),
+    );
+    if (read.status !== 'reached') return lists.sharedLists();
+    await lists.setSharedLists(
+      (read.data ?? []).map((row) => ({
+        id: parseShoppingListId(row.list_id),
+        owner: { id: parseUserId(row.owner_id), username: row.owner_username },
+      })),
+    );
+    return lists.sharedLists();
+  }
+
+  /** Leaves a Friend's Shopping List shared with the signed-in user; `notShared` if it wasn't. */
+  async function leaveSharedShoppingList(listId: ShoppingListId): Promise<LeaveSharedShoppingListResult> {
+    const { data, error } = await client.rpc('leave_shared_shopping_list', { list_id: listId });
+    if (error) fail(error);
+    const status = statusOf('leave_shared_shopping_list', data, ['left', 'notShared']);
+    const lists = shoppingListOf(await requireListOwner());
+    await lists.ready;
+    await lists.lose(listId, false);
+    await lists.dismissLost(listId);
+    return { status };
+  }
+
+  /** The user has seen that a Friend's list isn't shared with them any more: the notice goes. */
+  async function dismissNoLongerShared(listId: ShoppingListId): Promise<void> {
+    const me = await listOwner();
+    if (!me) return;
+    const lists = shoppingListOf(me);
+    await lists.ready;
+    await lists.dismissLost(listId);
+  }
+
   return {
     getShoppingList,
     watchShoppingList,
     getListSync,
     syncListChanges,
     dismissNotSavedListChanges,
+    shareShoppingList,
+    stopSharingShoppingList,
+    listShoppingListShares,
+    listSharedShoppingLists,
+    leaveSharedShoppingList,
+    dismissNoLongerShared,
     addRecipeToShoppingList,
     addManualItem,
     checkOff,
