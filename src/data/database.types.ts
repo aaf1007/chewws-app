@@ -1133,7 +1133,7 @@ export type Database = {
       edit_recipe: {
         Args: {
           lines: Json
-          list_lines?: Json
+          list_lines: Json
           recipe_id: string
           steps: string[]
           title: string

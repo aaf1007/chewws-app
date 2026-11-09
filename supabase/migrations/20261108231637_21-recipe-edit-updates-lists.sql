@@ -431,12 +431,48 @@ $$;
 revoke execute on function private.recipe_lines_edited(uuid, jsonb) from public, anon;
 grant execute on function private.recipe_lines_edited(uuid, jsonb) to authenticated;
 
+-- Renaming a Recipe renames its amounts on every Shopping List (ticket 13's
+-- on_recipe_title_changed_shopping_list), which locks them; a removal, and the deletion of a line,
+-- lock the line first and then its amounts. So before the title changes, this takes the lines, in
+-- id order: every line with the Recipe's amounts, on any list, and, on the renamer's own list, the
+-- line of each Ingredient the Recipe now has, which an edit's put_recipe_on_shopping_list goes on to
+-- take (taking that one later, out of order, could deadlock with an add or a removal holding it).
+-- The Recipe row is locked before a before-update trigger runs, so the order stays the Recipe, then
+-- its lines.
+create function private.lock_retitled_recipe_lists()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform 1 from public.shopping_list_items i
+  where i.id in (select a.item_id from public.shopping_list_amounts a where a.recipe_id = new.id)
+    or (
+      i.list_id = private.my_shopping_list()
+      and i.hand_added_text is null
+      and i.ingredient_id in (select rl.ingredient_id from public.recipe_lines rl where rl.recipe_id = new.id)
+    )
+  order by i.id
+  for update;
+  return new;
+end;
+$$;
+
+revoke execute on function private.lock_retitled_recipe_lists() from public, anon, authenticated;
+
+create trigger lock_retitled_recipe_lists
+  before update of title on public.recipes
+  for each row when (old.title is distinct from new.title)
+  execute function private.lock_retitled_recipe_lists();
+
 -- As in ticket 02, plus `list_lines` (see above), after the lines are replaced. Still security
 -- invoker: only the owner's update of the Recipe row passes, so anyone else's edit changes nothing
--- and answers null before reaching a list.
+-- and answers null before reaching a list. The title changes after the lines are replaced, so
+-- lock_retitled_recipe_lists takes the lines of the Ingredients the Recipe has after the edit.
 drop function public.edit_recipe(uuid, text, text[], jsonb);
 
-create function public.edit_recipe(recipe_id uuid, title text, steps text[], lines jsonb, list_lines jsonb default null)
+create function public.edit_recipe(recipe_id uuid, title text, steps text[], lines jsonb, list_lines jsonb)
 returns uuid
 language plpgsql
 security invoker
@@ -444,7 +480,7 @@ set search_path = ''
 as $$
 begin
   update public.recipes r
-  set title = edit_recipe.title, steps = edit_recipe.steps, updated_at = now()
+  set steps = edit_recipe.steps, updated_at = now()
   where r.id = edit_recipe.recipe_id;
 
   if not found then
@@ -452,6 +488,7 @@ begin
   end if;
 
   perform private.replace_recipe_lines(edit_recipe.recipe_id, lines);
+  update public.recipes r set title = edit_recipe.title where r.id = edit_recipe.recipe_id;
   perform private.recipe_lines_edited(edit_recipe.recipe_id, list_lines);
   return edit_recipe.recipe_id;
 end;
